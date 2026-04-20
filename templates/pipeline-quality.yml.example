@@ -1,0 +1,33 @@
+# Adopter-supplied quality workflow (optional).
+# If present and configured in .pipeline.yml, the orchestrator dispatches it
+# during pr-lifecycle and waits for completion. Exit non-zero to block merge.
+
+name: pipeline / quality
+
+on:
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        required: true
+        type: string
+      sha:
+        required: true
+        type: string
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.sha }}
+
+      - name: Lint
+        run: |
+          # Replace with your real lint command.
+          echo "TODO: lint @ ${{ inputs.sha }}"
+
+      - name: Test
+        run: |
+          # Replace with your real test command.
+          echo "TODO: test @ ${{ inputs.sha }}"

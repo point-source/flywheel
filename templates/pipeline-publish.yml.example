@@ -1,0 +1,46 @@
+# Adopter-supplied publish workflow.
+# Receives the same inputs as build. Decides what to do with `environment`
+# (which registry, app store, etc.). The orchestrator does not need to know.
+
+name: pipeline / publish
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        required: true
+        type: string
+      environment:
+        required: true
+        type: string
+      changelog:
+        required: true
+        type: string
+      artifact_path:
+        required: false
+        type: string
+        default: dist/
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: build-${{ inputs.version }}
+          path: ${{ inputs.artifact_path }}
+
+      - name: Publish
+        run: |
+          # Route by environment; replace with your real publish steps.
+          case "${{ inputs.environment }}" in
+            develop)
+              echo "TODO: push dev artifact"
+              ;;
+            staging)
+              echo "TODO: push staging artifact"
+              ;;
+            production)
+              echo "TODO: push prod artifact (npm publish, app-store upload, etc.)"
+              ;;
+          esac

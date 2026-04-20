@@ -1,0 +1,44 @@
+# Entrypoint: pull request events on managed branches.
+# This file is identical across all adopting repos. Copy it as-is.
+# All pipeline logic lives in the orchestrator — nothing here changes
+# per-project. Per-project config belongs in .pipeline.yml.
+
+name: Pipeline — PR
+
+on:
+  pull_request:
+    branches:
+      - main
+      - staging
+      - develop
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - ready_for_review
+
+# Cancel any in-progress run for the same PR when a new commit arrives.
+# This prevents stale quality checks from blocking an updated PR.
+concurrency:
+  group: pipeline-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  orchestrate:
+    # Skip draft PRs — agents should mark PRs ready when they want pipeline
+    # feedback. Avoids wasting CI minutes on work-in-progress.
+    if: github.event.pull_request.draft == false
+    uses: PointSource/swarmflow/.github/workflows/orchestrator.yml@v1
+    with:
+      event_type: >-
+        ${{
+          (github.event.action == 'opened' || github.event.action == 'reopened') && 'pr_opened' ||
+          github.event.action == 'synchronize' && 'pr_updated' ||
+          'pr_opened'
+        }}
+      source_branch: ${{ github.head_ref }}
+      target_branch: ${{ github.base_ref }}
+      pr_number: ${{ github.event.pull_request.number }}
+    secrets:
+      APP_ID: ${{ secrets.APP_ID }}
+      APP_PRIVATE_KEY: ${{ secrets.APP_PRIVATE_KEY }}
