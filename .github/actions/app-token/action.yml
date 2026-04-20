@@ -1,0 +1,23 @@
+name: App token
+description: >-
+  Exchange APP_ID + APP_PRIVATE_KEY for a short-lived GitHub App installation
+  token. The caller should pass APP_ID and APP_PRIVATE_KEY from repo secrets.
+inputs:
+  app_id:
+    description: GitHub App ID
+    required: true
+  private_key:
+    description: GitHub App private key (PEM contents)
+    required: true
+outputs:
+  token:
+    description: Short-lived installation token
+    value: ${{ steps.mint.outputs.token }}
+runs:
+  using: composite
+  steps:
+    - id: mint
+      uses: actions/create-github-app-token@v1
+      with:
+        app-id: ${{ inputs.app_id }}
+        private-key: ${{ inputs.private_key }}

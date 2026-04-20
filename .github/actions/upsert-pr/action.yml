@@ -1,0 +1,53 @@
+name: Upsert pull request
+description: >-
+  Find an open PR by (head, base) and edit its title+body, or create a new one
+  if none exists. Caller must export GH_TOKEN (the App installation token).
+inputs:
+  head:
+    description: PR head branch (source)
+    required: true
+  base:
+    description: PR base branch (target)
+    required: true
+  title:
+    description: PR title
+    required: true
+  body_path:
+    description: Path to a file containing the PR body
+    required: true
+outputs:
+  pr_number:
+    description: The PR number (existing or newly created)
+    value: ${{ steps.upsert.outputs.pr_number }}
+  created:
+    description: 'true if a new PR was created; false if an existing PR was edited'
+    value: ${{ steps.upsert.outputs.created }}
+runs:
+  using: composite
+  steps:
+    - id: upsert
+      shell: bash
+      env:
+        HEAD: ${{ inputs.head }}
+        BASE: ${{ inputs.base }}
+        TITLE: ${{ inputs.title }}
+        BODY: ${{ inputs.body_path }}
+      run: |
+        set -euo pipefail
+        existing=$(gh pr list --head "$HEAD" --base "$BASE" --state open \
+                     --json number --jq '.[0].number // empty')
+        if [[ -n "$existing" ]]; then
+          gh pr edit "$existing" --title "$TITLE" --body-file "$BODY"
+          {
+            printf 'pr_number=%s\n' "$existing"
+            printf 'created=false\n'
+          } >> "$GITHUB_OUTPUT"
+        else
+          number=$(gh pr create --head "$HEAD" --base "$BASE" \
+                     --title "$TITLE" --body-file "$BODY" \
+                   | grep -oE '[0-9]+$' | tail -n1)
+          {
+            printf 'pr_number=%s\n' "$number"
+            printf 'created=true\n'
+          } >> "$GITHUB_OUTPUT"
+        fi

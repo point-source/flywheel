@@ -1,0 +1,110 @@
+name: Compute version
+description: >-
+  Compute the next semver string and changelog fragment from commits since the
+  last release tag on the target branch lineage. Applies the spec's pre-release
+  identifier rules: `dev` for develop, `rc` for staging, no suffix for main.
+inputs:
+  branch:
+    description: 'develop | staging | main — determines the pre-release suffix'
+    required: true
+  initial_version:
+    description: Fallback when no v* tags exist
+    required: false
+    default: 0.1.0
+outputs:
+  version:
+    description: Full semver string (e.g. 1.2.0-dev.3 or 1.2.0)
+    value: ${{ steps.compute.outputs.version }}
+  bump:
+    description: 'major | minor | patch | none'
+    value: ${{ steps.compute.outputs.bump }}
+  base_version:
+    description: 'Base X.Y.Z without pre-release suffix'
+    value: ${{ steps.compute.outputs.base_version }}
+  changelog_path:
+    description: Path to a markdown file containing the changelog fragment
+    value: ${{ steps.compute.outputs.changelog_path }}
+  has_changes:
+    description: 'true if a new version should be published; false on chore-only changes'
+    value: ${{ steps.compute.outputs.has_changes }}
+runs:
+  using: composite
+  steps:
+    - id: compute
+      shell: bash
+      env:
+        BRANCH: ${{ inputs.branch }}
+        INITIAL: ${{ inputs.initial_version }}
+        ACTION_PATH: ${{ github.action_path }}
+      run: |
+        set -euo pipefail
+        scripts="$ACTION_PATH/../../../scripts"
+
+        # 1. Find the latest release-shaped tag (vX.Y.Z, no pre-release).
+        last_tag=$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname \
+                    | grep -vE -- '-' | head -n1 || true)
+        if [[ -z "$last_tag" ]]; then
+          base_prev="$INITIAL"
+          range="HEAD"
+        else
+          base_prev=${last_tag#v}
+          range="${last_tag}..HEAD"
+        fi
+
+        # 2. Parse commits in range, derive bump.
+        commits=$(mktemp)
+        "$scripts/commit-parse.sh" "$range" > "$commits"
+        bump=$("$scripts/version-bump.sh" "$commits")
+
+        # 3. Apply bump to base_prev to get the next base version.
+        IFS='.' read -r maj min pat <<<"$base_prev"
+        case "$bump" in
+          major) maj=$((maj+1)); min=0; pat=0 ;;
+          minor) min=$((min+1)); pat=0 ;;
+          patch) pat=$((pat+1)) ;;
+          none)  : ;;
+        esac
+        base_next="${maj}.${min}.${pat}"
+
+        # 4. Apply pre-release suffix per branch.
+        case "$BRANCH" in
+          develop) id="dev" ;;
+          staging) id="rc"  ;;
+          main)    id=""    ;;
+          *) echo "::error::unknown branch '$BRANCH'"; exit 1 ;;
+        esac
+
+        if [[ -n "$id" ]]; then
+          n=$("$scripts/pre-release-counter.sh" "$base_next" "$id")
+          version="${base_next}-${id}.${n}"
+        else
+          version="$base_next"
+        fi
+
+        # 5. Build a changelog fragment from the commits.
+        changelog=$(mktemp)
+        {
+          printf '## v%s — %s\n\n' "$version" "$(date -u +%Y-%m-%d)"
+          for t in feat fix perf refactor docs chore style test; do
+            entries=$(jq -r --arg t "$t" \
+              '.[] | select(.valid == true and .type == $t) |
+                "- " +
+                (if .scope != "" then "**" + .scope + ":** " else "" end) +
+                .description +
+                " (" + (.sha[0:7]) + ")" +
+                (if .breaking then " **BREAKING**" else "" end)' "$commits")
+            if [[ -n "$entries" ]]; then
+              printf '### %s\n%s\n\n' "$t" "$entries"
+            fi
+          done
+        } > "$changelog"
+
+        has_changes=$([[ "$bump" != "none" ]] && echo true || echo false)
+
+        {
+          printf 'version=%s\n' "$version"
+          printf 'bump=%s\n' "$bump"
+          printf 'base_version=%s\n' "$base_next"
+          printf 'changelog_path=%s\n' "$changelog"
+          printf 'has_changes=%s\n' "$has_changes"
+        } >> "$GITHUB_OUTPUT"

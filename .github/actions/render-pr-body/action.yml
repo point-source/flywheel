@@ -1,0 +1,85 @@
+name: Render PR body
+description: >-
+  Render the bot-owned PR title and body from a parsed-commits JSON file.
+  Two modes: `feature` (per-PR, no version) and `promotion` (cumulative, with
+  version).
+inputs:
+  commits_json_path:
+    description: Path to the JSON file produced by parse-commits
+    required: true
+  bump:
+    description: 'major | minor | patch | none'
+    required: true
+  target:
+    description: Target branch (used for the body footer)
+    required: true
+  mode:
+    description: 'feature | promotion'
+    required: false
+    default: feature
+  version:
+    description: Required when mode=promotion
+    required: false
+    default: ''
+  checks:
+    description: 'Quality check status string, e.g. "✅ passed"'
+    required: false
+    default: ''
+outputs:
+  title:
+    description: PR title
+    value: ${{ steps.render.outputs.title }}
+  body_path:
+    description: Path to a file containing the rendered markdown body
+    value: ${{ steps.render.outputs.body_path }}
+runs:
+  using: composite
+  steps:
+    - id: render
+      shell: bash
+      env:
+        COMMITS: ${{ inputs.commits_json_path }}
+        BUMP: ${{ inputs.bump }}
+        TARGET: ${{ inputs.target }}
+        MODE: ${{ inputs.mode }}
+        VERSION: ${{ inputs.version }}
+        CHECKS: ${{ inputs.checks }}
+        ACTION_PATH: ${{ github.action_path }}
+      run: |
+        set -euo pipefail
+        scripts="$ACTION_PATH/../../../scripts"
+
+        body=$(mktemp)
+        args=(--bump "$BUMP" --target "$TARGET" --mode "$MODE")
+        [[ -n "$VERSION" ]] && args+=(--version "$VERSION")
+        [[ -n "$CHECKS"  ]] && args+=(--checks  "$CHECKS")
+        "$scripts/pr-body.sh" "$COMMITS" "${args[@]}" > "$body"
+
+        # Title rules:
+        #   feature   -> first valid conventional commit's "type(scope): description"
+        #   promotion -> "chore(release): promote <source> → <target> [v<version>]"
+        if [[ "$MODE" == "promotion" ]]; then
+          # source branch isn't passed in (target only); the caller can override
+          # via --title on the upsert action if needed. Here we synthesize from
+          # the version + target.
+          title="chore(release): promote → ${TARGET} [v${VERSION}]"
+        else
+          first=$(jq -r '[.[] | select(.valid == true)] | .[0] // empty' "$COMMITS")
+          if [[ -n "$first" && "$first" != "null" ]]; then
+            type=$(jq -r '.type'        <<<"$first")
+            scope=$(jq -r '.scope'      <<<"$first")
+            desc=$(jq -r '.description' <<<"$first")
+            if [[ -n "$scope" ]]; then
+              title="${type}(${scope}): ${desc}"
+            else
+              title="${type}: ${desc}"
+            fi
+          else
+            title="chore: pipeline update"
+          fi
+        fi
+
+        {
+          printf 'title=%s\n' "$title"
+          printf 'body_path=%s\n' "$body"
+        } >> "$GITHUB_OUTPUT"

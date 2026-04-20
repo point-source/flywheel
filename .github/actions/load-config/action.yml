@@ -1,0 +1,100 @@
+name: Load pipeline config
+description: >-
+  Parse .pipeline.yml in the current workspace and expose each field as an
+  output. Missing fields fall back to the spec defaults. The caller is
+  expected to have already checked out the adopting repo.
+inputs:
+  path:
+    description: Path to the pipeline config (relative to workspace)
+    required: false
+    default: .pipeline.yml
+outputs:
+  branches_develop:
+    description: 'true|false — is develop an active branch in the chain'
+    value: ${{ steps.parse.outputs.branches_develop }}
+  branches_staging:
+    value: ${{ steps.parse.outputs.branches_staging }}
+    description: 'true|false'
+  branches_main:
+    value: ${{ steps.parse.outputs.branches_main }}
+    description: 'true|false'
+  merge_strategy:
+    value: ${{ steps.parse.outputs.merge_strategy }}
+    description: 'squash | merge | rebase'
+  auto_merge_types_json:
+    value: ${{ steps.parse.outputs.auto_merge_types_json }}
+    description: JSON array of commit types eligible for auto-merge
+  publish_on_develop:
+    value: ${{ steps.parse.outputs.publish_on_develop }}
+    description: 'true|false'
+  publish_on_staging:
+    value: ${{ steps.parse.outputs.publish_on_staging }}
+    description: 'true|false'
+  merge_queue:
+    value: ${{ steps.parse.outputs.merge_queue }}
+    description: 'auto | true | false'
+  workflows_build:
+    value: ${{ steps.parse.outputs.workflows_build }}
+    description: Path (relative to .github/workflows/) of the adopter build workflow
+  workflows_publish:
+    value: ${{ steps.parse.outputs.workflows_publish }}
+    description: Path of the adopter publish workflow
+  workflows_quality:
+    value: ${{ steps.parse.outputs.workflows_quality }}
+    description: Path of the adopter quality workflow (may be empty)
+  initial_version:
+    value: ${{ steps.parse.outputs.initial_version }}
+    description: Fallback version when no tags exist
+runs:
+  using: composite
+  steps:
+    - name: Install yq
+      uses: mikefarah/yq@v4
+      with:
+        cmd: yq --version
+    - id: parse
+      shell: bash
+      env:
+        CFG: ${{ inputs.path }}
+      run: |
+        set -euo pipefail
+
+        # Default value if the key is null/missing. Usage: y <jq-style path> <default>
+        y() {
+          local path=$1 default=$2
+          if [[ -f "$CFG" ]]; then
+            local v
+            v=$(yq -r "$path // \"$default\"" "$CFG" 2>/dev/null || echo "$default")
+            [[ $v == "null" ]] && v=$default
+            printf '%s' "$v"
+          else
+            printf '%s' "$default"
+          fi
+        }
+
+        emit() { printf '%s=%s\n' "$1" "$2" >> "$GITHUB_OUTPUT"; }
+
+        emit branches_develop "$(y '.pipeline.branches.develop' true)"
+        emit branches_staging "$(y '.pipeline.branches.staging' false)"
+        emit branches_main    "$(y '.pipeline.branches.main'    false)"
+
+        emit merge_strategy "$(y '.pipeline.merge_strategy' squash)"
+
+        # auto_merge_types: array -> compact JSON. Default matches spec.
+        if [[ -f "$CFG" ]] && yq -e '.pipeline.auto_merge_types' "$CFG" >/dev/null 2>&1; then
+          types_json=$(yq -o=json -I=0 '.pipeline.auto_merge_types' "$CFG")
+        else
+          types_json='["fix","chore","refactor","perf","style","test"]'
+        fi
+        emit auto_merge_types_json "$types_json"
+
+        emit publish_on_develop "$(y '.pipeline.publish_on_develop' true)"
+        emit publish_on_staging "$(y '.pipeline.publish_on_staging' true)"
+        emit merge_queue        "$(y '.pipeline.merge_queue'        auto)"
+
+        emit workflows_build   "$(y '.pipeline.workflows.build'   pipeline-build.yml)"
+        emit workflows_publish "$(y '.pipeline.workflows.publish' pipeline-publish.yml)"
+        # quality is optional; empty string means "skip"
+        emit workflows_quality "$(y '.pipeline.workflows.quality' '')"
+
+        emit initial_version "$(y '.initial_version' 0.1.0)"
