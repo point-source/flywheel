@@ -1,0 +1,62 @@
+# Orchestrator: top-level dispatcher.
+# Adopting repos call this from on-pr.yml and on-push.yml. Routes to
+# pr-lifecycle / promote / release based on event_type and target_branch.
+
+name: pipeline / orchestrator
+
+on:
+  workflow_call:
+    inputs:
+      event_type:
+        description: 'pr_opened | pr_updated | pr_merged | push'
+        type: string
+        required: true
+      source_branch:
+        type: string
+        required: true
+      target_branch:
+        type: string
+        required: true
+      pr_number:
+        type: number
+        required: false
+        default: 0
+      dry_run:
+        description: Smoke-test mode — surface up the merge gate without acting
+        type: boolean
+        required: false
+        default: false
+    secrets:
+      APP_ID:
+        required: true
+      APP_PRIVATE_KEY:
+        required: true
+
+jobs:
+  pr-lifecycle:
+    if: inputs.event_type == 'pr_opened' || inputs.event_type == 'pr_updated'
+    uses: ./.github/workflows/pr-lifecycle.yml
+    with:
+      pr_number: ${{ inputs.pr_number }}
+      source_branch: ${{ inputs.source_branch }}
+      target_branch: ${{ inputs.target_branch }}
+      dry_run: ${{ inputs.dry_run }}
+    secrets:
+      APP_ID: ${{ secrets.APP_ID }}
+      APP_PRIVATE_KEY: ${{ secrets.APP_PRIVATE_KEY }}
+
+  promote:
+    if: inputs.event_type == 'push' && inputs.source_branch != 'main'
+    uses: ./.github/workflows/promote.yml
+    with:
+      source_branch: ${{ inputs.source_branch }}
+    secrets:
+      APP_ID: ${{ secrets.APP_ID }}
+      APP_PRIVATE_KEY: ${{ secrets.APP_PRIVATE_KEY }}
+
+  release:
+    if: inputs.event_type == 'push' && inputs.source_branch == 'main'
+    uses: ./.github/workflows/release.yml
+    secrets:
+      APP_ID: ${{ secrets.APP_ID }}
+      APP_PRIVATE_KEY: ${{ secrets.APP_PRIVATE_KEY }}
