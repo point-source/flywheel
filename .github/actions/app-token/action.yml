@@ -9,6 +9,14 @@ inputs:
   private_key:
     description: GitHub App private key (PEM contents)
     required: true
+  target_repo:
+    description: >-
+      Optional owner/name pair to scope the token to. Defaults to the
+      workflow's own repo (the case for every adopter). Set this only when
+      the App is installed on a different repo than the workflow runs in,
+      such as the e2e sandbox.
+    required: false
+    default: ''
 outputs:
   token:
     description: Short-lived installation token
@@ -16,8 +24,20 @@ outputs:
 runs:
   using: composite
   steps:
+    - id: split
+      shell: bash
+      env:
+        TARGET: ${{ inputs.target_repo }}
+      run: |
+        if [[ -n "$TARGET" ]]; then
+          echo "owner=${TARGET%%/*}" >> "$GITHUB_OUTPUT"
+          echo "name=${TARGET##*/}"  >> "$GITHUB_OUTPUT"
+        fi
+
     - id: mint
       uses: actions/create-github-app-token@v1
       with:
         app-id: ${{ inputs.app_id }}
         private-key: ${{ inputs.private_key }}
+        owner: ${{ steps.split.outputs.owner }}
+        repositories: ${{ steps.split.outputs.name }}

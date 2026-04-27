@@ -104,8 +104,7 @@ jobs:
       # Quality gate: dispatch the adopter's quality workflow if configured.
       # We invoke via workflow_dispatch + wait, rather than workflow_call,
       # because the adopter's workflow file path is dynamic per repo.
-      - name: Run quality checks
-        id: quality
+      - name: Dispatch quality workflow
         if: steps.cfg.outputs.workflows_quality != ''
         env:
           GH_TOKEN: ${{ steps.token.outputs.token }}
@@ -113,31 +112,19 @@ jobs:
           PR: ${{ inputs.pr_number }}
           SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
-          set -euo pipefail
-          # Trigger and wait for completion. The quality workflow is expected
-          # to accept (pr_number, sha) inputs and exit non-zero on failure.
           gh workflow run "$QWF" --ref "${{ inputs.source_branch }}" \
             -f pr_number="$PR" -f sha="$SHA"
-          # Poll for the run to complete (5 min cap). gh's --branch filter
-          # (and the underlying ?branch= API param) returns empty for
-          # short-lived branches; post-filter on headBranch instead.
-          SRC="${{ inputs.source_branch }}"
-          for _ in $(seq 1 60); do
-            sleep 5
-            run=$(gh run list --workflow "$QWF" --limit 50 \
-                    --json databaseId,headBranch,status,conclusion \
-                    --jq "[.[] | select(.headBranch == \"$SRC\")] | .[0] // empty")
-            [[ -z "$run" ]] && continue
-            status=$(jq -r '.status' <<<"$run")
-            if [[ "$status" == "completed" ]]; then
-              concl=$(jq -r '.conclusion' <<<"$run")
-              echo "result=$concl" >> "$GITHUB_OUTPUT"
-              [[ "$concl" == "success" ]] || exit 1
-              exit 0
-            fi
-          done
-          echo "::error::quality workflow timed out"
-          exit 1
+
+      - name: Wait for quality workflow
+        id: quality
+        if: steps.cfg.outputs.workflows_quality != ''
+        uses: ./.github/actions/wait-run
+        with:
+          repo: ${{ github.repository }}
+          workflow: ${{ steps.cfg.outputs.workflows_quality }}
+          branch: ${{ inputs.source_branch }}
+          token: ${{ steps.token.outputs.token }}
+          timeout: '300'
 
       # Re-render the PR body with the actual quality outcome so reviewers
       # don't see "pending" indefinitely. Runs even on quality failure (so

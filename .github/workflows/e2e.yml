@@ -46,22 +46,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # The shared app-token composite mints a token for the workflow's own
-      # repo. Here the App is installed on the sandbox, not on swarmflow, so
-      # we call create-github-app-token directly with owner+repositories
-      # pointing at the sandbox.
-      - id: split_sandbox
-        run: |
-          echo "owner=${SANDBOX%%/*}" >> "$GITHUB_OUTPUT"
-          echo "name=${SANDBOX##*/}"  >> "$GITHUB_OUTPUT"
-
       - id: token
-        uses: actions/create-github-app-token@v1
+        uses: ./.github/actions/app-token
         with:
-          app-id: ${{ secrets.E2E_APP_ID }}
-          private-key: ${{ secrets.E2E_APP_PRIVATE_KEY }}
-          owner: ${{ steps.split_sandbox.outputs.owner }}
-          repositories: ${{ steps.split_sandbox.outputs.name }}
+          app_id: ${{ secrets.E2E_APP_ID }}
+          private_key: ${{ secrets.E2E_APP_PRIVATE_KEY }}
+          # The e2e App is installed on the sandbox, not on swarmflow itself.
+          target_repo: ${{ env.SANDBOX }}
 
       - name: Clone sandbox
         env:
@@ -147,12 +138,12 @@ jobs:
           echo "branch=$br" >> "$GITHUB_OUTPUT"
 
       - name: Wait for pr-lifecycle on fix PR
-        env:
-          GH_TOKEN: ${{ steps.token.outputs.token }}
-        run: |
-          # TODO: poll via `gh run list --workflow=on-pr.yml --event=pull_request`
-          # filtered to the PR head SHA; break when conclusion != null.
-          ./.github/scripts/wait-run.sh "$SANDBOX" on-pr.yml "${{ steps.fix.outputs.branch }}"
+        uses: ./.github/actions/wait-run
+        with:
+          repo: ${{ env.SANDBOX }}
+          workflow: on-pr.yml
+          branch: ${{ steps.fix.outputs.branch }}
+          token: ${{ steps.token.outputs.token }}
 
       - name: Assert fix PR auto-merged
         env:
@@ -166,9 +157,12 @@ jobs:
           }
 
       - name: Wait for promote run on develop
-        env:
-          GH_TOKEN: ${{ steps.token.outputs.token }}
-        run: ./.github/scripts/wait-run.sh "$SANDBOX" on-push.yml develop
+        uses: ./.github/actions/wait-run
+        with:
+          repo: ${{ env.SANDBOX }}
+          workflow: on-push.yml
+          branch: develop
+          token: ${{ steps.token.outputs.token }}
 
       - name: Assert develop pre-release tag was created
         env:
@@ -204,9 +198,12 @@ jobs:
           echo "branch=$br" >> "$GITHUB_OUTPUT"
 
       - name: Wait for pr-lifecycle on breaking PR
-        env:
-          GH_TOKEN: ${{ steps.token.outputs.token }}
-        run: ./.github/scripts/wait-run.sh "$SANDBOX" on-pr.yml "${{ steps.breaking.outputs.branch }}"
+        uses: ./.github/actions/wait-run
+        with:
+          repo: ${{ env.SANDBOX }}
+          workflow: on-pr.yml
+          branch: ${{ steps.breaking.outputs.branch }}
+          token: ${{ steps.token.outputs.token }}
 
       - name: Assert breaking PR stayed OPEN (human gate)
         env:
@@ -238,9 +235,12 @@ jobs:
 
       - name: Wait for release run
         if: vars.E2E_TEST_RELEASE == 'true'
-        env:
-          GH_TOKEN: ${{ steps.token.outputs.token }}
-        run: ./.github/scripts/wait-run.sh "$SANDBOX" on-push.yml main
+        uses: ./.github/actions/wait-run
+        with:
+          repo: ${{ env.SANDBOX }}
+          workflow: on-push.yml
+          branch: main
+          token: ${{ steps.token.outputs.token }}
 
       - name: Assert release tag + GitHub Release exist
         if: vars.E2E_TEST_RELEASE == 'true'
