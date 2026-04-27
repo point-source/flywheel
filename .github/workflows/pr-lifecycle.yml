@@ -87,7 +87,10 @@ jobs:
           bump: ${{ steps.parse.outputs.bump }}
           target: ${{ inputs.target_branch }}
           mode: feature
-          checks: pending
+          # Show "pending" only when a quality workflow is actually configured;
+          # otherwise omit the line so the body doesn't claim a check is in
+          # flight that will never run.
+          checks: ${{ steps.cfg.outputs.workflows_quality != '' && 'pending' || '' }}
 
       - name: Update PR title and body
         env:
@@ -131,6 +134,30 @@ jobs:
           done
           echo "::error::quality workflow timed out"
           exit 1
+
+      # Re-render the PR body with the actual quality outcome so reviewers
+      # don't see "pending" indefinitely. Runs even on quality failure (so
+      # ❌ failed lands on the body before the job exits).
+      - name: Re-render PR body with quality outcome
+        if: always() && (steps.quality.conclusion == 'success' || steps.quality.conclusion == 'failure')
+        id: render_final
+        uses: ./.github/actions/render-pr-body
+        with:
+          commits_json_path: ${{ steps.parse.outputs.commits_json_path }}
+          bump: ${{ steps.parse.outputs.bump }}
+          target: ${{ inputs.target_branch }}
+          mode: feature
+          checks: ${{ steps.quality.conclusion == 'success' && '✅ passed' || '❌ failed' }}
+
+      - name: Update PR body with quality outcome
+        if: always() && (steps.quality.conclusion == 'success' || steps.quality.conclusion == 'failure')
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          PR: ${{ inputs.pr_number }}
+          TITLE: ${{ steps.render_final.outputs.title }}
+          BODY: ${{ steps.render_final.outputs.body_path }}
+        run: |
+          gh pr edit "$PR" --title "$TITLE" --body-file "$BODY"
 
       - name: Auto-merge
         if: steps.eligibility.outputs.eligible == 'true'
