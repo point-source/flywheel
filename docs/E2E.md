@@ -86,6 +86,22 @@ shouldn't have to grant). Permissions:
 - Workflows: write (the pin step rewrites `uses:` in `on-pr.yml`/`on-push.yml`)
 - Metadata: read
 
+## 3.5. Make `swarmflow` accessible from the sandbox
+
+The sandbox's pipeline calls reusable workflows from this repo. Private
+repos need explicit access; the simplest options are:
+
+- **Make swarmflow public** (recommended for any reusable-workflow repo).
+  All adopters work with no per-account plumbing.
+- Or, if it must stay private, set Actions access to "user":
+  ```sh
+  gh api -X PUT repos/<your>/swarmflow/actions/permissions/access -f access_level=user
+  ```
+  This lets repos owned by the same account call swarmflow's workflows.
+
+If neither is set, the sandbox's `on-pr.yml` will fail with
+`startup_failure` because GitHub can't load `orchestrator.yml@<ref>`.
+
 ## 4. Configure rulesets (or turn them off)
 
 The sandbox needs rulesets loose enough for the App bot to merge PRs. Two
