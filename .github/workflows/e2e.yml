@@ -111,6 +111,11 @@ jobs:
           git add -A
           git commit -m "chore: pin swarmflow to ${REF} for ${RUN_NS}" || true
           git push origin main
+          # pull_request events read on-pr.yml from the *base* branch and
+          # push events from the pushed branch — so develop and staging need
+          # the same pinned entrypoints, otherwise they still load the
+          # baseline's @v1 ref and the pipeline can't start.
+          git push origin --force main:develop main:staging
 
       # --- Fixture 1: fix → PR to develop → should auto-merge, then bump ----
       # `fix` is the canonical auto-merge case per spec.md (feat is always
