@@ -22,6 +22,14 @@ on:
         type: boolean
         required: false
         default: false
+      swarmflow_repo:
+        type: string
+        required: false
+        default: point-source/swarmflow
+      swarmflow_ref:
+        type: string
+        required: false
+        default: v1
     secrets:
       APP_ID:
         required: true
@@ -43,17 +51,14 @@ jobs:
 
       # When this workflow is called from another repo, `./.github/actions/X`
       # references resolve against the caller's checkout — which doesn't
-      # contain swarmflow's composites. Side-load swarmflow at the workflow's
-      # own SHA so `./.swarmflow/...` paths consistently work below.
-      - id: src
-        run: |
-          REF="${{ github.workflow_ref }}"
-          echo "repo=${REF%%/.github/workflows/*}" >> "$GITHUB_OUTPUT"
-
+      # contain swarmflow's composites. Side-load swarmflow at the same ref
+      # the caller pinned so `./.swarmflow/...` paths consistently work below.
+      # We can't introspect this from `github.workflow_ref` (always the entry
+      # workflow) so the entrypoint passes it through as an input.
       - uses: actions/checkout@v4
         with:
-          repository: ${{ steps.src.outputs.repo }}
-          ref: ${{ github.workflow_sha }}
+          repository: ${{ inputs.swarmflow_repo }}
+          ref: ${{ inputs.swarmflow_ref }}
           path: .swarmflow
 
       - id: token

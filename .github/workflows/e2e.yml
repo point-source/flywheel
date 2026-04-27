@@ -116,6 +116,15 @@ jobs:
           sed -i -E \
             "s|[a-zA-Z][-a-zA-Z0-9]*/swarmflow/\.github/workflows/orchestrator\.yml@[^[:space:]]+|${{ github.repository }}/.github/workflows/orchestrator.yml@${REF}|" \
             .github/workflows/on-pr.yml .github/workflows/on-push.yml
+          # Reusable workflows can't introspect their own ref, so the
+          # entrypoint passes swarmflow_repo/swarmflow_ref through. Keep them
+          # aligned with the @ref above.
+          sed -i -E \
+            "s|swarmflow_repo:[[:space:]]*.*|swarmflow_repo: ${{ github.repository }}|" \
+            .github/workflows/on-pr.yml .github/workflows/on-push.yml
+          sed -i -E \
+            "s|swarmflow_ref:[[:space:]]*.*|swarmflow_ref: ${REF}|" \
+            .github/workflows/on-pr.yml .github/workflows/on-push.yml
           git add -A
           git commit -m "chore: pin swarmflow to ${REF} for ${RUN_NS}" || true
           git push origin main

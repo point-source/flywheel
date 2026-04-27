@@ -39,6 +39,10 @@ jobs:
       event_type: push
       source_branch: ${{ github.ref_name }}
       target_branch: ${{ github.ref_name }}
+      # Keep these in sync with the @v1 above. The reusable workflows need to
+      # side-load swarmflow's composites and can't introspect their own ref.
+      swarmflow_repo: point-source/swarmflow
+      swarmflow_ref: v1
     secrets:
       APP_ID: ${{ secrets.APP_ID }}
       APP_PRIVATE_KEY: ${{ secrets.APP_PRIVATE_KEY }}

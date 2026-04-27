@@ -26,6 +26,20 @@ on:
         type: boolean
         required: false
         default: false
+      # Pass-through to the called workflows so they can side-load swarmflow's
+      # composite actions. `github.workflow_ref` always points at the entry
+      # workflow (the adopter's on-pr/on-push), not at the reusable workflow
+      # that's currently executing — so we can't introspect this and instead
+      # take it as input. Defaults match the canonical install; adopters
+      # who fork must override these to match their `@<ref>` pin.
+      swarmflow_repo:
+        type: string
+        required: false
+        default: point-source/swarmflow
+      swarmflow_ref:
+        type: string
+        required: false
+        default: v1
     secrets:
       APP_ID:
         required: true
@@ -41,6 +55,8 @@ jobs:
       source_branch: ${{ inputs.source_branch }}
       target_branch: ${{ inputs.target_branch }}
       dry_run: ${{ inputs.dry_run }}
+      swarmflow_repo: ${{ inputs.swarmflow_repo }}
+      swarmflow_ref: ${{ inputs.swarmflow_ref }}
     secrets:
       APP_ID: ${{ secrets.APP_ID }}
       APP_PRIVATE_KEY: ${{ secrets.APP_PRIVATE_KEY }}
@@ -50,6 +66,8 @@ jobs:
     uses: ./.github/workflows/promote.yml
     with:
       source_branch: ${{ inputs.source_branch }}
+      swarmflow_repo: ${{ inputs.swarmflow_repo }}
+      swarmflow_ref: ${{ inputs.swarmflow_ref }}
     secrets:
       APP_ID: ${{ secrets.APP_ID }}
       APP_PRIVATE_KEY: ${{ secrets.APP_PRIVATE_KEY }}
@@ -57,6 +75,9 @@ jobs:
   release:
     if: inputs.event_type == 'push' && inputs.source_branch == 'main'
     uses: ./.github/workflows/release.yml
+    with:
+      swarmflow_repo: ${{ inputs.swarmflow_repo }}
+      swarmflow_ref: ${{ inputs.swarmflow_ref }}
     secrets:
       APP_ID: ${{ secrets.APP_ID }}
       APP_PRIVATE_KEY: ${{ secrets.APP_PRIVATE_KEY }}
