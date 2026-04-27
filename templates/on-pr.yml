@@ -17,13 +17,15 @@ on:
       - reopened
       - ready_for_review
 
-# Permissions granted to the called orchestrator chain. Must cover the
-# union of what every reusable workflow it dispatches declares, otherwise
-# GitHub fails the call with `startup_failure` at workflow-load time.
+# Permissions granted to the called orchestrator chain. GitHub validates
+# every workflow_call target at load time — even ones gated by `if:` that
+# never run for this event — so the caller must cover the union of all
+# pipeline workflows: pr-lifecycle, promote, and release.
 permissions:
-  contents: read
-  pull-requests: write
+  actions: write
   checks: write
+  contents: write
+  pull-requests: write
 
 # Cancel any in-progress run for the same PR when a new commit arrives.
 # This prevents stale quality checks from blocking an updated PR.

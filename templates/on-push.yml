@@ -15,13 +15,15 @@ on:
       - staging
       - develop
 
-# Permissions granted to the called orchestrator chain. Must cover the
-# union of what promote.yml and release.yml declare, otherwise GitHub
-# fails the call with `startup_failure` at workflow-load time.
+# Permissions granted to the called orchestrator chain. GitHub validates
+# every workflow_call target at load time — even ones gated by `if:` that
+# never run for this event — so the caller must cover the union of all
+# pipeline workflows: pr-lifecycle, promote, and release.
 permissions:
+  actions: write
+  checks: write
   contents: write
   pull-requests: write
-  actions: write
 
 # One promotion/release run per branch at a time. A second push (e.g. two
 # PRs merging in quick succession) queues rather than cancels — we don't
