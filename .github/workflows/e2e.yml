@@ -81,8 +81,10 @@ jobs:
             | awk '{print $2}' | sed 's|refs/heads/||' \
             | xargs -I{} git push origin --delete {} || true
 
-          # Delete leftover e2e-* tags + their GitHub releases
-          for tag in $(git ls-remote --tags origin 'v*-e2e*' \
+          # Delete leftover pre-release + e2e tags and their GitHub releases.
+          # Globs must match teardown's so a killed prior run can't leave dev/rc
+          # tags behind that survive into the next run.
+          for tag in $(git ls-remote --tags origin 'v*-dev.*' 'v*-rc.*' 'v*-e2e*' \
                        | awk '{print $2}' | sed 's|refs/tags/||'); do
             gh release delete "$tag" --repo "$SANDBOX" --cleanup-tag --yes || true
           done
