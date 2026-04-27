@@ -95,20 +95,35 @@ options:
   actor on `main`, `staging`, `develop`.
 - **Simpler**: skip rulesets entirely on the sandbox. It's not production.
 
-## 5. Add the secrets and variable in *this* repo
+## 5. Add secrets and variables
 
-These live on swarmflow, not the sandbox — the e2e workflow runs here.
+The sandbox is acting as a real adopter under test, so the App credentials
+need to live in **two** places:
 
-Secrets (Settings → Secrets and variables → Actions → Secrets):
+### 5a. On *this* repo (swarmflow) — used by the e2e driver
+
+Settings → Secrets and variables → Actions → Secrets:
 
 - `E2E_APP_ID` — App ID
 - `E2E_APP_PRIVATE_KEY` — App private key (PEM)
 
-Repository variables (same page, Variables tab):
+Variables tab:
 
 - `E2E_SANDBOX_REPO` — e.g. `PointSource/swarmflow-e2e-sandbox`
 - `E2E_TEST_RELEASE` — `true` to also exercise the release-on-main path.
   Omit or set `false` to stop after promote.
+
+### 5b. On the sandbox — used by the sandbox's own pipeline
+
+Same App credentials, just under the unsuffixed names that the templates
+expect. Without these, `on-pr.yml` and `on-push.yml` fail to start because
+`orchestrator.yml`'s `workflow_call` declares `APP_ID` and `APP_PRIVATE_KEY`
+as required secrets.
+
+```sh
+gh secret set APP_ID --repo <sandbox> --body "<app-id>"
+gh secret set APP_PRIVATE_KEY --repo <sandbox> < /path/to/app-key.pem
+```
 
 ## 6. Run it
 
