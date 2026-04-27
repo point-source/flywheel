@@ -36,17 +36,31 @@ jobs:
         with:
           fetch-depth: 0
 
+      # When called from another repo, `./.github/actions/X` references
+      # resolve against the caller's checkout. Side-load swarmflow at the
+      # workflow's own SHA so `./.swarmflow/...` paths consistently work.
+      - id: src
+        run: |
+          REF="${{ github.workflow_ref }}"
+          echo "repo=${REF%%/.github/workflows/*}" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ steps.src.outputs.repo }}
+          ref: ${{ github.workflow_sha }}
+          path: .swarmflow
+
       - id: token
-        uses: ./.github/actions/app-token
+        uses: ./.swarmflow/.github/actions/app-token
         with:
           app_id: ${{ secrets.APP_ID }}
           private_key: ${{ secrets.APP_PRIVATE_KEY }}
 
       - id: cfg
-        uses: ./.github/actions/load-config
+        uses: ./.swarmflow/.github/actions/load-config
 
       - id: version
-        uses: ./.github/actions/compute-version
+        uses: ./.swarmflow/.github/actions/compute-version
         with:
           branch: main
           initial_version: ${{ steps.cfg.outputs.initial_version }}

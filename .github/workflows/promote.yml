@@ -34,17 +34,31 @@ jobs:
         with:
           fetch-depth: 0
 
+      # When called from another repo, `./.github/actions/X` references
+      # resolve against the caller's checkout. Side-load swarmflow at the
+      # workflow's own SHA so `./.swarmflow/...` paths consistently work.
+      - id: src
+        run: |
+          REF="${{ github.workflow_ref }}"
+          echo "repo=${REF%%/.github/workflows/*}" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ steps.src.outputs.repo }}
+          ref: ${{ github.workflow_sha }}
+          path: .swarmflow
+
       - id: token
-        uses: ./.github/actions/app-token
+        uses: ./.swarmflow/.github/actions/app-token
         with:
           app_id: ${{ secrets.APP_ID }}
           private_key: ${{ secrets.APP_PRIVATE_KEY }}
 
       - id: cfg
-        uses: ./.github/actions/load-config
+        uses: ./.swarmflow/.github/actions/load-config
 
       - id: version
-        uses: ./.github/actions/compute-version
+        uses: ./.swarmflow/.github/actions/compute-version
         with:
           branch: ${{ inputs.source_branch }}
           initial_version: ${{ steps.cfg.outputs.initial_version }}
@@ -123,14 +137,14 @@ jobs:
       - name: Parse pending commits
         if: steps.next.outputs.branch != ''
         id: pending
-        uses: ./.github/actions/parse-commits
+        uses: ./.swarmflow/.github/actions/parse-commits
         with:
           range: origin/${{ steps.next.outputs.branch }}..origin/${{ inputs.source_branch }}
 
       - name: Render promotion PR body
         if: steps.next.outputs.branch != ''
         id: render
-        uses: ./.github/actions/render-pr-body
+        uses: ./.swarmflow/.github/actions/render-pr-body
         with:
           commits_json_path: ${{ steps.pending.outputs.commits_json_path }}
           bump: ${{ steps.pending.outputs.bump }}
@@ -140,7 +154,7 @@ jobs:
 
       - name: Upsert promotion PR
         if: steps.next.outputs.branch != ''
-        uses: ./.github/actions/upsert-pr
+        uses: ./.swarmflow/.github/actions/upsert-pr
         env:
           GH_TOKEN: ${{ steps.token.outputs.token }}
         with:
