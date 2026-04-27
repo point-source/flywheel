@@ -13,28 +13,34 @@ workflow="${2:?workflow file required}"
 branch="${3:?branch required}"
 timeout="${4:-600}"
 
+# gh's --branch filter (and the underlying actions/runs ?branch= API param)
+# returns empty for short-lived branches and recently force-rewritten refs,
+# even when matching runs exist. Post-filter on headBranch instead.
+get_row() {
+  gh run list --repo "$repo" --workflow "$workflow" --limit 50 \
+    --json databaseId,headBranch,status,conclusion \
+    --jq "[.[] | select(.headBranch == \"$branch\")] | .[0] // empty"
+}
+
 # Give the trigger a moment to register as a run before we start polling.
 sleep 5
 
 deadline=$((SECONDS + timeout))
-run_id=""
+row=""
 
 while (( SECONDS < deadline )); do
-  run_id=$(gh run list --repo "$repo" --workflow "$workflow" --branch "$branch" \
-             --limit 1 --json databaseId,status,conclusion \
-             --jq '.[0] // empty')
-  [[ -n "$run_id" ]] && break
+  row=$(get_row)
+  [[ -n "$row" ]] && break
   sleep 3
 done
 
-if [[ -z "$run_id" ]]; then
+if [[ -z "$row" ]]; then
   echo "::error::no run found for $workflow on $branch in $repo after ${timeout}s"
   exit 1
 fi
 
 while (( SECONDS < deadline )); do
-  row=$(gh run list --repo "$repo" --workflow "$workflow" --branch "$branch" \
-          --limit 1 --json status,conclusion,databaseId --jq '.[0]')
+  row=$(get_row)
   status=$(jq -r '.status'     <<<"$row")
   concl=$( jq -r '.conclusion' <<<"$row")
   if [[ "$status" == "completed" ]]; then

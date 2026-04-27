@@ -118,12 +118,16 @@ jobs:
           # to accept (pr_number, sha) inputs and exit non-zero on failure.
           gh workflow run "$QWF" --ref "${{ inputs.source_branch }}" \
             -f pr_number="$PR" -f sha="$SHA"
-          # Poll for the run to complete (5 min cap).
+          # Poll for the run to complete (5 min cap). gh's --branch filter
+          # (and the underlying ?branch= API param) returns empty for
+          # short-lived branches; post-filter on headBranch instead.
+          SRC="${{ inputs.source_branch }}"
           for _ in $(seq 1 60); do
             sleep 5
-            run=$(gh run list --workflow "$QWF" --branch "${{ inputs.source_branch }}" \
-                    --limit 1 --json status,conclusion,databaseId \
-                    --jq '.[0]')
+            run=$(gh run list --workflow "$QWF" --limit 50 \
+                    --json databaseId,headBranch,status,conclusion \
+                    --jq "[.[] | select(.headBranch == \"$SRC\")] | .[0] // empty")
+            [[ -z "$run" ]] && continue
             status=$(jq -r '.status' <<<"$run")
             if [[ "$status" == "completed" ]]; then
               concl=$(jq -r '.conclusion' <<<"$run")
