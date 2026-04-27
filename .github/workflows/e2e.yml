@@ -103,10 +103,13 @@ jobs:
         run: |
           set -euo pipefail
           git checkout main
-          # Rewrite `uses:` refs so the sandbox exercises THIS swarmflow commit,
-          # not whatever @v1 happens to point at.
+          # Rewrite `uses:` refs so the sandbox exercises THIS swarmflow,
+          # not the templates' static @v1 ref. Match any owner (the sandbox
+          # baseline may have been seeded before templates were corrected to
+          # canonical case) and replace with this workflow's actual repo —
+          # github.repository — so the sandbox loads orchestrator from us.
           sed -i -E \
-            "s|(PointSource/swarmflow/\.github/workflows/orchestrator\.yml@).*|\1${REF}|" \
+            "s|[a-zA-Z][-a-zA-Z0-9]*/swarmflow/\.github/workflows/orchestrator\.yml@[^[:space:]]+|${{ github.repository }}/.github/workflows/orchestrator.yml@${REF}|" \
             .github/workflows/on-pr.yml .github/workflows/on-push.yml
           git add -A
           git commit -m "chore: pin swarmflow to ${REF} for ${RUN_NS}" || true
