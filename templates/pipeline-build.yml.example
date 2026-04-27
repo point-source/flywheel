@@ -1,6 +1,11 @@
 # Adopter-supplied build workflow.
 # The orchestrator dispatches this via workflow_dispatch with the inputs below.
 # Replace the body of the build job with your real build steps.
+#
+# Identity: per spec.md ("Auth: GitHub App"), all bot-triggered downstream
+# workflow dispatches must use the GitHub App installation token rather
+# than GITHUB_TOKEN. Reuse the APP_ID / APP_PRIVATE_KEY repo secrets that
+# the rest of the pipeline already expects.
 
 name: pipeline / build
 
@@ -45,10 +50,18 @@ jobs:
           name: build-${{ inputs.version }}
           path: ${{ inputs.artifact_path }}
 
+      # Mint a short-lived App installation token so the publish dispatch
+      # is attributed to the pipeline bot identity rather than the runner.
+      - id: token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+
       # Chain into publish on success.
       - name: Trigger publish
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ steps.token.outputs.token }}
         run: |
           gh workflow run pipeline-publish.yml \
             -f version='${{ inputs.version }}' \
