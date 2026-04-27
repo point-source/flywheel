@@ -1,0 +1,276 @@
+# End-to-end integration test.
+#
+# Drives a sandbox repo (not this one) through the full pipeline:
+#   pr-lifecycle → promote → release.
+#
+# Idempotent by construction:
+#   - every resource is namespaced with $GITHUB_RUN_ID
+#   - pre-run cleanup wipes stale e2e-* state from prior runs
+#   - teardown runs on success AND failure
+#   - the sandbox's managed branches are force-reset to the `e2e-baseline`
+#     tag before each run, giving a deterministic starting state
+#
+# Prerequisites and setup: see docs/E2E.md.
+
+name: E2E
+
+on:
+  workflow_dispatch:
+    inputs:
+      sandbox_repo:
+        description: 'owner/name of the sandbox repo. Defaults to vars.E2E_SANDBOX_REPO.'
+        type: string
+        required: false
+      ref:
+        description: 'swarmflow ref to test (branch/tag/SHA). Defaults to this workflow run.'
+        type: string
+        required: false
+
+permissions:
+  contents: read
+
+# Serialize e2e runs against a given sandbox — parallel runs would trample
+# each other's baseline resets. Do NOT cancel in-progress; teardown must run.
+concurrency:
+  group: e2e-${{ inputs.sandbox_repo || vars.E2E_SANDBOX_REPO }}
+  cancel-in-progress: false
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    env:
+      SANDBOX: ${{ inputs.sandbox_repo || vars.E2E_SANDBOX_REPO }}
+      REF: ${{ inputs.ref || github.sha }}
+      RUN_NS: e2e-${{ github.run_id }}
+      BASELINE_TAG: e2e-baseline
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: token
+        uses: ./.github/actions/app-token
+        with:
+          app_id: ${{ secrets.E2E_APP_ID }}
+          private_key: ${{ secrets.E2E_APP_PRIVATE_KEY }}
+
+      - name: Clone sandbox
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+        run: |
+          set -euo pipefail
+          git clone "https://x-access-token:${GH_TOKEN}@github.com/${SANDBOX}.git" sandbox
+          cd sandbox
+          git config user.email "swarmflow-e2e[bot]@users.noreply.github.com"
+          git config user.name  "swarmflow-e2e[bot]"
+
+      # --- Pre-run cleanup: idempotency guard ---------------------------------
+      # All deletes are `|| true` so the first run (nothing to clean) works.
+      - name: Pre-run cleanup
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+        working-directory: sandbox
+        run: |
+          set -euo pipefail
+
+          # Close any leftover e2e-* PRs
+          gh pr list --repo "$SANDBOX" --state open --search "head:e2e-" \
+            --json number --jq '.[].number' \
+            | xargs -I{} gh pr close --repo "$SANDBOX" {} --delete-branch || true
+
+          # Delete leftover e2e-* branches (in case a PR was already merged)
+          git ls-remote --heads origin 'e2e-*' \
+            | awk '{print $2}' | sed 's|refs/heads/||' \
+            | xargs -I{} git push origin --delete {} || true
+
+          # Delete leftover e2e-* tags + their GitHub releases
+          for tag in $(git ls-remote --tags origin 'v*-e2e*' \
+                       | awk '{print $2}' | sed 's|refs/tags/||'); do
+            gh release delete "$tag" --repo "$SANDBOX" --cleanup-tag --yes || true
+          done
+
+          # Reset managed branches to the baseline tag
+          git fetch origin --tags
+          for br in develop staging main; do
+            git push origin "+refs/tags/${BASELINE_TAG}:refs/heads/${br}" || true
+          done
+
+      # --- Pin sandbox entrypoints to the swarmflow ref under test ------------
+      - name: Pin entrypoints to swarmflow@${{ env.REF }}
+        working-directory: sandbox
+        run: |
+          set -euo pipefail
+          git checkout main
+          # Rewrite `uses:` refs so the sandbox exercises THIS swarmflow commit,
+          # not whatever @v1 happens to point at.
+          sed -i -E \
+            "s|(PointSource/swarmflow/\.github/workflows/orchestrator\.yml@).*|\1${REF}|" \
+            .github/workflows/on-pr.yml .github/workflows/on-push.yml
+          git add -A
+          git commit -m "chore: pin swarmflow to ${REF} for ${RUN_NS}" || true
+          git push origin main
+
+      # --- Fixture 1: fix → PR to develop → should auto-merge, then bump ----
+      # `fix` is the canonical auto-merge case per spec.md (feat is always
+      # human-gated). Auto-merge is exercised here; the human-gate path is
+      # covered by Fixture 2 below with feat!.
+      - name: 'Fixture: fix PR → develop'
+        id: fix
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+        working-directory: sandbox
+        run: |
+          set -euo pipefail
+          br="${RUN_NS}-fix"
+          git checkout -b "$br" origin/develop
+          printf '%s\n' "$RUN_NS" > "e2e-${RUN_NS}.txt"
+          git add "e2e-${RUN_NS}.txt"
+          git commit -m "fix: e2e fixture ${RUN_NS}"
+          git push origin "$br"
+          url=$(gh pr create --repo "$SANDBOX" \
+                  --base develop --head "$br" \
+                  --title "fix: e2e ${RUN_NS}" \
+                  --body "e2e fixture for run ${RUN_NS}")
+          num=$(basename "$url")
+          echo "pr=$num" >> "$GITHUB_OUTPUT"
+          echo "branch=$br" >> "$GITHUB_OUTPUT"
+
+      - name: Wait for pr-lifecycle on fix PR
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+        run: |
+          # TODO: poll via `gh run list --workflow=on-pr.yml --event=pull_request`
+          # filtered to the PR head SHA; break when conclusion != null.
+          ./.github/scripts/wait-run.sh "$SANDBOX" on-pr.yml "${{ steps.fix.outputs.branch }}"
+
+      - name: Assert fix PR auto-merged
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+        run: |
+          set -euo pipefail
+          state=$(gh pr view "${{ steps.fix.outputs.pr }}" --repo "$SANDBOX" \
+                    --json state,title --jq '.state')
+          [[ "$state" == "MERGED" ]] || {
+            echo "::error::expected fix PR MERGED, got $state"; exit 1;
+          }
+
+      - name: Wait for promote run on develop
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+        run: ./.github/scripts/wait-run.sh "$SANDBOX" on-push.yml develop
+
+      - name: Assert develop pre-release tag was created
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+        run: |
+          set -euo pipefail
+          # A patch bump with develop publishing enabled should have produced
+          # a v*-dev.N tag newer than the baseline.
+          tag=$(gh api "repos/${SANDBOX}/tags" --jq '.[0].name')
+          [[ "$tag" == *-dev.* ]] || {
+            echo "::error::expected dev pre-release tag, got $tag"; exit 1;
+          }
+
+      # --- Fixture 2: breaking change must NOT auto-merge --------------------
+      - name: 'Fixture: breaking PR → develop'
+        id: breaking
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+        working-directory: sandbox
+        run: |
+          set -euo pipefail
+          git fetch origin develop
+          br="${RUN_NS}-breaking"
+          git checkout -b "$br" origin/develop
+          printf 'breaking\n' >> "e2e-${RUN_NS}.txt"
+          git commit -am "feat!: breaking e2e ${RUN_NS}"
+          git push origin "$br"
+          url=$(gh pr create --repo "$SANDBOX" \
+                  --base develop --head "$br" \
+                  --title "feat!: e2e breaking ${RUN_NS}" \
+                  --body "breaking e2e fixture")
+          echo "pr=$(basename "$url")" >> "$GITHUB_OUTPUT"
+          echo "branch=$br" >> "$GITHUB_OUTPUT"
+
+      - name: Wait for pr-lifecycle on breaking PR
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+        run: ./.github/scripts/wait-run.sh "$SANDBOX" on-pr.yml "${{ steps.breaking.outputs.branch }}"
+
+      - name: Assert breaking PR stayed OPEN (human gate)
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+        run: |
+          set -euo pipefail
+          state=$(gh pr view "${{ steps.breaking.outputs.pr }}" --repo "$SANDBOX" \
+                    --json state --jq '.state')
+          [[ "$state" == "OPEN" ]] || {
+            echo "::error::breaking PR must stay OPEN, got $state"; exit 1;
+          }
+
+      # --- Optional release path (only if sandbox has main: true) ------------
+      # Enable by setting vars.E2E_TEST_RELEASE=true on the sandbox.
+      - name: 'Fixture: release on main'
+        if: vars.E2E_TEST_RELEASE == 'true'
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+        working-directory: sandbox
+        run: |
+          set -euo pipefail
+          # Fast-forward main with a fix commit to trigger release.yml
+          git fetch origin main
+          git checkout -B main origin/main
+          printf 'release\n' >> "e2e-${RUN_NS}.txt"
+          git add "e2e-${RUN_NS}.txt"
+          git commit -m "fix: e2e release ${RUN_NS}"
+          git push origin main
+
+      - name: Wait for release run
+        if: vars.E2E_TEST_RELEASE == 'true'
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+        run: ./.github/scripts/wait-run.sh "$SANDBOX" on-push.yml main
+
+      - name: Assert release tag + GitHub Release exist
+        if: vars.E2E_TEST_RELEASE == 'true'
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+        run: |
+          set -euo pipefail
+          tag=$(gh api "repos/${SANDBOX}/tags" --jq '.[0].name')
+          [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
+            echo "::error::expected final semver tag, got $tag"; exit 1;
+          }
+          gh release view "$tag" --repo "$SANDBOX" > /dev/null || {
+            echo "::error::no GitHub Release for $tag"; exit 1;
+          }
+
+      # --- Teardown: unconditional ------------------------------------------
+      - name: Teardown
+        if: always()
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+        working-directory: sandbox
+        run: |
+          set +e
+
+          # Close any still-open PRs from this run
+          gh pr list --repo "$SANDBOX" --state open --search "head:${RUN_NS}" \
+            --json number --jq '.[].number' \
+            | xargs -I{} gh pr close --repo "$SANDBOX" {} --delete-branch
+
+          # Delete branches created by this run
+          git ls-remote --heads origin "${RUN_NS}*" \
+            | awk '{print $2}' | sed 's|refs/heads/||' \
+            | xargs -I{} git push origin --delete {}
+
+          # Delete tags + releases created during this run
+          git fetch origin --tags --prune --prune-tags
+          for tag in $(git tag -l 'v*-dev.*' 'v*-rc.*' 'v*-e2e*'); do
+            gh release delete "$tag" --repo "$SANDBOX" --cleanup-tag --yes
+          done
+
+          # Reset managed branches back to the baseline tag
+          for br in develop staging main; do
+            git push origin "+refs/tags/${BASELINE_TAG}:refs/heads/${br}"
+          done
+
+          exit 0
