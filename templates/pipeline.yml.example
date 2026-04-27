@@ -33,10 +33,12 @@ pipeline:
 
   # Paths to user-defined workflows (relative to .github/workflows/).
   # Override to avoid filename collisions with existing workflows.
+  # `quality` is optional — uncomment after creating pipeline-quality.yml.
+  # When unset, the quality gate is skipped.
   workflows:
     build: pipeline-build.yml
     publish: pipeline-publish.yml
-    quality: pipeline-quality.yml   # optional; if absent, quality checks are skipped
+    # quality: pipeline-quality.yml
 
 # Initial version if no tags exist
 initial_version: 0.1.0
