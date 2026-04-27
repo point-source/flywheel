@@ -40,9 +40,15 @@ runs:
         set -euo pipefail
         scripts="$ACTION_PATH/../../../scripts"
 
-        # 1. Find the latest release-shaped tag (vX.Y.Z, no pre-release).
-        last_tag=$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname \
-                    | grep -vE -- '-' | head -n1 || true)
+        # 1. Find the latest release-shaped tag (vX.Y.Z, no pre-release)
+        # reachable from HEAD. Reachability matters: develop/staging/main may
+        # carry different stable tags on diverged lineage, and using a tag not
+        # on this branch's history would inflate the commit range.
+        # Note: pre-release-counter.sh stays global on purpose, so a `-dev.N`
+        # slot is never reused across branches even if reachability differs.
+        last_tag=$(git describe --tags --abbrev=0 \
+                    --match 'v[0-9]*.[0-9]*.[0-9]*' \
+                    --exclude '*-*' HEAD 2>/dev/null || true)
         if [[ -z "$last_tag" ]]; then
           base_prev="$INITIAL"
           range="HEAD"
