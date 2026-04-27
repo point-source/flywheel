@@ -136,6 +136,8 @@ jobs:
         if: steps.eligibility.outputs.eligible == 'true'
         id: queue_check
         uses: ./.github/actions/detect-merge-queue
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
         with:
           branch: ${{ inputs.target_branch }}
           override: ${{ steps.cfg.outputs.merge_queue }}
