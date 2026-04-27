@@ -76,11 +76,14 @@ git tag -f e2e-baseline && git push -f origin e2e-baseline
 
 ## 3. Install the swarmflow GitHub App on the sandbox
 
-Same App you'd install on any adopter. It needs:
+Use a **dedicated** e2e App, not the same App you give to real adopters — the
+e2e App needs `Workflows: write`, which production adopters don't (and
+shouldn't have to grant). Permissions:
 
 - Contents: write (push, tag, CHANGELOG)
 - Pull requests: write (open, edit, merge)
 - Actions: write (dispatch build/publish/quality)
+- Workflows: write (the pin step rewrites `uses:` in `on-pr.yml`/`on-push.yml`)
 - Metadata: read
 
 ## 4. Configure rulesets (or turn them off)
