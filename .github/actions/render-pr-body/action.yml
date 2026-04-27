@@ -56,7 +56,11 @@ runs:
         "$scripts/pr-body.sh" "$COMMITS" "${args[@]}" > "$body"
 
         # Title rules:
-        #   feature   -> first valid conventional commit's "type(scope): description"
+        #   feature   -> highest-bump valid commit's "type(scope): description"
+        #               (breaking > feat > fix > first valid). With squash-merge
+        #               default this drives the merge commit message, so picking
+        #               the highest-bump commit prevents under-bumping when a PR
+        #               carries a mix of types.
         #   promotion -> "chore(release): promote <source> → <target> [v<version>]"
         if [[ "$MODE" == "promotion" ]]; then
           # source branch isn't passed in (target only); the caller can override
@@ -64,11 +68,20 @@ runs:
           # the version + target.
           title="chore(release): promote → ${TARGET} [v${VERSION}]"
         else
-          first=$(jq -r '[.[] | select(.valid == true)] | .[0] // empty' "$COMMITS")
+          first=$(jq -r '
+            ([.[] | select(.valid == true and .breaking == true)] | .[0]) //
+            ([.[] | select(.valid == true and .type == "feat")]   | .[0]) //
+            ([.[] | select(.valid == true and .type == "fix")]    | .[0]) //
+            ([.[] | select(.valid == true)]                       | .[0]) //
+            empty
+          ' "$COMMITS")
           if [[ -n "$first" && "$first" != "null" ]]; then
             type=$(jq -r '.type'        <<<"$first")
             scope=$(jq -r '.scope'      <<<"$first")
             desc=$(jq -r '.description' <<<"$first")
+            breaking=$(jq -r '.breaking' <<<"$first")
+            # `feat!:` style breaking suffix preserved on the merge commit.
+            [[ "$breaking" == "true" && "$type" != *! ]] && type="${type}!"
             if [[ -n "$scope" ]]; then
               title="${type}(${scope}): ${desc}"
             else
