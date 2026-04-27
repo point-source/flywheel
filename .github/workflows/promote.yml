@@ -50,13 +50,15 @@ jobs:
           initial_version: ${{ steps.cfg.outputs.initial_version }}
 
       # Build + publish for this environment if the adopter opted in.
+      # Per spec.md:438-440, chore-only pushes still publish if publish_on_*
+      # is true; the difference is that no new version tag is created.
+      # compute-version emits a -dev.N/-rc.N version regardless of bump.
       - name: Decide whether to publish on this branch
         id: publish_decision
         env:
           BRANCH: ${{ inputs.source_branch }}
           DEV: ${{ steps.cfg.outputs.publish_on_develop }}
           STG: ${{ steps.cfg.outputs.publish_on_staging }}
-          HAS_CHANGES: ${{ steps.version.outputs.has_changes }}
         run: |
           set -euo pipefail
           publish=false
@@ -64,8 +66,6 @@ jobs:
             develop) [[ "$DEV" == "true" ]] && publish=true ;;
             staging) [[ "$STG" == "true" ]] && publish=true ;;
           esac
-          # Even if publish is allowed, skip on chore-only pushes (no version bump).
-          [[ "$HAS_CHANGES" != "true" ]] && publish=false
           echo "publish=$publish" >> "$GITHUB_OUTPUT"
           echo "environment=$BRANCH" >> "$GITHUB_OUTPUT"
 
