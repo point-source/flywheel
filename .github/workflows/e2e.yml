@@ -103,11 +103,16 @@ jobs:
         run: |
           set -euo pipefail
           git checkout main
-          # Rewrite `uses:` refs so the sandbox exercises THIS swarmflow,
-          # not the templates' static @v1 ref. Match any owner (the sandbox
-          # baseline may have been seeded before templates were corrected to
-          # canonical case) and replace with this workflow's actual repo —
-          # github.repository — so the sandbox loads orchestrator from us.
+          # Copy the latest templates from THIS swarmflow checkout, so e2e
+          # always tests against the templates an adopter would copy today
+          # (permissions blocks, schema changes, etc.) rather than against
+          # a frozen baseline that drifts behind. The baseline therefore
+          # only needs to bootstrap branches; its workflow content is moot.
+          cp ../templates/on-pr.yml   .github/workflows/on-pr.yml
+          cp ../templates/on-push.yml .github/workflows/on-push.yml
+          # Rewrite the orchestrator @ref to the swarmflow ref under test
+          # and normalize the owner to this workflow's repo so the sandbox
+          # loads orchestrator from us regardless of fork/rename.
           sed -i -E \
             "s|[a-zA-Z][-a-zA-Z0-9]*/swarmflow/\.github/workflows/orchestrator\.yml@[^[:space:]]+|${{ github.repository }}/.github/workflows/orchestrator.yml@${REF}|" \
             .github/workflows/on-pr.yml .github/workflows/on-push.yml
@@ -117,7 +122,7 @@ jobs:
           # pull_request events read on-pr.yml from the *base* branch and
           # push events from the pushed branch — so develop and staging need
           # the same pinned entrypoints, otherwise they still load the
-          # baseline's @v1 ref and the pipeline can't start.
+          # baseline content and the pipeline can't start.
           git push origin --force main:develop main:staging
 
       # --- Fixture 1: fix → PR to develop → should auto-merge, then bump ----
