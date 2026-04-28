@@ -1,0 +1,14 @@
+flywheel:
+  streams:
+    - name: main-line
+      branches:
+        - name: develop
+          prerelease: dev
+          auto_merge: [fix, fix!, feat, chore, refactor, perf, style, test, docs]
+        - name: staging
+          prerelease: rc
+          auto_merge: [fix, chore, style, test, docs]
+        - name: main
+          auto_merge: []
+  merge_strategy: squash
+  initial_version: 0.1.0
