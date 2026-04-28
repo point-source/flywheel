@@ -2,18 +2,19 @@
 # Apply the swarmflow ruleset bundle to an adopter (or sandbox) repo.
 #
 # Usage:
-#   REPO=owner/name ./scripts/setup-rulesets.sh
-#   REPO=owner/name APP_ACTOR_ID=12345 ./scripts/setup-rulesets.sh
-#   REPO=owner/name SKIP=naming ./scripts/setup-rulesets.sh
+#   REPO=owner/name APP_ACTOR_ID=<app_id> ./scripts/setup-rulesets.sh
+#   REPO=owner/name APP_ACTOR_ID=<app_id> SKIP=naming ./scripts/setup-rulesets.sh
 #
 # Required env:
 #   REPO            owner/name of the target repo
+#   APP_ACTOR_ID    GitHub App ID to grant bypass to. Find this:
+#                     - Your App's settings page (top of page: "App ID: 12345")
+#                     - In repo secrets if you stored it as APP_ID:
+#                         gh secret list --repo $REPO  (lists names, not values)
+#                     - This is the *App* id, NOT the installation id.
 #
 # Optional env:
-#   APP_ACTOR_ID    GitHub App ID to grant bypass to. Auto-resolved from the
-#                   App installed on REPO if omitted (the App must be installed
-#                   first — see docs/install-app/).
-#   SKIP            Comma-separated list of rulesets to skip. Names:
+#   SKIP            Comma-separated list of rulesets to skip:
 #                     managed  - "swarmflow / managed branches" (Ruleset 1)
 #                     tags     - "swarmflow / version tags" (Ruleset 3)
 #                     naming   - "swarmflow / feature branch naming" (Ruleset 4)
@@ -23,15 +24,19 @@
 #                   `{ "type": "merge_queue" }` line and re-run.
 #
 # Idempotency: GitHub rejects duplicate ruleset names. If a ruleset with the
-# same name already exists, this script aborts with a 422. Delete the
+# same name already exists, this script aborts with HTTP 422. Delete the
 # existing rulesets via the UI (Settings → Rules → Rulesets) or
 # `gh api repos/$REPO/rulesets/$ID -X DELETE`, then re-run.
 #
-# Requires: gh CLI authenticated with `admin:repo_hook` or repo admin scope.
+# Requires: gh CLI authenticated as a repo admin (or anyone who can manage
+# rulesets on $REPO).
+#
+# Compatible with bash 3.2+ (the macOS default).
 
 set -euo pipefail
 
 : "${REPO:?REPO=owner/name is required}"
+: "${APP_ACTOR_ID:?APP_ACTOR_ID=<app_id> is required (find it on your GitHub App settings page, e.g. App ID: 12345)}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TEMPLATES_DIR="$(cd "$SCRIPT_DIR/.." && pwd)/templates/rulesets"
@@ -41,32 +46,27 @@ if [[ ! -d "$TEMPLATES_DIR" ]]; then
   exit 1
 fi
 
-# Resolve App actor id from the installation if not provided. The
-# `repos/{repo}/installation` endpoint returns the App that's currently
-# installed; gh CLI auth must be the same identity (or a maintainer of
-# the App) for this lookup to succeed.
-if [[ -z "${APP_ACTOR_ID:-}" ]]; then
-  echo "Looking up GitHub App installation on $REPO..."
-  APP_ACTOR_ID=$(gh api "repos/${REPO}/installation" --jq '.app_id' 2>/dev/null || true)
-  if [[ -z "$APP_ACTOR_ID" || "$APP_ACTOR_ID" == "null" ]]; then
-    echo "::error::Cannot find App installation on $REPO." >&2
-    echo "Install the swarmflow App first (docs/install-app/), or set APP_ACTOR_ID=<id> explicitly." >&2
-    exit 1
-  fi
-  echo "  resolved APP_ACTOR_ID=$APP_ACTOR_ID"
+# Validate APP_ACTOR_ID is numeric (catches the common "passed app slug
+# instead of id" mistake).
+if ! [[ "$APP_ACTOR_ID" =~ ^[0-9]+$ ]]; then
+  echo "::error::APP_ACTOR_ID must be a number (the App id, not the slug). Got: '$APP_ACTOR_ID'" >&2
+  exit 1
 fi
 
-# Build skip set
-declare -A SKIP_SET=()
-if [[ -n "${SKIP:-}" ]]; then
-  IFS=',' read -ra parts <<<"$SKIP"
-  for p in "${parts[@]}"; do SKIP_SET[$p]=1; done
-fi
+# Build skip list (space-separated; bash 3.2 compatible — no associative arrays).
+SKIP_LIST=" ${SKIP//,/ } "
+
+is_skipped() {
+  case "$SKIP_LIST" in
+    *" $1 "*) return 0 ;;
+    *)        return 1 ;;
+  esac
+}
 
 apply_ruleset() {
   local key="$1"
   local file="$2"
-  if [[ -n "${SKIP_SET[$key]:-}" ]]; then
+  if is_skipped "$key"; then
     echo "Skipping '$key' (per SKIP)"
     return 0
   fi
@@ -77,15 +77,17 @@ apply_ruleset() {
   local body
   body=$(sed "s/<APP_INSTALLATION_ACTOR_ID>/${APP_ACTOR_ID}/g" "$file")
   echo "Applying '$key' from $(basename "$file")..."
-  local resp http_code
-  resp=$(echo "$body" | gh api "repos/${REPO}/rulesets" -X POST --input - 2>&1) || http_code=$?
-  if [[ -z "${http_code:-}" ]]; then
+  local tmp
+  tmp=$(mktemp)
+  if echo "$body" | gh api "repos/${REPO}/rulesets" -X POST --input - >"$tmp" 2>&1; then
     local id
-    id=$(echo "$resp" | sed -n 's/.*"id":\([0-9]*\).*/\1/p' | head -1)
+    id=$(sed -n 's/.*"id":\([0-9]*\).*/\1/p' "$tmp" | head -1)
     echo "  ✓ created (id=$id)"
+    rm -f "$tmp"
   else
     echo "  ✗ failed:" >&2
-    echo "$resp" | sed 's/^/    /' >&2
+    sed 's/^/    /' "$tmp" >&2
+    rm -f "$tmp"
     return 1
   fi
 }
