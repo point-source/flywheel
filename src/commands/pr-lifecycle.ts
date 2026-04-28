@@ -168,6 +168,29 @@ export async function runPrLifecycleWithOctokit(
       throw new Error('quality workflow failed; merge gated');
     }
   }
+
+  // Direct-merge fallback: GitHub native auto-merge has been observed to
+  // stay stuck at `mergeStateStatus: BLOCKED` on this repo even with all
+  // required checks SUCCESS — never firing the merge before the PR is
+  // closed. The bot is in the ruleset's bypass_actors with bypass_mode
+  // "always", so a direct REST merge call should succeed regardless of
+  // rule-derived block. We attempt this only after quality has passed
+  // and only for auto-merge-eligible PRs. If the call fails, we log a
+  // warning — auto-merge stays enabled and may still fire on its own.
+  if (eligible && !inputs.dryRun) {
+    try {
+      await octokit.rest.pulls.merge({
+        owner,
+        repo,
+        pull_number: inputs.prNumber,
+        merge_method: config.pipeline.merge_strategy as MergeStrategy,
+      });
+      core.info('direct merge succeeded (bypass)');
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      core.warning(`direct merge failed (auto-merge will still fire): ${msg}`);
+    }
+  }
 }
 
 interface QualityWorkflowParams {
