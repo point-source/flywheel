@@ -1,0 +1,41 @@
+name: E2E tests
+on:
+  push:
+    branches: ["develop"]
+
+concurrency:
+  group: e2e-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    if: ${{ github.event.repository.fork == false }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - run: npm ci
+
+      # Mint a short-lived installation token from the flywheel-build-e2e
+      # GitHub App, scoped to point-source/flywheel-sandbox only.
+      - name: Mint sandbox installation token
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.E2E_APP_ID }}
+          private-key: ${{ secrets.E2E_APP_PRIVATE_KEY }}
+          owner: point-source
+          repositories: flywheel-sandbox
+
+      - name: Pre-flight (doctor.sh against sandbox)
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: ./scripts/doctor.sh point-source/flywheel-sandbox
+
+      - name: Run e2e suite
+        env:
+          SANDBOX_GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: npm run test:e2e
