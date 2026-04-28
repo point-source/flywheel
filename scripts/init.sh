@@ -58,7 +58,13 @@ fi
 echo "Wiring Flywheel into $REPO..."
 
 TEMPLATES_BASE="${FLYWHEEL_TEMPLATES_BASE:-https://raw.githubusercontent.com/point-source/flywheel/v1/scripts/templates}"
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd || true)"
+# When piped via `curl ... | bash`, BASH_SOURCE is unset and `set -u` would
+# trip; default to empty and skip local-templates detection in that case.
+SCRIPT_SRC="${BASH_SOURCE[0]:-}"
+SCRIPT_DIR=""
+if [[ -n "$SCRIPT_SRC" ]]; then
+  SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_SRC")" 2>/dev/null && pwd || true)"
+fi
 LOCAL_TEMPLATES=""
 if [[ -n "$SCRIPT_DIR" && -d "$SCRIPT_DIR/templates" ]]; then
   LOCAL_TEMPLATES="$SCRIPT_DIR/templates"
