@@ -32,7 +32,9 @@ Flywheel uses a GitHub App installation token. Personal Access Tokens are not su
 Follow GitHub's [Creating a GitHub App](https://docs.github.com/en/apps/creating-github-apps/about-creating-github-apps/creating-a-github-app) guide. Required permissions:
 
 - **Contents: read and write** — tag creation, `.releaserc.json` write
-- **Pull requests: read and write** — PR creation, body/label updates, auto-merge
+- **Pull requests: read and write** — PR creation, body updates, auto-merge
+- **Issues: read and write** — adding / removing the `flywheel:*` labels on PRs
+- **Checks: read and write** — posting the `flywheel/conventional-commit` check
 - **Metadata: read**
 
 Install the App on your repo. Then store its credentials as repo secrets:

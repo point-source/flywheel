@@ -142,7 +142,8 @@ else
   Flywheel uses a GitHub App installation token (PATs are not supported).
   If you haven't created the App yet, follow:
     https://docs.github.com/en/apps/creating-github-apps/about-creating-github-apps/creating-a-github-app
-  Required scopes: Contents r/w, Pull requests r/w, Metadata r. Install on $REPO.
+  Required scopes: Contents r/w, Pull requests r/w, Issues r/w, Checks r/w,
+  Metadata r. Install on $REPO.
 EOF
       if [[ "$has_app_id" -eq 0 ]]; then
         read -r -p "  GitHub App ID (numeric): " app_id

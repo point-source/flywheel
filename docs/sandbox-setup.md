@@ -45,6 +45,7 @@ never against `flywheel` itself or any production target.
      - **Repository → Contents**: read and write
      - **Repository → Pull requests**: read and write
      - **Repository → Issues**: read and write (for labels)
+     - **Repository → Checks**: read and write (for posting `flywheel/conventional-commit`)
      - **Repository → Workflows**: write (Layer 3 only)
      - **Repository → Metadata**: read (always required)
    - **Install** the App on `point-source/flywheel-sandbox` (and only that

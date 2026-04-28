@@ -110,7 +110,9 @@ Flywheel needs a token with:
 | Scope          | Purpose                                                        |
 | -------------- | -------------------------------------------------------------- |
 | Contents: r/w  | Tag creation, `.releaserc.json` write to workspace             |
-| Pull req: r/w  | PR creation, body / label updates, native auto-merge enabling  |
+| Pull req: r/w  | PR creation, body updates, native auto-merge enabling          |
+| Issues: r/w    | Adding / removing the `flywheel:*` labels on PRs               |
+| Checks: r/w    | Posting the `flywheel/conventional-commit` check               |
 | Metadata: read | Required for any token interacting with a repo                 |
 
 Use a GitHub App installation token, minted at the start of each workflow via [`actions/create-github-app-token`](https://github.com/actions/create-github-app-token) from `APP_ID` + `APP_PRIVATE_KEY` repo secrets. Personal Access Tokens are not supported — they don't reliably propagate the cross-workflow trigger semantics Flywheel relies on. `secrets.GITHUB_TOKEN` is similarly insufficient: it cannot trigger downstream workflows from PRs it creates.
