@@ -18140,7 +18140,7 @@ var require_summary = __commonJS({
     exports2.summary = exports2.markdownSummary = exports2.SUMMARY_DOCS_URL = exports2.SUMMARY_ENV_VAR = void 0;
     var os_1 = require("os");
     var fs_1 = require("fs");
-    var { access, appendFile, writeFile } = fs_1.promises;
+    var { access, appendFile, writeFile: writeFile2 } = fs_1.promises;
     exports2.SUMMARY_ENV_VAR = "GITHUB_STEP_SUMMARY";
     exports2.SUMMARY_DOCS_URL = "https://docs.github.com/actions/using-workflows/workflow-commands-for-github-actions#adding-a-job-summary";
     var Summary = class {
@@ -18198,7 +18198,7 @@ var require_summary = __commonJS({
         return __awaiter(this, void 0, void 0, function* () {
           const overwrite = !!(options === null || options === void 0 ? void 0 : options.overwrite);
           const filePath = yield this.filePath();
-          const writeFunc = overwrite ? writeFile : appendFile;
+          const writeFunc = overwrite ? writeFile2 : appendFile;
           yield writeFunc(filePath, this._buffer, { encoding: "utf8" });
           return this.emptyBuffer();
         });
@@ -23880,9 +23880,9 @@ var require_github = __commonJS({
 // src/main.ts
 var core2 = __toESM(require_core(), 1);
 var github2 = __toESM(require_github(), 1);
-var import_promises = require("node:fs/promises");
+var import_promises2 = require("node:fs/promises");
 var import_node_fs = require("node:fs");
-var import_node_path = require("node:path");
+var import_node_path2 = require("node:path");
 
 // node_modules/js-yaml/dist/js-yaml.mjs
 function isNothing(subject) {
@@ -27067,13 +27067,92 @@ function groupCommits(commits, fallbackTitle) {
   return groups;
 }
 
+// src/push-flow.ts
+var import_promises = require("node:fs/promises");
+var import_node_path = require("node:path");
+
+// src/release-rc.ts
+var DEFAULT_PLUGINS = [
+  "@semantic-release/commit-analyzer",
+  "@semantic-release/release-notes-generator",
+  "@semantic-release/changelog",
+  ["@semantic-release/git", { assets: ["CHANGELOG.md"] }],
+  "@semantic-release/github"
+];
+function generateReleaseRc(targetStream, config) {
+  const tagFormat = chooseTagFormat(targetStream, config.streams);
+  const branches = targetStream.branches.map(
+    (b) => mapBranch(b, targetStream.branches.length === 1)
+  );
+  const plugins = mergePlugins(config.semantic_release_plugins);
+  return { tagFormat, branches, plugins };
+}
+function chooseTagFormat(target, allStreams) {
+  const primary = pickPrimaryStream(allStreams);
+  return target.name === primary.name ? "v${version}" : `${target.name}/v\${version}`;
+}
+function pickPrimaryStream(allStreams) {
+  const withProductionTerminal = allStreams.filter(isProductionTerminal);
+  if (withProductionTerminal.length === 1) return withProductionTerminal[0];
+  return allStreams[0];
+}
+function isProductionTerminal(stream) {
+  const last = stream.branches[stream.branches.length - 1];
+  return Boolean(last) && (last.prerelease === false || last.prerelease === void 0);
+}
+function mapBranch(branch, isOnlyBranchInStream) {
+  const hasPrerelease = branch.prerelease !== void 0 && branch.prerelease !== false && typeof branch.prerelease === "string";
+  if (isOnlyBranchInStream && hasPrerelease) {
+    return { name: branch.name };
+  }
+  if (hasPrerelease) {
+    const id = branch.prerelease;
+    return { name: branch.name, prerelease: id, channel: id };
+  }
+  return { name: branch.name };
+}
+function mergePlugins(extra) {
+  if (!extra || extra.length === 0) return [...DEFAULT_PLUGINS];
+  return [...DEFAULT_PLUGINS, ...extra];
+}
+
+// src/push-flow.ts
+async function runPushFlow(deps) {
+  const stream = findStreamForBranch(deps.config, deps.branchRef);
+  if (!stream) {
+    deps.log.info(
+      `push: branch ${deps.branchRef} is not in any stream \u2014 release flow skipped.`
+    );
+    return { kind: "unmanaged", reason: "branch-not-in-stream" };
+  }
+  const rc = generateReleaseRc(stream, deps.config);
+  const rcPath = (0, import_node_path.join)(deps.workspace, ".releaserc.json");
+  const writer = deps.writer ?? defaultWriter;
+  await writer(rcPath, JSON.stringify(rc, null, 2));
+  deps.log.info(
+    `push: branch ${deps.branchRef} is in stream ${stream.name}; wrote ${rcPath}.`
+  );
+  return { kind: "release", stream, rcPath };
+}
+function findStreamForBranch(config, branchRef) {
+  for (const stream of config.streams) {
+    for (const branch of stream.branches) {
+      if (branch.name === branchRef) return stream;
+    }
+  }
+  return null;
+}
+async function defaultWriter(path, contents) {
+  await (0, import_promises.writeFile)(path, contents, "utf8");
+}
+
 // src/main.ts
 var CONFIG_FILE = ".flywheel.yml";
 async function run() {
   const event = core2.getInput("event", { required: true });
   const token = core2.getInput("token", { required: true });
   const workspace = process.env.GITHUB_WORKSPACE ?? process.cwd();
-  const configPath = (0, import_node_path.join)(workspace, CONFIG_FILE);
+  const configPath = (0, import_node_path2.join)(workspace, CONFIG_FILE);
   if (!(0, import_node_fs.existsSync)(configPath)) {
     core2.warning(
       `${CONFIG_FILE} not found at repository root \u2014 pr-conductor exits cleanly without doing anything.`
@@ -27081,7 +27160,7 @@ async function run() {
     core2.setOutput("managed_branch", "false");
     return;
   }
-  const yamlText = await (0, import_promises.readFile)(configPath, "utf8");
+  const yamlText = await (0, import_promises2.readFile)(configPath, "utf8");
   const result = loadConfig(yamlText);
   for (const notice2 of result.notices) core2.notice(notice2);
   for (const warning2 of result.warnings) core2.warning(warning2);
@@ -27111,8 +27190,14 @@ async function run() {
     return;
   }
   if (event === "push") {
-    core2.info("push event received \u2014 release flow lands in Phase 3.");
-    core2.setOutput("managed_branch", "false");
+    const branchRef = github2.context.ref.replace(/^refs\/heads\//, "");
+    const outcome = await runPushFlow({
+      branchRef,
+      config,
+      workspace,
+      log: { info: (msg) => core2.info(msg) }
+    });
+    core2.setOutput("managed_branch", outcome.kind === "release" ? "true" : "false");
     return;
   }
   core2.setFailed(`Unknown event input: ${event}. Expected 'pull_request' or 'push'.`);

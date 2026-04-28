@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { loadConfig } from "./config.js";
 import { createGitHubClient, type PullRequest } from "./github.js";
 import { runPrFlow } from "./pr-flow.js";
+import { runPushFlow } from "./push-flow.js";
 
 const CONFIG_FILE = ".flywheel.yml";
 
@@ -60,8 +61,14 @@ async function run(): Promise<void> {
   }
 
   if (event === "push") {
-    core.info("push event received — release flow lands in Phase 3.");
-    core.setOutput("managed_branch", "false");
+    const branchRef = github.context.ref.replace(/^refs\/heads\//, "");
+    const outcome = await runPushFlow({
+      branchRef,
+      config,
+      workspace,
+      log: { info: (msg) => core.info(msg) },
+    });
+    core.setOutput("managed_branch", outcome.kind === "release" ? "true" : "false");
     return;
   }
 
