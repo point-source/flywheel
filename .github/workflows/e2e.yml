@@ -46,13 +46,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - id: split_sandbox
+        run: |
+          echo "owner=${SANDBOX%%/*}" >> "$GITHUB_OUTPUT"
+          echo "name=${SANDBOX##*/}" >> "$GITHUB_OUTPUT"
+
       - id: token
-        uses: ./.github/actions/app-token
+        uses: actions/create-github-app-token@v1
         with:
-          app_id: ${{ secrets.E2E_APP_ID }}
-          private_key: ${{ secrets.E2E_APP_PRIVATE_KEY }}
+          app-id: ${{ secrets.E2E_APP_ID }}
+          private-key: ${{ secrets.E2E_APP_PRIVATE_KEY }}
           # The e2e App is installed on the sandbox, not on swarmflow itself.
-          target_repo: ${{ env.SANDBOX }}
+          # Scope the token to the sandbox repo.
+          owner: ${{ steps.split_sandbox.outputs.owner }}
+          repositories: ${{ steps.split_sandbox.outputs.name }}
 
       - name: Clone sandbox
         env:
@@ -132,78 +139,149 @@ jobs:
           # baseline content and the pipeline can't start.
           git push origin --force main:develop main:staging
 
-      # --- Phase 1.5: architecture vertical slice (HARD GATE) ----------------
-      # During the rewrite, every command is the `hello-world` stub that just
-      # prints the swarmflow ref it was loaded from. Real per-command behavior
-      # (auto-merge, tag creation, etc.) is added in Phase 4 once the commands
-      # are implemented. The smoke fixture here just confirms the architecture:
-      # entrypoint @ref → orchestrator @ref → child workflow @ref → action @ref
-      # all line up with the SHA the e2e is testing.
-      - name: 'Smoke fixture: open a PR to develop'
-        id: smoke
+      # --- Fixture 1: fix PR → develop (auto-merge eligible) -----------------
+      # Should: rewrite PR title to canonical, run quality (no-op without
+      # quality workflow configured), enable auto-merge → land on develop →
+      # promote dispatches build + tags v*-dev.*.
+      - name: 'Fixture 1: open fix PR to develop'
+        id: fix
         env:
           GH_TOKEN: ${{ steps.token.outputs.token }}
         working-directory: sandbox
         run: |
           set -euo pipefail
-          br="${RUN_NS}-smoke"
+          br="${RUN_NS}-fix"
           git checkout -b "$br" origin/develop
-          printf '%s\n' "$RUN_NS" > "e2e-${RUN_NS}.txt"
-          git add "e2e-${RUN_NS}.txt"
-          git commit -m "fix: e2e smoke ${RUN_NS}"
+          printf '%s\n' "$RUN_NS" > "fix-${RUN_NS}.txt"
+          git add "fix-${RUN_NS}.txt"
+          git commit -m "fix: e2e auto-merge ${RUN_NS}"
           git push origin "$br"
           url=$(gh pr create --repo "$SANDBOX" \
                   --base develop --head "$br" \
-                  --title "fix: e2e smoke ${RUN_NS}" \
-                  --body "vertical slice — exercises pr-lifecycle.yml stub")
+                  --title "raw title to be rewritten" \
+                  --body "raw body to be rewritten")
           echo "pr=$(basename "$url")" >> "$GITHUB_OUTPUT"
           echo "branch=$br" >> "$GITHUB_OUTPUT"
 
-      - name: Wait for pr-lifecycle on smoke PR
-        id: smoke_run
-        uses: ./.github/actions/wait-run
-        with:
-          repo: ${{ env.SANDBOX }}
-          workflow: on-pr.yml
-          branch: ${{ steps.smoke.outputs.branch }}
-          token: ${{ steps.token.outputs.token }}
+      - name: Wait for pr-lifecycle on fix PR
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          REPO: ${{ env.SANDBOX }}
+          WORKFLOW: on-pr.yml
+          BRANCH: ${{ steps.fix.outputs.branch }}
+          TIMEOUT: '600'
+        run: ./scripts/e2e/wait-run.sh
 
-      - name: Assert pr-lifecycle stub completed successfully
+      - name: Assert fix PR title was rewritten to canonical
         env:
           GH_TOKEN: ${{ steps.token.outputs.token }}
         run: |
           set -euo pipefail
-          [[ "${{ steps.smoke_run.outputs.conclusion }}" == "success" ]] || {
-            echo "::error::pr-lifecycle conclusion was '${{ steps.smoke_run.outputs.conclusion }}', expected success"
+          title=$(gh pr view --repo "$SANDBOX" "${{ steps.fix.outputs.pr }}" --json title --jq .title)
+          [[ "$title" == "fix: e2e auto-merge ${RUN_NS}" ]] || {
+            echo "::error::expected canonical title, got: $title"
             exit 1
           }
 
-      - name: Verify pin propagation by inspecting run logs
+      # --- Fixture 2: chore-only push → develop (learning #3) ----------------
+      # Should: NO version tag, but build IS dispatched (publish_on_develop=true
+      # by default). Verifies promote.ts:hasChanges=false branch.
+      - name: 'Fixture 2: push chore-only to develop'
+        id: chore
         env:
           GH_TOKEN: ${{ steps.token.outputs.token }}
+        working-directory: sandbox
         run: |
           set -euo pipefail
-          # Find the pr-lifecycle run for our branch and download its logs.
-          run_id=$(gh run list --repo "$SANDBOX" \
-                     --workflow on-pr.yml \
-                     --branch "${{ steps.smoke.outputs.branch }}" \
-                     --limit 1 --json databaseId --jq '.[0].databaseId')
-          [[ -n "$run_id" ]] || { echo "::error::no run id"; exit 1; }
-          # The hello-world stub prints the action source it was loaded from.
-          # We expect: action source: ${SANDBOX_RUNNER_PATH}/.swarmflow (the
-          # local-path uses), which means GITHUB_ACTION_REPOSITORY is empty
-          # for local actions. Instead we confirm the side-load checkout step
-          # observed the right repo+ref by grepping the run log.
-          log=$(gh run view "$run_id" --repo "$SANDBOX" --log 2>&1 || true)
-          # The "Side-load swarmflow at the pinned ref" step's checkout input
-          # echo will show our repo and ref.
-          echo "$log" | grep -F "repository: ${{ github.repository }}" \
-            || { echo "::error::side-load checkout did not target ${{ github.repository }}"; exit 1; }
-          echo "$log" | grep -F "ref: ${REF}" \
-            || { echo "::error::side-load ref was not ${REF}"; exit 1; }
-          echo "$log" | grep -F "hello from swarmflow" \
-            || { echo "::error::action did not run (no hello-world output in logs)"; exit 1; }
-          echo "::notice::Pin propagation confirmed: ${{ github.repository }}@${REF}"
+          br="${RUN_NS}-chore"
+          git checkout -b "$br" origin/develop
+          printf '%s\n' "$RUN_NS chore" > "chore-${RUN_NS}.txt"
+          git add "chore-${RUN_NS}.txt"
+          git commit -m "chore: e2e chore-only ${RUN_NS}"
+          git push origin "$br"
+          url=$(gh pr create --repo "$SANDBOX" \
+                  --base develop --head "$br" \
+                  --title "chore: e2e chore-only ${RUN_NS}" \
+                  --body "chore-only fixture (learning #3)")
+          echo "pr=$(basename "$url")" >> "$GITHUB_OUTPUT"
+          echo "branch=$br" >> "$GITHUB_OUTPUT"
+
+      - name: Wait for pr-lifecycle on chore PR
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          REPO: ${{ env.SANDBOX }}
+          WORKFLOW: on-pr.yml
+          BRANCH: ${{ steps.chore.outputs.branch }}
+          TIMEOUT: '600'
+        run: ./scripts/e2e/wait-run.sh
+
+      - name: Wait for promote on develop after chore merge
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          REPO: ${{ env.SANDBOX }}
+          WORKFLOW: on-push.yml
+          BRANCH: develop
+          TIMEOUT: '600'
+        run: ./scripts/e2e/wait-run.sh
+
+      - name: Assert no v*-dev tag was created for the chore-only push
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+        working-directory: sandbox
+        run: |
+          set -euo pipefail
+          git fetch origin --tags
+          # The chore commit is on develop; if learning #3 holds, no tag
+          # should have been created for it. List tags reachable from
+          # develop's tip and ensure none are dev-tags namespaced to this run.
+          tags=$(git tag --points-at origin/develop -l 'v*-dev.*' || true)
+          if [[ -n "$tags" ]]; then
+            echo "::error::chore-only push created a tag (learning #3 violated): $tags"
+            exit 1
+          fi
+          echo "::notice::chore-only push correctly created no tag"
+
+      # --- Fixture 3: invalid conventional-commit PR --------------------------
+      # Should: required check fails (parseCommitsStrict throws), no auto-merge.
+      - name: 'Fixture 3: open PR with invalid commit message'
+        id: invalid
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+        working-directory: sandbox
+        run: |
+          set -euo pipefail
+          br="${RUN_NS}-invalid"
+          git checkout -b "$br" origin/develop
+          printf '%s\n' "$RUN_NS invalid" > "invalid-${RUN_NS}.txt"
+          git add "invalid-${RUN_NS}.txt"
+          git commit -m "update foo without a conventional type"
+          git push origin "$br"
+          url=$(gh pr create --repo "$SANDBOX" \
+                  --base develop --head "$br" \
+                  --title "update foo" \
+                  --body "invalid-commit fixture")
+          echo "pr=$(basename "$url")" >> "$GITHUB_OUTPUT"
+          echo "branch=$br" >> "$GITHUB_OUTPUT"
+
+      - name: Wait for pr-lifecycle on invalid PR (expects FAILURE)
+        id: invalid_run
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          REPO: ${{ env.SANDBOX }}
+          WORKFLOW: on-pr.yml
+          BRANCH: ${{ steps.invalid.outputs.branch }}
+          TIMEOUT: '600'
+        run: ./scripts/e2e/wait-run.sh
+
+      - name: Assert invalid PR run failed (gates the required check)
+        run: |
+          set -euo pipefail
+          if [[ "${{ steps.invalid_run.outcome }}" != "failure" ]]; then
+            echo "::error::invalid-commit PR run did not fail; pr-lifecycle should have rejected non-conventional commits"
+            exit 1
+          fi
+          echo "::notice::invalid-commit PR correctly failed pr-lifecycle"
 
       # --- Teardown: unconditional ------------------------------------------
       - name: Teardown
