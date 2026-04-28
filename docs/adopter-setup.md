@@ -9,20 +9,38 @@ Step-by-step guide to wiring Flywheel into your repository.
 - Familiarity with [Conventional Commits](https://www.conventionalcommits.org/) — Flywheel rewrites every PR title against this grammar.
 - Optional: GitHub merge queue enabled on managed branches. Flywheel does not require it, but if multiple PRs target the same branch concurrently (typical with agent swarms), the queue serializes them safely.
 
-## 1. Create a token
+## Quick start (one command)
 
-Flywheel needs a token with these scopes:
+If you have `gh`, `jq`, and `yq` installed and you're in your repo with `gh auth login` already done, the steps below collapse to:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/point-source/flywheel/v1/scripts/init.sh | bash
+```
+
+`init.sh` picks a `.flywheel.yml` preset, writes both adopter workflow files, prompts for your GitHub App credentials, and optionally applies the branch + tag rulesets. Then validate with:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/point-source/flywheel/v1/scripts/doctor.sh | bash
+```
+
+The rest of this document is the manual walkthrough — useful if you want to understand what `init.sh` writes, or if you're retrofitting an existing setup.
+
+## 1. Create a GitHub App
+
+Flywheel uses a GitHub App installation token. Personal Access Tokens are not supported — they don't reliably propagate the cross-workflow trigger semantics Flywheel relies on (in particular, native auto-merge enable and downstream workflow firing on bot-created PRs).
+
+Follow GitHub's [Creating a GitHub App](https://docs.github.com/en/apps/creating-github-apps/about-creating-github-apps/creating-a-github-app) guide. Required permissions:
 
 - **Contents: read and write** — tag creation, `.releaserc.json` write
 - **Pull requests: read and write** — PR creation, body/label updates, auto-merge
 - **Metadata: read**
 
-Either:
+Install the App on your repo. Then store its credentials as repo secrets:
 
-- **Personal Access Token (classic)** — quickest path. Create one with `repo` + `workflow` scope and store it as repo secret `GH_PAT`. The samples below use this.
-- **GitHub App installation token** — recommended for production. Create a GitHub App with the same scopes, install it on your repo, and store its `APP_ID` + `APP_PRIVATE_KEY` as secrets. Use [`actions/create-github-app-token`](https://github.com/actions/create-github-app-token) at the start of each workflow to mint a short-lived installation token, then pass that to `point-source/flywheel`. See GitHub's [Creating a GitHub App](https://docs.github.com/en/apps/creating-github-apps/about-creating-github-apps/creating-a-github-app) docs.
+- `APP_ID` — the numeric App ID (visible on the App's settings page).
+- `APP_PRIVATE_KEY` — the PEM-format private key downloaded from the App settings.
 
-`GITHUB_TOKEN` works for most operations but cannot trigger downstream workflows from PRs it creates — promotion PRs opened with `GITHUB_TOKEN` will not fire your `flywheel-pr.yml`. Use a PAT or App token for the dogfooded promotion flow.
+Each Flywheel workflow mints a short-lived installation token at the start of the job via [`actions/create-github-app-token`](https://github.com/actions/create-github-app-token); see the workflow YAML in §3 below.
 
 ## 2. Add `.flywheel.yml`
 
@@ -102,11 +120,16 @@ jobs:
     if: github.event.pull_request.draft == false
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/create-github-app-token@v1
+        id: app-token
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
       - uses: actions/checkout@v4
       - uses: point-source/flywheel@v1
         with:
           event: pull_request
-          token: ${{ secrets.GH_PAT }}
+          token: ${{ steps.app-token.outputs.token }}
 ```
 
 Create `.github/workflows/flywheel-push.yml`:
@@ -123,20 +146,25 @@ jobs:
   release:
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/create-github-app-token@v1
+        id: app-token
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          token: ${{ secrets.GH_PAT }}
+          token: ${{ steps.app-token.outputs.token }}
       - uses: point-source/flywheel@v1
         id: flywheel
         with:
           event: push
-          token: ${{ secrets.GH_PAT }}
+          token: ${{ steps.app-token.outputs.token }}
       - name: Run semantic-release
         if: steps.flywheel.outputs.managed_branch == 'true'
         run: npx semantic-release@24
         env:
-          GITHUB_TOKEN: ${{ secrets.GH_PAT }}
+          GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
 ```
 
 ## 4. Add your build and publish workflows
@@ -160,12 +188,17 @@ jobs:
         env:
           VERSION: ${{ github.event.release.tag_name }}
           CHANGELOG: ${{ github.event.release.body }}
+      - uses: actions/create-github-app-token@v1
+        id: app-token
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
       - name: Upload artifact
         uses: softprops/action-gh-release@v2
         with:
           files: ./dist/your-artifact
         env:
-          GITHUB_TOKEN: ${{ secrets.GH_PAT }}
+          GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
 ```
 
 `publish.yml`:
@@ -208,14 +241,30 @@ jobs:
 
 ### Recommended rulesets
 
-1. **Protect managed branches** — target every branch listed in `.flywheel.yml`. Require PRs, require status checks (your quality check names), block force push, block deletion, require linear history. Bypass actor: GitHub App / PAT only.
+1. **Protect managed branches** — target every branch listed in `.flywheel.yml`. Require PRs, require status checks (your quality check names), block force push, block deletion, require linear history. Bypass actor: your Flywheel GitHub App.
 2. **Merge queue** on managed branches. Stricter branches (`main`) use group size 1; `develop`-style branches can batch up to 5.
 3. **Protect `v*` tag namespace** — only the bot may create or delete version tags. Prevents agents from minting arbitrary version tags.
 4. **Branch naming (optional)** — require feature branches to match `(feat|fix|chore|refactor|perf|style|test|docs|build|ci|revert)/.*`.
 
+The first and third rulesets can be applied in one command:
+
+```bash
+scripts/apply-rulesets.sh <owner/repo> --required-checks "Quality" --app-id <your-app-id>
+```
+
+(Or via `curl -fsSL https://raw.githubusercontent.com/point-source/flywheel/v1/scripts/apply-rulesets.sh | bash -s -- <owner/repo>` if you don't have the Flywheel repo checked out.)
+
 ## 6. Verify
 
-Open a small PR titled `chore: smoke test`. Confirm:
+Run the doctor script — it validates everything the prior steps configured without needing a real PR:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/point-source/flywheel/v1/scripts/doctor.sh | bash
+```
+
+`doctor.sh` confirms `.flywheel.yml` parses, every managed branch exists, `APP_ID` + `APP_PRIVATE_KEY` are set, `Allow auto-merge` is on, both Flywheel workflow files exist with App-token plumbing, a ruleset covers each managed branch, and the `v*` tag namespace is protected. Anything red is annotated with the script you should run to fix it.
+
+Then open a small PR titled `chore: smoke test`. Confirm:
 
 - The PR title and body get rewritten.
 - A `flywheel:auto-merge` or `flywheel:needs-review` label is applied.
@@ -233,7 +282,7 @@ Merge the PR. On the resulting push, confirm:
 
 **Got `flywheel:needs-review` but expected `flywheel:auto-merge`.** Compare the PR's commit type (with `!` if breaking) against the target branch's `auto_merge` list. `fix!` only matches if `fix!` is listed explicitly — listing `fix` doesn't imply `fix!`.
 
-**Native auto-merge wasn't enabled even though the PR got `flywheel:auto-merge`.** The token can't enable auto-merge: either you used `GITHUB_TOKEN` (which can't trigger downstream workflows on PRs it creates) or the branch doesn't have native auto-merge enabled. Check **Settings → General → Pull Requests → Allow auto-merge**.
+**Native auto-merge wasn't enabled even though the PR got `flywheel:auto-merge`.** Either the branch doesn't have native auto-merge enabled (check **Settings → General → Pull Requests → Allow auto-merge**), the App lacks **Pull requests: write**, or the workflow is reading `secrets.GITHUB_TOKEN` instead of an App installation token. `doctor.sh` flags all three.
 
 **Promotion PR didn't appear after merging to a non-terminal branch.** Either the branch is the terminal (last) branch in its stream — terminal branches release but don't promote — or the pending commits are all non-bumping types (`chore`, `style`, `docs`, `test`, `ci`, `build`, `refactor`). Promotion PRs only open when something with release significance is ready to move forward; the non-bumping commits will be included in the next promotion.
 

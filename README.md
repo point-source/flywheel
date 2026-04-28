@@ -17,7 +17,19 @@ Build and publish steps are **not** owned by Flywheel — they are workflows you
 
 ## Quick start
 
-Add four files to your repo:
+Run from your repo, with `gh auth login` already done:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/point-source/flywheel/v1/scripts/init.sh | bash
+```
+
+`init.sh` picks a `.flywheel.yml` preset, writes both Flywheel workflow files, prompts for the GitHub App credentials, and (optionally) applies the recommended branch + tag rulesets. Validate any time with:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/point-source/flywheel/v1/scripts/doctor.sh | bash
+```
+
+The hand-rolled equivalent — four files in your repo:
 
 ```
 your-repo/
@@ -101,7 +113,7 @@ Flywheel needs a token with:
 | Pull req: r/w  | PR creation, body / label updates, native auto-merge enabling  |
 | Metadata: read | Required for any token interacting with a repo                 |
 
-Use `secrets.GH_PAT` (a Personal Access Token) or a GitHub App installation token. The default `secrets.GITHUB_TOKEN` works for most cases but cannot trigger downstream workflows from PRs it creates.
+Use a GitHub App installation token, minted at the start of each workflow via [`actions/create-github-app-token`](https://github.com/actions/create-github-app-token) from `APP_ID` + `APP_PRIVATE_KEY` repo secrets. Personal Access Tokens are not supported — they don't reliably propagate the cross-workflow trigger semantics Flywheel relies on. `secrets.GITHUB_TOKEN` is similarly insufficient: it cannot trigger downstream workflows from PRs it creates.
 
 ## Inputs and outputs
 

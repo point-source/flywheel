@@ -113,10 +113,11 @@ fake.
 
 Vitest, no parallelism (one PR pool — file-level isolation enforced via
 `vitest.integration.config.ts`). Auth is supplied via `SANDBOX_GH_TOKEN`,
-which CI mints from the `flywheel-build-e2e` GitHub App per run; locally
-any token (App installation token or fine-grained PAT) with the right
-scopes works. Tests skip automatically when the env var is missing
-(fork PRs, contributors without provisioning access).
+which CI mints from the `flywheel-build-e2e` GitHub App per run; for
+local runs, mint an installation token from the same App (or your own
+sandbox App) — see [`docs/sandbox-setup.md`](docs/sandbox-setup.md). Tests
+skip automatically when the env var is missing (fork PRs, contributors
+without provisioning access).
 
 ### Sandbox repo configuration
 
@@ -333,7 +334,7 @@ broken `.flywheel.yml` fails CI before it reaches an actual run.
 | Merge to `main` | All of the above + semantic-release |
 
 Integration and (future) E2E jobs are skipped on PRs from forks (no sandbox
-PAT access). Maintainers re-run them via `workflow_dispatch` after review.
+App-token access). Maintainers re-run them via `workflow_dispatch` after review.
 
 ---
 

@@ -4,12 +4,20 @@ This file documents the one-time steps required to operate the Flywheel reposito
 
 ## Required secrets
 
-- `GH_PAT` — a Personal Access Token (or GitHub App installation token) with:
-  - **Contents: read and write** (tag creation, `.releaserc.json` write)
-  - **Pull requests: read and write** (PR creation, body/label updates, auto-merge)
-  - **Metadata: read**
+Flywheel uses a GitHub App installation token. Personal Access Tokens are not supported.
 
-`GITHUB_TOKEN` is sufficient for most operations but cannot trigger downstream workflows from PRs it creates. `GH_PAT` is recommended for the dogfooded self-adoption case.
+- `APP_ID` — numeric ID of the GitHub App installed on this repo.
+- `APP_PRIVATE_KEY` — PEM-format private key for that App.
+
+The App needs:
+
+- **Contents: read and write** (tag creation, `.releaserc.json` write)
+- **Pull requests: read and write** (PR creation, body/label updates, auto-merge)
+- **Metadata: read**
+
+Each workflow mints a short-lived installation token via [`actions/create-github-app-token`](https://github.com/actions/create-github-app-token); see the templates in `scripts/templates/`.
+
+`GITHUB_TOKEN` is insufficient for the dogfooded self-adoption case — it cannot trigger downstream workflows from PRs it creates.
 
 ## Branch protection rulesets
 
@@ -22,7 +30,7 @@ Flywheel protects its own `main` branch with the four rulesets from spec §Branc
 - Block force pushes
 - Block deletions
 - Require linear history (incompatible with merge commits — squash only)
-- Bypass actor: the GitHub App / PAT bot only
+- Bypass actor: the Flywheel GitHub App only
 
 ### Ruleset 2 — Merge queue on `main`
 - Group size 1 (strict)

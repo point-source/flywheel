@@ -20,7 +20,7 @@ Flywheel is not a long-running orchestrator. It is a collection of short-lived, 
 
 **Version numbers are stream-scoped.** Within a stream, the base version is consistent across all branches — `v1.3.0-dev.2`, `v1.3.0-rc.1`, and `v1.3.0` all represent the same logical release. Across streams, versions are computed independently and may collide if streams share a publish destination. See the versioning section for implications and guidance.
 
-**Minimal permissions footprint.** Most operations use `GITHUB_TOKEN`. A GitHub App or PAT is required only for creating PRs that trigger downstream workflows and pushing tags from workflow context.
+**Minimal permissions footprint.** Most operations use `GITHUB_TOKEN`. A GitHub App installation token is required only for creating PRs that trigger downstream workflows and pushing tags from workflow context.
 
 **One config file.** `.flywheel.yml` in the adopting repo is the single source of truth for branch topology, auto-merge rules, and pipeline behavior. Flywheel derives everything else — including semantic-release configuration — from it at runtime.
 
@@ -411,13 +411,15 @@ Flywheel is published to the GitHub Actions marketplace as `point-source/flywhee
 
 ### What you need
 
-A GitHub App or PAT with:
+A GitHub App with:
 
 - Contents: read and write (tag creation, `.releaserc.json` write)
 - Pull requests: read and write (PR creation, body/label updates, auto-merge)
 - Metadata: read
 
-Store as `APP_ID` + `APP_PRIVATE_KEY` (GitHub App) or `GH_PAT` (PAT) repo secrets.
+Store the App credentials as `APP_ID` + `APP_PRIVATE_KEY` repo secrets. Each workflow mints a short-lived installation token at the start of the job via [`actions/create-github-app-token`](https://github.com/actions/create-github-app-token).
+
+Personal Access Tokens are not supported — they don't reliably propagate the cross-workflow trigger semantics Flywheel relies on (in particular, native auto-merge enable and downstream workflow firing on bot-created PRs).
 
 ### Files to add
 
@@ -447,11 +449,16 @@ jobs:
     if: github.event.pull_request.draft == false
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/create-github-app-token@v1
+        id: app-token
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
       - uses: actions/checkout@v4
       - uses: point-source/flywheel@v1
         with:
           event: pull_request
-          token: ${{ secrets.GH_PAT }}
+          token: ${{ steps.app-token.outputs.token }}
 ```
 
 ### `flywheel-push.yml` (copy as-is)
@@ -468,22 +475,27 @@ jobs:
   release:
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/create-github-app-token@v1
+        id: app-token
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          token: ${{ secrets.GH_PAT }}
+          token: ${{ steps.app-token.outputs.token }}
       - uses: point-source/flywheel@v1
         id: flywheel
         with:
           event: push
-          token: ${{ secrets.GH_PAT }}
+          token: ${{ steps.app-token.outputs.token }}
       - name: Run semantic-release
         # Only runs when pr-conductor confirms this is a managed branch and
         # has written a .releaserc.json. Unmanaged branch pushes exit cleanly.
         if: steps.flywheel.outputs.managed_branch == 'true'
         run: npx semantic-release
         env:
-          GITHUB_TOKEN: ${{ secrets.GH_PAT }}
+          GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
 ```
 
 `pr-conductor` sets `managed_branch` output to `true` when the pushed branch is found in a stream in `.flywheel.yml`, and writes `.releaserc.json` to the workspace. If the branch is not managed, it sets `managed_branch` to `false` and exits without writing any files — the semantic-release step is skipped entirely.
@@ -500,6 +512,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/create-github-app-token@v1
+        id: app-token
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
       - name: Build
         run: ./your-build-script.sh
         env:
@@ -512,7 +529,7 @@ jobs:
         with:
           files: ./dist/your-artifact
         env:
-          GITHUB_TOKEN: ${{ secrets.GH_PAT }}
+          GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
 ```
 
 ### `publish.yml` (you write this)

@@ -64,9 +64,9 @@ never against `flywheel` itself or any production target.
    Rotate the App's private key per your org's policy. Token rotation is
    automatic — each CI run mints a fresh installation token.
 
-   For local runs, set `SANDBOX_GH_TOKEN` in your shell to either an App
-   installation token (use `gh` to mint one) or a fine-grained PAT with
-   the same scopes; the test code is auth-method-agnostic.
+   For local runs, set `SANDBOX_GH_TOKEN` in your shell to a GitHub App
+   installation token (mint one with `gh` or via your App's installation
+   credentials).
 
 ## Daily operating contract
 

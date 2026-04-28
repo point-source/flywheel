@@ -119,7 +119,7 @@ When your change could meaningfully break adopters (schema changes, validation s
    uses: <your-handle>/flywheel@<your-branch>
    ```
    Push your branch (with a freshly built `dist/index.js`) so GitHub Actions can resolve the ref.
-4. Add a `GH_PAT` secret with the scopes listed in [`docs/adopter-setup.md`](./docs/adopter-setup.md#1-create-a-token).
+4. Configure App-token secrets (`APP_ID` + `APP_PRIVATE_KEY`) using either `scripts/init.sh` from your sandbox repo or the manual steps in [`docs/adopter-setup.md`](./docs/adopter-setup.md#1-create-a-github-app).
 5. Open a PR with title `chore: smoke test` and confirm the rewrite + label + auto-merge behaviour.
 6. Merge it. Confirm the push triggers `semantic-release` and produces a tag + GitHub Release.
 

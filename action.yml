@@ -9,7 +9,7 @@ inputs:
     description: "Event to handle: 'pull_request' or 'push'."
     required: true
   token:
-    description: "GitHub token (PAT or GitHub App installation token) with repo + PR write."
+    description: "GitHub App installation token (typically minted via actions/create-github-app-token) with repo + PR write."
     required: true
 outputs:
   managed_branch:
