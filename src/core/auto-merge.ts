@@ -12,6 +12,10 @@ export interface AutoMergeOptions {
   useQueue: boolean;
   mergeStrategy: MergeStrategy;
   dryRun: boolean;
+  /** Pluggable sleeper (tests pass a no-op). Defaults to setTimeout. */
+  sleep?: (ms: number) => Promise<void>;
+  /** Max attempts on transient "unstable status" errors. Defaults to 6. */
+  maxAttempts?: number;
 }
 
 /**
@@ -47,16 +51,38 @@ export async function enableAutoMergeOrEnqueue(
     return 'enqueued';
   }
 
-  try {
-    await enableAutoMergeViaGraphQL(opts);
-    return 'merged';
-  } catch (err) {
-    if (isAutoMergeNotAllowedError(err)) {
-      return 'not_allowed';
+  // Retry loop for the "Pull request is in unstable status" transient. After
+  // a quality workflow completes, GitHub takes a few seconds to update the
+  // PR's mergeable_state from UNKNOWN/UNSTABLE to CLEAN. Calling auto-merge
+  // during that window throws — retrying with backoff lets the eventual
+  // consistency settle. `not_allowed` is NOT retried (it's a settings issue,
+  // not a race), and unrecognized errors propagate.
+  const sleep = opts.sleep ?? defaultSleep;
+  const maxAttempts = opts.maxAttempts ?? 6;
+  let lastErr: unknown;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      await enableAutoMergeViaGraphQL(opts);
+      return 'merged';
+    } catch (err) {
+      if (isAutoMergeNotAllowedError(err)) {
+        return 'not_allowed';
+      }
+      if (!isUnstableStatusError(err)) {
+        throw err;
+      }
+      lastErr = err;
+      if (attempt < maxAttempts) {
+        // 5s × attempt: 5, 10, 15, 20, 25 seconds — total ~75s before giving up
+        await sleep(5000 * attempt);
+      }
     }
-    throw err;
   }
+  throw lastErr;
 }
+
+const defaultSleep = (ms: number): Promise<void> =>
+  new Promise((resolve) => setTimeout(resolve, ms));
 
 function isAutoMergeNotAllowedError(err: unknown): boolean {
   if (!(err instanceof Error)) return false;
@@ -65,6 +91,14 @@ function isAutoMergeNotAllowedError(err: unknown): boolean {
   // repository". Match on the substring to remain resilient to small wording
   // changes (e.g. trailing punctuation).
   return /Auto merge is not allowed/i.test(err.message);
+}
+
+function isUnstableStatusError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  // GraphQL phrasing: "Pull request is in unstable status". This means
+  // GitHub hasn't yet computed the PR's mergeable_state after a recent
+  // commit / check-run completion. Transient — retries fix it.
+  return /Pull request is in unstable status/i.test(err.message);
 }
 
 /**

@@ -75245,17 +75245,37 @@ async function enableAutoMergeOrEnqueue(opts) {
         await enqueueViaGraphQL(opts);
         return 'enqueued';
     }
-    try {
-        await enableAutoMergeViaGraphQL(opts);
-        return 'merged';
-    }
-    catch (err) {
-        if (isAutoMergeNotAllowedError(err)) {
-            return 'not_allowed';
+    // Retry loop for the "Pull request is in unstable status" transient. After
+    // a quality workflow completes, GitHub takes a few seconds to update the
+    // PR's mergeable_state from UNKNOWN/UNSTABLE to CLEAN. Calling auto-merge
+    // during that window throws — retrying with backoff lets the eventual
+    // consistency settle. `not_allowed` is NOT retried (it's a settings issue,
+    // not a race), and unrecognized errors propagate.
+    const sleep = opts.sleep ?? defaultSleep;
+    const maxAttempts = opts.maxAttempts ?? 6;
+    let lastErr;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        try {
+            await enableAutoMergeViaGraphQL(opts);
+            return 'merged';
         }
-        throw err;
+        catch (err) {
+            if (isAutoMergeNotAllowedError(err)) {
+                return 'not_allowed';
+            }
+            if (!isUnstableStatusError(err)) {
+                throw err;
+            }
+            lastErr = err;
+            if (attempt < maxAttempts) {
+                // 5s × attempt: 5, 10, 15, 20, 25 seconds — total ~75s before giving up
+                await sleep(5000 * attempt);
+            }
+        }
     }
+    throw lastErr;
 }
+const defaultSleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 function isAutoMergeNotAllowedError(err) {
     if (!(err instanceof Error))
         return false;
@@ -75264,6 +75284,14 @@ function isAutoMergeNotAllowedError(err) {
     // repository". Match on the substring to remain resilient to small wording
     // changes (e.g. trailing punctuation).
     return /Auto merge is not allowed/i.test(err.message);
+}
+function isUnstableStatusError(err) {
+    if (!(err instanceof Error))
+        return false;
+    // GraphQL phrasing: "Pull request is in unstable status". This means
+    // GitHub hasn't yet computed the PR's mergeable_state after a recent
+    // commit / check-run completion. Transient — retries fix it.
+    return /Pull request is in unstable status/i.test(err.message);
 }
 /**
  * GraphQL mutation: enablePullRequestAutoMerge. Maps the REST mergeStrategy
@@ -75317,7 +75345,7 @@ async function dispatchWorkflow(opts) {
         inputs: opts.inputs,
     });
 }
-const defaultSleep = (ms) => new Promise((res) => setTimeout(res, ms));
+const workflow_dispatch_defaultSleep = (ms) => new Promise((res) => setTimeout(res, ms));
 /**
  * Poll for the latest workflow run on a specific branch and wait for it to
  * complete. The post-filter on headBranch is critical: the GitHub Actions
@@ -75325,7 +75353,7 @@ const defaultSleep = (ms) => new Promise((res) => setTimeout(res, ms));
  * recently force-rewritten refs (learning #7).
  */
 async function pollRunOnBranch(opts) {
-    const sleep = opts.sleep ?? defaultSleep;
+    const sleep = opts.sleep ?? workflow_dispatch_defaultSleep;
     const now = opts.now ?? Date.now;
     const start = now();
     let runId = null;

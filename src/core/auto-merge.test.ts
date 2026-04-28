@@ -89,6 +89,70 @@ describe('enableAutoMergeOrEnqueue > auto-merge disabled in repo settings', () =
   });
 });
 
+// "Pull request is in unstable status" is GitHub's eventually-consistent
+// state right after a check completes — the PR's mergeable_state hasn't
+// yet flipped to CLEAN. We retry with backoff so the run doesn't fail on
+// a transient timing issue.
+describe('enableAutoMergeOrEnqueue > unstable status retry', () => {
+  it('retries on "Pull request is in unstable status" and succeeds on a later attempt', async () => {
+    const { octokit, graphql } = fakeOctokit();
+    graphql
+      .mockRejectedValueOnce(
+        new Error('Request failed: Pull request is in unstable status'),
+      )
+      .mockRejectedValueOnce(
+        new Error('Request failed: Pull request is in unstable status'),
+      )
+      .mockResolvedValueOnce({});
+    const sleep = vi.fn().mockResolvedValue(undefined);
+
+    const result = await enableAutoMergeOrEnqueue({
+      octokit, owner: 'o', repo: 'r', prNumber: 1, prNodeId: 'id',
+      useQueue: false, mergeStrategy: 'squash', dryRun: false,
+      sleep,
+    });
+
+    expect(result).toBe('merged');
+    expect(graphql).toHaveBeenCalledTimes(3);
+    expect(sleep).toHaveBeenCalledTimes(2); // sleep BETWEEN retries, not after the final
+  });
+
+  it('throws after maxAttempts if unstable persists', async () => {
+    const { octokit, graphql } = fakeOctokit();
+    graphql.mockRejectedValue(
+      new Error('Request failed: Pull request is in unstable status'),
+    );
+    const sleep = vi.fn().mockResolvedValue(undefined);
+
+    await expect(
+      enableAutoMergeOrEnqueue({
+        octokit, owner: 'o', repo: 'r', prNumber: 1, prNodeId: 'id',
+        useQueue: false, mergeStrategy: 'squash', dryRun: false,
+        sleep, maxAttempts: 3,
+      }),
+    ).rejects.toThrow('Pull request is in unstable status');
+    expect(graphql).toHaveBeenCalledTimes(3);
+  });
+
+  it('does NOT retry on "not allowed" — returns immediately', async () => {
+    const { octokit, graphql } = fakeOctokit();
+    graphql.mockRejectedValueOnce(
+      new Error('Request failed: Auto merge is not allowed for this repository'),
+    );
+    const sleep = vi.fn().mockResolvedValue(undefined);
+
+    const result = await enableAutoMergeOrEnqueue({
+      octokit, owner: 'o', repo: 'r', prNumber: 1, prNodeId: 'id',
+      useQueue: false, mergeStrategy: 'squash', dryRun: false,
+      sleep,
+    });
+
+    expect(result).toBe('not_allowed');
+    expect(graphql).toHaveBeenCalledOnce();
+    expect(sleep).not.toHaveBeenCalled();
+  });
+});
+
 describe('enableAutoMergeOrEnqueue > merge queue routing', () => {
   it('uses enqueuePullRequest when useQueue=true', async () => {
     const { octokit, graphql } = fakeOctokit();
