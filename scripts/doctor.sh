@@ -6,7 +6,7 @@
 #   ./scripts/doctor.sh [owner/repo]
 # If owner/repo is omitted, uses 'gh repo view' on the current directory.
 #
-# Dependencies: git, gh, jq, yq.
+# Dependencies: git, gh, jq, python3 with PyYAML.
 
 set -uo pipefail
 
@@ -19,12 +19,16 @@ ok()    { printf '  \033[32m✓\033[0m %s\n' "$*"; }
 fail()  { printf '  \033[31m✗\033[0m %s\n' "$*"; fails=$((fails+1)); }
 warn()  { printf '  \033[33m!\033[0m %s\n' "$*"; warns=$((warns+1)); }
 
-for tool in git gh jq yq; do
+for tool in git gh jq python3; do
   command -v "$tool" >/dev/null 2>&1 || {
     echo "error: '$tool' is required but not installed." >&2
     exit 1
   }
 done
+python3 -c "import yaml" 2>/dev/null || {
+  echo "error: PyYAML is required. Install with: pip3 install --user pyyaml" >&2
+  exit 1
+}
 
 if [[ -z "$REPO" ]]; then
   if ! REPO="$(gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null)"; then
@@ -54,7 +58,15 @@ fi
 
 branches=()
 if [[ -n "$yml" ]]; then
-  if branch_list="$(yq -r '.flywheel.streams[].branches[].name' "$yml" 2>/dev/null)"; then
+  if branch_list="$(python3 - "$yml" <<'PYEOF' 2>/dev/null
+import sys, yaml
+with open(sys.argv[1]) as f:
+    data = yaml.safe_load(f)
+for s in data['flywheel']['streams']:
+    for b in s['branches']:
+        print(b['name'])
+PYEOF
+)"; then
     while IFS= read -r b; do [[ -n "$b" ]] && branches+=("$b"); done <<< "$branch_list"
     if [[ "${#branches[@]}" -eq 0 ]]; then
       fail ".flywheel.yml has no branches"
@@ -134,8 +146,9 @@ if rulesets_json="$(gh api "repos/$REPO/rulesets" 2>/dev/null)"; then
   if [[ -z "$branch_ruleset_ids" ]]; then
     fail "no branch rulesets defined — run scripts/apply-rulesets.sh $REPO"
   else
-    declare -a ruleset_includes=()
-    declare -A ruleset_has_pr=()
+    # Parallel arrays (bash 3.2 compatible — no associative arrays).
+    ruleset_includes=()
+    ruleset_has_pr=()
     while read -r rid; do
       [[ -z "$rid" ]] && continue
       detail="$(gh api "repos/$REPO/rulesets/$rid" 2>/dev/null || true)"
@@ -144,7 +157,7 @@ if rulesets_json="$(gh api "repos/$REPO/rulesets" 2>/dev/null)"; then
       while IFS= read -r inc; do
         [[ -z "$inc" ]] && continue
         ruleset_includes+=("$inc")
-        ruleset_has_pr["$inc"]="${has_pr:-0}"
+        ruleset_has_pr+=("${has_pr:-0}")
       done <<< "$includes"
     done <<< "$branch_ruleset_ids"
 
@@ -152,11 +165,14 @@ if rulesets_json="$(gh api "repos/$REPO/rulesets" 2>/dev/null)"; then
       ref="refs/heads/$b"
       matched=0
       pr_required=0
-      for inc in "${ruleset_includes[@]}"; do
+      i=0
+      while [[ $i -lt ${#ruleset_includes[@]} ]]; do
+        inc="${ruleset_includes[$i]}"
         if [[ "$inc" == "$ref" || "$inc" == "~ALL" ]]; then
           matched=1
-          [[ "${ruleset_has_pr[$inc]:-0}" -gt 0 ]] && pr_required=1
+          [[ "${ruleset_has_pr[$i]}" -gt 0 ]] && pr_required=1
         fi
+        i=$((i+1))
       done
       if [[ $matched -eq 0 ]]; then
         fail "no ruleset covers branch '$b' — run scripts/apply-rulesets.sh $REPO"

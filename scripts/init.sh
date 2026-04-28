@@ -16,7 +16,8 @@
 #   --skip-rulesets       do not offer to run apply-rulesets.sh
 #   --required-checks "Quality,Build"   passed through to apply-rulesets.sh
 #
-# Dependencies: git, gh. (apply-rulesets.sh additionally needs jq + yq.)
+# Dependencies: git, gh. (apply-rulesets.sh additionally needs jq + python3
+# with PyYAML.)
 
 set -euo pipefail
 

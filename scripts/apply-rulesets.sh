@@ -11,7 +11,8 @@
 # Usage:
 #   ./scripts/apply-rulesets.sh <owner/repo> [--required-checks "Quality,Build"] [--app-id 12345]
 #
-# Dependencies: gh, jq, yq.
+# Dependencies: gh, jq, python3 with PyYAML (preinstalled on macOS; yamllint
+# pulls it in too).
 
 set -euo pipefail
 
@@ -40,17 +41,21 @@ if [[ -z "$REPO" ]]; then
   exit 2
 fi
 
-for tool in gh jq yq; do
+for tool in gh jq python3; do
   command -v "$tool" >/dev/null 2>&1 || {
     echo "error: '$tool' is required but not installed." >&2
     case "$tool" in
       gh) echo "  install: https://cli.github.com/" >&2 ;;
       jq) echo "  install: brew install jq  /  apt-get install jq" >&2 ;;
-      yq) echo "  install: brew install yq  /  https://github.com/mikefarah/yq" >&2 ;;
+      python3) echo "  python3 ships with macOS 12.3+ and most Linux distros." >&2 ;;
     esac
     exit 1
   }
 done
+python3 -c "import yaml" 2>/dev/null || {
+  echo "error: PyYAML is required. Install with: pip3 install --user pyyaml" >&2
+  exit 1
+}
 
 if [[ ! -f .flywheel.yml ]]; then
   echo "error: .flywheel.yml not found in current directory" >&2
@@ -59,7 +64,13 @@ fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-branch_refs_json="$(yq -o=json '[.flywheel.streams[].branches[].name | "refs/heads/" + .]' .flywheel.yml)"
+branch_refs_json="$(python3 - <<'PYEOF'
+import json, yaml
+with open('.flywheel.yml') as f:
+    data = yaml.safe_load(f)
+print(json.dumps([f'refs/heads/{b["name"]}' for s in data['flywheel']['streams'] for b in s['branches']]))
+PYEOF
+)"
 branch_count="$(echo "$branch_refs_json" | jq 'length')"
 
 if [[ "$branch_count" -eq 0 ]]; then
