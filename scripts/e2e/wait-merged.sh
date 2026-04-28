@@ -19,11 +19,14 @@ set -euo pipefail
 deadline=$((SECONDS + TIMEOUT))
 
 while (( SECONDS < deadline )); do
+  # `gh pr view` exposes mergedAt/mergeCommit/state — there is no `.merged`
+  # boolean. PR is "merged" iff mergedAt is non-null; "closed without
+  # merging" iff state==CLOSED and mergedAt is null.
   row=$(gh pr view --repo "$REPO" "$PR" \
-          --json merged,state,mergeStateStatus,mergeable,mergeCommit)
-  merged=$(jq -r '.merged' <<<"$row")
+          --json state,mergedAt,mergeStateStatus,mergeable,mergeCommit)
+  merged_at=$(jq -r '.mergedAt' <<<"$row")
   state=$(jq -r '.state' <<<"$row")
-  if [[ "$merged" == "true" ]]; then
+  if [[ "$merged_at" != "null" && -n "$merged_at" ]]; then
     sha=$(jq -r '.mergeCommit.oid' <<<"$row")
     echo "merged at $sha"
     if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
