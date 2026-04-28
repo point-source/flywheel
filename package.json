@@ -10,6 +10,7 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run --passWithNoTests",
     "test:watch": "vitest",
+    "test:integration": "vitest run --config vitest.integration.config.ts --passWithNoTests",
     "verify-dist": "node scripts/build.mjs && git diff --exit-code -- dist/"
   },
   "dependencies": {
