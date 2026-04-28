@@ -1,54 +1,46 @@
 # Self-CI for swarmflow.
-# Lints the workflow YAML and shell scripts and runs the bats unit suite.
+# Runs on PRs against any branch and on push to rewrite/typescript or main.
+# Validates: lint, typecheck, unit tests, build, dist freshness.
 
 name: CI
 
 on:
   pull_request:
   push:
-    branches: [main]
+    branches:
+      - main
+      - rewrite/typescript
 
 permissions:
   contents: read
 
 jobs:
-  lint:
+  test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install actionlint
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - run: npm ci
+
+      - run: npm run lint
+
+      - run: npm run typecheck
+
+      - run: npm test
+
+      - run: npm run build
+
+      # Fails if dist/ is stale relative to src/. The pre-commit hook should
+      # have caught this, but --no-verify bypasses hooks — this is the
+      # backstop. Covers index.js, index.js.map, licenses.txt.
+      - name: Verify dist/ is fresh
         run: |
-          bash <(curl -sSL https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash)
-          mv ./actionlint /usr/local/bin/actionlint
-
-      - name: Run actionlint
-        run: actionlint -color
-
-      - name: Run shellcheck
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq shellcheck
-          shellcheck scripts/*.sh
-
-      - name: Validate example pipeline.yml
-        run: |
-          sudo snap install yq 2>/dev/null || sudo wget -qO /usr/local/bin/yq \
-            https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
-          sudo chmod +x /usr/local/bin/yq
-          yq -e '.pipeline.branches.develop' templates/pipeline.yml.example > /dev/null
-          yq -e '.pipeline.merge_strategy'   templates/pipeline.yml.example > /dev/null
-          yq -e '.pipeline.auto_merge_types' templates/pipeline.yml.example > /dev/null
-
-  bats:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install bats
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq bats jq
-
-      - name: Run bats suite
-        run: bats tests/bats/
+          if ! git diff --exit-code dist/; then
+            echo "::error::dist/ is stale — run 'npm run build' and commit the result"
+            exit 1
+          fi

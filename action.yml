@@ -1,0 +1,48 @@
+name: swarmflow
+description: Autonomous release pipeline operations dispatched via the `command` input
+author: point-source
+branding:
+  icon: git-merge
+  color: blue
+
+inputs:
+  command:
+    description: 'Operation to run: pr-lifecycle | promote | release | render-pr-body | hello-world'
+    required: true
+
+  # PR-lifecycle / render-pr-body inputs
+  pr_number:
+    description: PR number (for pr-lifecycle and render-pr-body)
+    required: false
+  source_branch:
+    description: PR source branch (head_ref) or push branch
+    required: false
+  target_branch:
+    description: PR target branch (base_ref) or push branch
+    required: false
+  dry_run:
+    description: Smoke/test mode — skip the actual merge call
+    required: false
+    default: 'false'
+
+  # Promote / release inputs
+  branch:
+    description: Branch being pushed (for promote/release)
+    required: false
+
+  # Quality outcome (for render-pr-body re-render after quality)
+  quality_conclusion:
+    description: 'success | failure | cancelled — passed by re-render step'
+    required: false
+
+  # GitHub App credentials
+  app_id:
+    description: GitHub App ID (numeric)
+    required: false
+  app_private_key:
+    description: GitHub App private key (PEM)
+    required: false
+
+runs:
+  using: node20
+  main: dist/index.js
