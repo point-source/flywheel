@@ -187,7 +187,12 @@ describe('runPrLifecycleWithOctokit > re-renders body after quality completes (l
     // Body MUST be re-rendered before the throw, so reviewers see the failure.
     expect(mock.pullsUpdate).toHaveBeenCalledTimes(2);
     expect(mock.pullsUpdate.mock.calls[1]![0].body).toContain('❌ failed');
-    expect(mock.graphql).not.toHaveBeenCalled(); // no auto-merge on failure
+    // Auto-merge IS enabled before quality runs (intentional: GitHub's
+    // required-check mechanism gates the actual merge, not our code).
+    // The PR sits with auto-merge pending the required check; if quality
+    // is configured as a required check via rulesets, it never fires.
+    expect(mock.graphql).toHaveBeenCalledOnce();
+    expect(mock.graphql.mock.calls[0]![0]).toMatch(/enablePullRequestAutoMerge/);
   });
 });
 

@@ -83,32 +83,19 @@ export async function runPrLifecycleWithOctokit(
   });
   await updatePr(octokit, owner, repo, inputs.prNumber, title, initialBody);
 
-  // Quality workflow: dispatch and wait if configured.
-  let finalQuality: QualityStatus = initialQuality;
-  if (qualityConfigured) {
-    finalQuality = await runQualityWorkflow({
-      octokit,
-      owner,
-      repo,
-      qualityWorkflow: config.pipeline.workflows.quality,
-      sourceBranch: inputs.sourceBranch,
-      prNumber: inputs.prNumber,
-    });
-    // Re-render body with the actual quality outcome (learning #5).
-    const finalBody = renderFeatureBody({
-      commits: parsed,
-      bump,
-      target: inputs.targetBranch,
-      quality: finalQuality,
-    });
-    await updatePr(octokit, owner, repo, inputs.prNumber, title, finalBody);
-
-    if (finalQuality === 'failed') {
-      throw new Error('quality workflow failed; merge gated');
-    }
-  }
-
-  // Auto-merge or post a comment to request human review.
+  // Auto-merge first, BEFORE dispatching quality. Two reasons:
+  //   1. enablePullRequestAutoMerge refuses with "Pull request is in
+  //      unstable status" when the PR has pending/in-progress checks. The
+  //      quality dispatch and our own pr-lifecycle check would put the PR
+  //      in that state, creating a chicken-and-egg deadlock.
+  //   2. GitHub's auto-merge natively waits for REQUIRED checks (including
+  //      quality, when configured as a required check via branch protection
+  //      per docs/RULESETS.md). We don't need to gate it ourselves.
+  //
+  // The quality dispatch + body re-render still happens below for adopter
+  // visibility (learning #5). If quality fails, we throw at the end so the
+  // run surfaces the failure; auto-merge stays enabled and waits for the
+  // required check, but never fires until quality is green on a future push.
   if (eligible) {
     const useQueue = await isMergeQueueEnabled({
       octokit,
@@ -131,10 +118,6 @@ export async function runPrLifecycleWithOctokit(
     });
     core.info(`auto-merge result: ${result}`);
 
-    // If the repo has `Allow auto-merge` disabled, fall back to a human-review
-    // comment so the run still succeeds and reviewers see a clear next-step.
-    // Spec §565 requires the toggle ON; this is a graceful degradation, not a
-    // workaround. The warning points adopters at the fix.
     if (result === 'not_allowed') {
       core.warning(
         'Auto-merge is disabled in this repository\'s settings. ' +
@@ -157,6 +140,33 @@ export async function runPrLifecycleWithOctokit(
       issue_number: inputs.prNumber,
       body: ':eyes: Ready for human review — change type requires approval before merge.',
     });
+  }
+
+  // Quality workflow: dispatch and wait, then re-render body with outcome.
+  // This is purely for PR-body visibility — auto-merge is already set up
+  // above and gated naturally by required-check rulesets.
+  let finalQuality: QualityStatus = initialQuality;
+  if (qualityConfigured) {
+    finalQuality = await runQualityWorkflow({
+      octokit,
+      owner,
+      repo,
+      qualityWorkflow: config.pipeline.workflows.quality,
+      sourceBranch: inputs.sourceBranch,
+      prNumber: inputs.prNumber,
+    });
+    // Re-render body with the actual quality outcome (learning #5).
+    const finalBody = renderFeatureBody({
+      commits: parsed,
+      bump,
+      target: inputs.targetBranch,
+      quality: finalQuality,
+    });
+    await updatePr(octokit, owner, repo, inputs.prNumber, title, finalBody);
+
+    if (finalQuality === 'failed') {
+      throw new Error('quality workflow failed; merge gated');
+    }
   }
 }
 
