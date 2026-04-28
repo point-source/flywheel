@@ -1,0 +1,19 @@
+name: Flywheel
+description: GitHub Actions-native CI/CD orchestration for teams and AI agent swarms.
+author: flywheel-ci
+branding:
+  icon: rotate-cw
+  color: blue
+inputs:
+  event:
+    description: "Event to handle: 'pull_request' or 'push'."
+    required: true
+  token:
+    description: "GitHub token (PAT or GitHub App installation token) with repo + PR write."
+    required: true
+outputs:
+  managed_branch:
+    description: "'true' when the pushed/targeted branch is in a stream in .flywheel.yml; 'false' otherwise."
+runs:
+  using: node24
+  main: dist/index.js

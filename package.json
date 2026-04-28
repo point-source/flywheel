@@ -1,0 +1,29 @@
+{
+  "name": "flywheel",
+  "version": "0.0.0",
+  "private": true,
+  "description": "GitHub Actions-native CI/CD orchestration layer for teams and AI agent swarms.",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --passWithNoTests",
+    "test:watch": "vitest",
+    "verify-dist": "node scripts/build.mjs && git diff --exit-code -- dist/"
+  },
+  "dependencies": {
+    "@actions/core": "^1.11.1",
+    "@actions/github": "^6.0.0",
+    "conventional-commits-parser": "^6.0.0",
+    "js-yaml": "^4.1.0"
+  },
+  "devDependencies": {
+    "@types/conventional-commits-parser": "^5.0.1",
+    "@types/js-yaml": "^4.0.9",
+    "@types/node": "^24.0.0",
+    "esbuild": "^0.25.0",
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0"
+  }
+}
