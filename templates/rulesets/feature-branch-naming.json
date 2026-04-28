@@ -1,0 +1,20 @@
+{
+  "name": "swarmflow / feature branch naming",
+  "target": "branch",
+  "enforcement": "active",
+  "conditions": {
+    "ref_name": {
+      "include": ["~ALL"],
+      "exclude": ["refs/heads/main", "refs/heads/staging", "refs/heads/develop"]
+    }
+  },
+  "bypass_actors": [],
+  "rules": [
+    {
+      "type": "creation",
+      "parameters": {
+        "name_pattern": "^(feat|fix|chore|refactor|perf|style|test|docs)/.+$"
+      }
+    }
+  ]
+}

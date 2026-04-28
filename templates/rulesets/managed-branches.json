@@ -1,0 +1,40 @@
+{
+  "name": "swarmflow / managed branches",
+  "target": "branch",
+  "enforcement": "active",
+  "conditions": {
+    "ref_name": {
+      "include": ["refs/heads/main", "refs/heads/staging", "refs/heads/develop"],
+      "exclude": []
+    }
+  },
+  "bypass_actors": [
+    { "actor_id": <APP_INSTALLATION_ACTOR_ID>, "actor_type": "Integration", "bypass_mode": "always" }
+  ],
+  "rules": [
+    { "type": "deletion" },
+    { "type": "non_fast_forward" },
+    { "type": "update" },
+    { "type": "required_linear_history" },
+    {
+      "type": "pull_request",
+      "parameters": {
+        "dismiss_stale_reviews_on_push": true,
+        "require_code_owner_review": false,
+        "require_last_push_approval": false,
+        "required_approving_review_count": 0,
+        "required_review_thread_resolution": true
+      }
+    },
+    {
+      "type": "required_status_checks",
+      "parameters": {
+        "strict_required_status_checks_policy": false,
+        "required_status_checks": [
+          { "context": "orchestrate / run" }
+        ]
+      }
+    },
+    { "type": "merge_queue" }
+  ]
+}
