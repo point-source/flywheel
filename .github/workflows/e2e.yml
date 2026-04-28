@@ -100,6 +100,9 @@ jobs:
       # --- Pin sandbox entrypoints to the swarmflow ref under test ------------
       - name: Pin entrypoints to swarmflow@${{ env.REF }}
         working-directory: sandbox
+        env:
+          SF_REPO: ${{ github.repository }}
+          SF_REF: ${{ env.REF }}
         run: |
           set -euo pipefail
           git checkout main
@@ -110,21 +113,16 @@ jobs:
           # only needs to bootstrap branches; its workflow content is moot.
           cp ../templates/on-pr.yml   .github/workflows/on-pr.yml
           cp ../templates/on-push.yml .github/workflows/on-push.yml
-          # Rewrite the orchestrator @ref to the swarmflow ref under test
-          # and normalize the owner to this workflow's repo so the sandbox
-          # loads orchestrator from us regardless of fork/rename.
+          # Rewrite the orchestrator @ref to the swarmflow ref under test.
           sed -i -E \
-            "s|[a-zA-Z][-a-zA-Z0-9]*/swarmflow/\.github/workflows/orchestrator\.yml@[^[:space:]]+|${{ github.repository }}/.github/workflows/orchestrator.yml@${REF}|" \
+            "s|[a-zA-Z][-a-zA-Z0-9]*/swarmflow/\.github/workflows/orchestrator\.yml@[^[:space:]]+|${SF_REPO}/.github/workflows/orchestrator.yml@${SF_REF}|" \
             .github/workflows/on-pr.yml .github/workflows/on-push.yml
-          # Reusable workflows can't introspect their own ref, so the
-          # entrypoint passes swarmflow_repo/swarmflow_ref through. Keep them
-          # aligned with the @ref above.
-          sed -i -E \
-            "s|swarmflow_repo:[[:space:]]*.*|swarmflow_repo: ${{ github.repository }}|" \
-            .github/workflows/on-pr.yml .github/workflows/on-push.yml
-          sed -i -E \
-            "s|swarmflow_ref:[[:space:]]*.*|swarmflow_ref: ${REF}|" \
-            .github/workflows/on-pr.yml .github/workflows/on-push.yml
+          # Inject swarmflow_repo / swarmflow_ref so reusable workflows side-load
+          # this exact ref. Adopter templates omit these (they use the @v1 default);
+          # see docs/adr/0001-typescript-rewrite.md for why the override exists.
+          for wf in .github/workflows/on-pr.yml .github/workflows/on-push.yml; do
+            yq -i '.jobs.orchestrate.with.swarmflow_repo = strenv(SF_REPO) | .jobs.orchestrate.with.swarmflow_ref = strenv(SF_REF)' "$wf"
+          done
           git add -A
           git commit -m "chore: pin swarmflow to ${REF} for ${RUN_NS}" || true
           git push origin main
@@ -134,149 +132,78 @@ jobs:
           # baseline content and the pipeline can't start.
           git push origin --force main:develop main:staging
 
-      # --- Fixture 1: fix → PR to develop → should auto-merge, then bump ----
-      # `fix` is the canonical auto-merge case per spec.md (feat is always
-      # human-gated). Auto-merge is exercised here; the human-gate path is
-      # covered by Fixture 2 below with feat!.
-      - name: 'Fixture: fix PR → develop'
-        id: fix
+      # --- Phase 1.5: architecture vertical slice (HARD GATE) ----------------
+      # During the rewrite, every command is the `hello-world` stub that just
+      # prints the swarmflow ref it was loaded from. Real per-command behavior
+      # (auto-merge, tag creation, etc.) is added in Phase 4 once the commands
+      # are implemented. The smoke fixture here just confirms the architecture:
+      # entrypoint @ref → orchestrator @ref → child workflow @ref → action @ref
+      # all line up with the SHA the e2e is testing.
+      - name: 'Smoke fixture: open a PR to develop'
+        id: smoke
         env:
           GH_TOKEN: ${{ steps.token.outputs.token }}
         working-directory: sandbox
         run: |
           set -euo pipefail
-          br="${RUN_NS}-fix"
+          br="${RUN_NS}-smoke"
           git checkout -b "$br" origin/develop
           printf '%s\n' "$RUN_NS" > "e2e-${RUN_NS}.txt"
           git add "e2e-${RUN_NS}.txt"
-          git commit -m "fix: e2e fixture ${RUN_NS}"
+          git commit -m "fix: e2e smoke ${RUN_NS}"
           git push origin "$br"
           url=$(gh pr create --repo "$SANDBOX" \
                   --base develop --head "$br" \
-                  --title "fix: e2e ${RUN_NS}" \
-                  --body "e2e fixture for run ${RUN_NS}")
-          num=$(basename "$url")
-          echo "pr=$num" >> "$GITHUB_OUTPUT"
-          echo "branch=$br" >> "$GITHUB_OUTPUT"
-
-      - name: Wait for pr-lifecycle on fix PR
-        uses: ./.github/actions/wait-run
-        with:
-          repo: ${{ env.SANDBOX }}
-          workflow: on-pr.yml
-          branch: ${{ steps.fix.outputs.branch }}
-          token: ${{ steps.token.outputs.token }}
-
-      - name: Assert fix PR auto-merged
-        env:
-          GH_TOKEN: ${{ steps.token.outputs.token }}
-        run: |
-          set -euo pipefail
-          state=$(gh pr view "${{ steps.fix.outputs.pr }}" --repo "$SANDBOX" \
-                    --json state,title --jq '.state')
-          [[ "$state" == "MERGED" ]] || {
-            echo "::error::expected fix PR MERGED, got $state"; exit 1;
-          }
-
-      - name: Wait for promote run on develop
-        uses: ./.github/actions/wait-run
-        with:
-          repo: ${{ env.SANDBOX }}
-          workflow: on-push.yml
-          branch: develop
-          token: ${{ steps.token.outputs.token }}
-
-      - name: Assert develop pre-release tag was created
-        env:
-          GH_TOKEN: ${{ steps.token.outputs.token }}
-        run: |
-          set -euo pipefail
-          # A patch bump with develop publishing enabled should have produced
-          # a v*-dev.N tag newer than the baseline.
-          tag=$(gh api "repos/${SANDBOX}/tags" --jq '.[0].name')
-          [[ "$tag" == *-dev.* ]] || {
-            echo "::error::expected dev pre-release tag, got $tag"; exit 1;
-          }
-
-      # --- Fixture 2: breaking change must NOT auto-merge --------------------
-      - name: 'Fixture: breaking PR → develop'
-        id: breaking
-        env:
-          GH_TOKEN: ${{ steps.token.outputs.token }}
-        working-directory: sandbox
-        run: |
-          set -euo pipefail
-          git fetch origin develop
-          br="${RUN_NS}-breaking"
-          git checkout -b "$br" origin/develop
-          printf 'breaking\n' >> "e2e-${RUN_NS}.txt"
-          git commit -am "feat!: breaking e2e ${RUN_NS}"
-          git push origin "$br"
-          url=$(gh pr create --repo "$SANDBOX" \
-                  --base develop --head "$br" \
-                  --title "feat!: e2e breaking ${RUN_NS}" \
-                  --body "breaking e2e fixture")
+                  --title "fix: e2e smoke ${RUN_NS}" \
+                  --body "vertical slice — exercises pr-lifecycle.yml stub")
           echo "pr=$(basename "$url")" >> "$GITHUB_OUTPUT"
           echo "branch=$br" >> "$GITHUB_OUTPUT"
 
-      - name: Wait for pr-lifecycle on breaking PR
+      - name: Wait for pr-lifecycle on smoke PR
+        id: smoke_run
         uses: ./.github/actions/wait-run
         with:
           repo: ${{ env.SANDBOX }}
           workflow: on-pr.yml
-          branch: ${{ steps.breaking.outputs.branch }}
+          branch: ${{ steps.smoke.outputs.branch }}
           token: ${{ steps.token.outputs.token }}
 
-      - name: Assert breaking PR stayed OPEN (human gate)
+      - name: Assert pr-lifecycle stub completed successfully
         env:
           GH_TOKEN: ${{ steps.token.outputs.token }}
         run: |
           set -euo pipefail
-          state=$(gh pr view "${{ steps.breaking.outputs.pr }}" --repo "$SANDBOX" \
-                    --json state --jq '.state')
-          [[ "$state" == "OPEN" ]] || {
-            echo "::error::breaking PR must stay OPEN, got $state"; exit 1;
+          [[ "${{ steps.smoke_run.outputs.conclusion }}" == "success" ]] || {
+            echo "::error::pr-lifecycle conclusion was '${{ steps.smoke_run.outputs.conclusion }}', expected success"
+            exit 1
           }
 
-      # --- Optional release path (only if sandbox has main: true) ------------
-      # Enable by setting vars.E2E_TEST_RELEASE=true on the sandbox.
-      - name: 'Fixture: release on main'
-        if: vars.E2E_TEST_RELEASE == 'true'
-        env:
-          GH_TOKEN: ${{ steps.token.outputs.token }}
-        working-directory: sandbox
-        run: |
-          set -euo pipefail
-          # Fast-forward main with a fix commit to trigger release.yml
-          git fetch origin main
-          git checkout -B main origin/main
-          printf 'release\n' >> "e2e-${RUN_NS}.txt"
-          git add "e2e-${RUN_NS}.txt"
-          git commit -m "fix: e2e release ${RUN_NS}"
-          git push origin main
-
-      - name: Wait for release run
-        if: vars.E2E_TEST_RELEASE == 'true'
-        uses: ./.github/actions/wait-run
-        with:
-          repo: ${{ env.SANDBOX }}
-          workflow: on-push.yml
-          branch: main
-          token: ${{ steps.token.outputs.token }}
-
-      - name: Assert release tag + GitHub Release exist
-        if: vars.E2E_TEST_RELEASE == 'true'
+      - name: Verify pin propagation by inspecting run logs
         env:
           GH_TOKEN: ${{ steps.token.outputs.token }}
         run: |
           set -euo pipefail
-          tag=$(gh api "repos/${SANDBOX}/tags" --jq '.[0].name')
-          [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
-            echo "::error::expected final semver tag, got $tag"; exit 1;
-          }
-          gh release view "$tag" --repo "$SANDBOX" > /dev/null || {
-            echo "::error::no GitHub Release for $tag"; exit 1;
-          }
+          # Find the pr-lifecycle run for our branch and download its logs.
+          run_id=$(gh run list --repo "$SANDBOX" \
+                     --workflow on-pr.yml \
+                     --branch "${{ steps.smoke.outputs.branch }}" \
+                     --limit 1 --json databaseId --jq '.[0].databaseId')
+          [[ -n "$run_id" ]] || { echo "::error::no run id"; exit 1; }
+          # The hello-world stub prints the action source it was loaded from.
+          # We expect: action source: ${SANDBOX_RUNNER_PATH}/.swarmflow (the
+          # local-path uses), which means GITHUB_ACTION_REPOSITORY is empty
+          # for local actions. Instead we confirm the side-load checkout step
+          # observed the right repo+ref by grepping the run log.
+          log=$(gh run view "$run_id" --repo "$SANDBOX" --log 2>&1 || true)
+          # The "Side-load swarmflow at the pinned ref" step's checkout input
+          # echo will show our repo and ref.
+          echo "$log" | grep -F "repository: ${{ github.repository }}" \
+            || { echo "::error::side-load checkout did not target ${{ github.repository }}"; exit 1; }
+          echo "$log" | grep -F "ref: ${REF}" \
+            || { echo "::error::side-load ref was not ${REF}"; exit 1; }
+          echo "$log" | grep -F "hello from swarmflow" \
+            || { echo "::error::action did not run (no hello-world output in logs)"; exit 1; }
+          echo "::notice::Pin propagation confirmed: ${{ github.repository }}@${REF}"
 
       # --- Teardown: unconditional ------------------------------------------
       - name: Teardown

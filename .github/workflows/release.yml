@@ -1,18 +1,11 @@
 # Release: fired on push to main.
-# 1. Compute the final release version (no pre-release suffix).
-# 2. Bail if there's no real version bump (chore-only push).
-# 3. Create an annotated git tag and push it.
-# 4. Create a GitHub Release with the changelog fragment as the body.
-# 5. Append the changelog fragment to CHANGELOG.md, commit, push.
-# 6. Trigger the adopter's build workflow with environment=production.
-#
-# Tag/release happen before the CHANGELOG commit so a transient push
-# failure leaves a recoverable "tag exists, CHANGELOG missing" state
-# rather than the inverse. The bot's CHANGELOG push fires another
-# on-push run, but the entrypoint's concurrency group serializes it
-# and `has_changes=false` makes that follow-up a clean no-op.
+# Computes the final release version, creates an annotated tag and GitHub
+# Release, updates CHANGELOG.md, and triggers the production build.
 #
 # Reusable. Called by orchestrator.yml.
+#
+# Phase 1.5: dispatches `command: hello-world` to validate the architecture.
+# Phase 2e will swap to `command: release`.
 
 name: pipeline / release
 
@@ -41,101 +34,22 @@ jobs:
   release:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout caller
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      # Side-load swarmflow at the same ref the caller pinned so
-      # `./.swarmflow/...` composite paths resolve. See pr-lifecycle.yml
-      # for why this can't be derived from github.workflow_ref.
-      - uses: actions/checkout@v4
+      - name: Side-load swarmflow at the pinned ref
+        uses: actions/checkout@v4
         with:
           repository: ${{ inputs.swarmflow_repo }}
           ref: ${{ inputs.swarmflow_ref }}
           path: .swarmflow
 
-      - id: token
-        uses: ./.swarmflow/.github/actions/app-token
+      - name: Run release command
+        uses: ./.swarmflow
         with:
-          app_id: ${{ secrets.APP_ID }}
-          private_key: ${{ secrets.APP_PRIVATE_KEY }}
-
-      - id: cfg
-        uses: ./.swarmflow/.github/actions/load-config
-
-      - id: version
-        uses: ./.swarmflow/.github/actions/compute-version
-        with:
+          command: hello-world
           branch: main
-          initial_version: ${{ steps.cfg.outputs.initial_version }}
-
-      - name: Skip if no real changes
-        if: steps.version.outputs.has_changes != 'true'
-        run: |
-          echo "::notice::No version-bumping commits since last release; skipping."
-          exit 0
-
-      - name: Configure git for App bot
-        if: steps.version.outputs.has_changes == 'true'
-        env:
-          GH_TOKEN: ${{ steps.token.outputs.token }}
-        run: |
-          # Use the App's bot identity. The user-id format follows the convention
-          # used by GitHub-issued bot identities; the slug is best-effort.
-          app_slug=$(gh api /app --jq .slug 2>/dev/null || echo swarmflow-bot)
-          git config user.name  "${app_slug}[bot]"
-          git config user.email "${app_slug}[bot]@users.noreply.github.com"
-          git remote set-url origin \
-            "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
-
-      - name: Tag and release
-        if: steps.version.outputs.has_changes == 'true'
-        env:
-          GH_TOKEN: ${{ steps.token.outputs.token }}
-          VERSION: ${{ steps.version.outputs.version }}
-          CL: ${{ steps.version.outputs.changelog_path }}
-        run: |
-          set -euo pipefail
-          tag="v${VERSION}"
-          git tag -a "$tag" -m "Release ${tag}"
-          git push origin "$tag"
-          gh release create "$tag" --title "$tag" --notes-file "$CL"
-
-      - name: Update CHANGELOG.md
-        if: steps.version.outputs.has_changes == 'true'
-        env:
-          VERSION: ${{ steps.version.outputs.version }}
-          CL: ${{ steps.version.outputs.changelog_path }}
-        run: |
-          set -euo pipefail
-          if [[ ! -f CHANGELOG.md ]]; then
-            printf '# Changelog\n\n' > CHANGELOG.md
-          fi
-          tmp=$(mktemp)
-          {
-            head -n 2 CHANGELOG.md
-            cat "$CL"
-            tail -n +3 CHANGELOG.md
-          } > "$tmp"
-          mv "$tmp" CHANGELOG.md
-          git add CHANGELOG.md
-          git commit -m "chore(release): v${VERSION}" || {
-            echo "::warning::Nothing to commit in CHANGELOG.md"
-          }
-          git push origin HEAD:main
-
-      - name: Trigger production build
-        if: steps.version.outputs.has_changes == 'true'
-        env:
-          GH_TOKEN: ${{ steps.token.outputs.token }}
-          BUILD_WF: ${{ steps.cfg.outputs.workflows_build }}
-          VERSION: ${{ steps.version.outputs.version }}
-          CL: ${{ steps.version.outputs.changelog_path }}
-        run: |
-          set -euo pipefail
-          gh workflow run "$BUILD_WF" --ref main \
-            -f version="$VERSION" \
-            -f environment=production \
-            -f changelog="$(head -c 60000 "$CL")" \
-            -f artifact_path="dist/"
-          echo "::notice::Dispatched $BUILD_WF for v${VERSION} (production)"
+          app_id: ${{ secrets.APP_ID }}
+          app_private_key: ${{ secrets.APP_PRIVATE_KEY }}

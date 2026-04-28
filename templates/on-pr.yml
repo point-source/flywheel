@@ -1,7 +1,5 @@
 # Entrypoint: pull request events on managed branches.
 # This file is identical across all adopting repos. Copy it as-is.
-# All pipeline logic lives in the orchestrator — nothing here changes
-# per-project. Per-project config belongs in .pipeline.yml.
 
 name: Pipeline — PR
 
@@ -17,10 +15,10 @@ on:
       - reopened
       - ready_for_review
 
-# Permissions granted to the called orchestrator chain. GitHub validates
-# every workflow_call target at load time — even ones gated by `if:` that
-# never run for this event — so the caller must cover the union of all
-# pipeline workflows: pr-lifecycle, promote, and release.
+# GitHub validates every workflow_call target eagerly at load time, so the
+# caller must grant the union of permissions across all branches' chains
+# (pr-lifecycle, promote, release). Removing any of these will cause a
+# startup_failure.
 permissions:
   actions: write
   checks: write
@@ -28,15 +26,12 @@ permissions:
   pull-requests: write
 
 # Cancel any in-progress run for the same PR when a new commit arrives.
-# This prevents stale quality checks from blocking an updated PR.
 concurrency:
   group: pipeline-pr-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
 jobs:
   orchestrate:
-    # Skip draft PRs — agents should mark PRs ready when they want pipeline
-    # feedback. Avoids wasting CI minutes on work-in-progress.
     if: github.event.pull_request.draft == false
     uses: point-source/swarmflow/.github/workflows/orchestrator.yml@v1
     with:
@@ -49,10 +44,6 @@ jobs:
       source_branch: ${{ github.head_ref }}
       target_branch: ${{ github.base_ref }}
       pr_number: ${{ github.event.pull_request.number }}
-      # Keep these in sync with the @v1 above. The reusable workflows need to
-      # side-load swarmflow's composites and can't introspect their own ref.
-      swarmflow_repo: point-source/swarmflow
-      swarmflow_ref: v1
     secrets:
       APP_ID: ${{ secrets.APP_ID }}
       APP_PRIVATE_KEY: ${{ secrets.APP_PRIVATE_KEY }}

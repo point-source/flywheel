@@ -1,11 +1,11 @@
 # Promotion: fired on push to develop or staging.
-# 1. Compute the next pre-release version for this branch.
-# 2. Optionally trigger build + publish for the branch's environment.
-# 3. Determine the next active branch in the chain (develop->staging->main,
-#    skipping disabled).
-# 4. Upsert a promotion PR from this branch to the next.
+# Computes the next pre-release version, optionally triggers build/publish,
+# and upserts a promotion PR to the next active branch in the chain.
 #
-# Reusable. Called by orchestrator.yml.
+# Reusable. Called by orchestrator.yml; do not call directly.
+#
+# Phase 1.5: dispatches `command: hello-world` to validate the architecture.
+# Phase 2d will swap to `command: promote`.
 
 name: pipeline / promote
 
@@ -38,130 +38,23 @@ jobs:
   promote:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout caller
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      # Side-load swarmflow at the same ref the caller pinned so
-      # `./.swarmflow/...` composite paths resolve. See pr-lifecycle.yml
-      # for why this can't be derived from github.workflow_ref.
-      - uses: actions/checkout@v4
+      - name: Side-load swarmflow at the pinned ref
+        uses: actions/checkout@v4
         with:
           repository: ${{ inputs.swarmflow_repo }}
           ref: ${{ inputs.swarmflow_ref }}
           path: .swarmflow
 
-      - id: token
-        uses: ./.swarmflow/.github/actions/app-token
+      - name: Run promote command
+        uses: ./.swarmflow
         with:
-          app_id: ${{ secrets.APP_ID }}
-          private_key: ${{ secrets.APP_PRIVATE_KEY }}
-
-      - id: cfg
-        uses: ./.swarmflow/.github/actions/load-config
-
-      - id: version
-        uses: ./.swarmflow/.github/actions/compute-version
-        with:
+          command: hello-world
+          source_branch: ${{ inputs.source_branch }}
           branch: ${{ inputs.source_branch }}
-          initial_version: ${{ steps.cfg.outputs.initial_version }}
-
-      # Build + publish for this environment if the adopter opted in.
-      # Per spec.md:438-440, chore-only pushes still publish if publish_on_*
-      # is true; the difference is that no new version tag is created.
-      # compute-version emits a -dev.N/-rc.N version regardless of bump.
-      - name: Decide whether to publish on this branch
-        id: publish_decision
-        env:
-          BRANCH: ${{ inputs.source_branch }}
-          DEV: ${{ steps.cfg.outputs.publish_on_develop }}
-          STG: ${{ steps.cfg.outputs.publish_on_staging }}
-        run: |
-          set -euo pipefail
-          publish=false
-          case "$BRANCH" in
-            develop) [[ "$DEV" == "true" ]] && publish=true ;;
-            staging) [[ "$STG" == "true" ]] && publish=true ;;
-          esac
-          echo "publish=$publish" >> "$GITHUB_OUTPUT"
-          echo "environment=$BRANCH" >> "$GITHUB_OUTPUT"
-
-      - name: Trigger build
-        if: steps.publish_decision.outputs.publish == 'true'
-        env:
-          GH_TOKEN: ${{ steps.token.outputs.token }}
-          BUILD_WF: ${{ steps.cfg.outputs.workflows_build }}
-          PUBLISH_WF: ${{ steps.cfg.outputs.workflows_publish }}
-          VERSION: ${{ steps.version.outputs.version }}
-          ENVIRONMENT: ${{ steps.publish_decision.outputs.environment }}
-          CHANGELOG: ${{ steps.version.outputs.changelog_path }}
-          BRANCH: ${{ inputs.source_branch }}
-        run: |
-          set -euo pipefail
-          # Read changelog into a single-line-friendly form for workflow_dispatch.
-          # The build workflow can re-fetch the artifact later if it needs the
-          # raw markdown; we pass only what fits in workflow_dispatch inputs.
-          gh workflow run "$BUILD_WF" --ref "$BRANCH" \
-            -f version="$VERSION" \
-            -f environment="$ENVIRONMENT" \
-            -f changelog="$(head -c 60000 "$CHANGELOG")" \
-            -f artifact_path="dist/"
-          # The build workflow is expected to chain into the publish workflow
-          # itself on success — we do NOT poll for completion here, to keep the
-          # promote job short. Adopters who want different sequencing can wire
-          # their own dependency.
-          echo "::notice::Dispatched $BUILD_WF for $VERSION (environment=$ENVIRONMENT)"
-
-      # Determine the next active branch in the promotion chain.
-      - id: next
-        env:
-          BRANCH: ${{ inputs.source_branch }}
-          STG_ON: ${{ steps.cfg.outputs.branches_staging }}
-          MAIN_ON: ${{ steps.cfg.outputs.branches_main }}
-        run: |
-          set -euo pipefail
-          next=""
-          case "$BRANCH" in
-            develop)
-              if [[ "$STG_ON" == "true" ]]; then
-                next="staging"
-              elif [[ "$MAIN_ON" == "true" ]]; then
-                next="main"
-              fi
-              ;;
-            staging)
-              [[ "$MAIN_ON" == "true" ]] && next="main"
-              ;;
-          esac
-          echo "branch=$next" >> "$GITHUB_OUTPUT"
-
-      # Parse the cumulative set of commits pending promotion (everything on
-      # source that isn't yet on next). This drives the promotion PR body.
-      - name: Parse pending commits
-        if: steps.next.outputs.branch != ''
-        id: pending
-        uses: ./.swarmflow/.github/actions/parse-commits
-        with:
-          range: origin/${{ steps.next.outputs.branch }}..origin/${{ inputs.source_branch }}
-
-      - name: Render promotion PR body
-        if: steps.next.outputs.branch != ''
-        id: render
-        uses: ./.swarmflow/.github/actions/render-pr-body
-        with:
-          commits_json_path: ${{ steps.pending.outputs.commits_json_path }}
-          bump: ${{ steps.pending.outputs.bump }}
-          target: ${{ steps.next.outputs.branch }}
-          mode: promotion
-          version: ${{ steps.version.outputs.version }}
-
-      - name: Upsert promotion PR
-        if: steps.next.outputs.branch != ''
-        uses: ./.swarmflow/.github/actions/upsert-pr
-        env:
-          GH_TOKEN: ${{ steps.token.outputs.token }}
-        with:
-          head: ${{ inputs.source_branch }}
-          base: ${{ steps.next.outputs.branch }}
-          title: "chore(release): promote ${{ inputs.source_branch }} → ${{ steps.next.outputs.branch }} [v${{ steps.version.outputs.version }}]"
-          body_path: ${{ steps.render.outputs.body_path }}
+          app_id: ${{ secrets.APP_ID }}
+          app_private_key: ${{ secrets.APP_PRIVATE_KEY }}

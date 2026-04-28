@@ -1,6 +1,9 @@
-# Orchestrator: top-level dispatcher.
+# Orchestrator: top-level dispatcher for the swarmflow pipeline.
 # Adopting repos call this from on-pr.yml and on-push.yml. Routes to
 # pr-lifecycle / promote / release based on event_type and target_branch.
+#
+# Reusable. Called from adopter entrypoints via:
+#   uses: point-source/swarmflow/.github/workflows/orchestrator.yml@v1
 
 name: pipeline / orchestrator
 
@@ -26,12 +29,11 @@ on:
         type: boolean
         required: false
         default: false
-      # Pass-through to the called workflows so they can side-load swarmflow's
-      # composite actions. `github.workflow_ref` always points at the entry
-      # workflow (the adopter's on-pr/on-push), not at the reusable workflow
-      # that's currently executing — so we can't introspect this and instead
-      # take it as input. Defaults match the canonical install; adopters
-      # who fork must override these to match their `@<ref>` pin.
+      # `swarmflow_repo` and `swarmflow_ref` are passed through to the called
+      # reusable workflows so they can side-load swarmflow's bundled action at
+      # the matching ref. `uses:` cannot take expressions, so this is the only
+      # way for our own e2e to test a non-`v1` SHA. Adopters should never need
+      # to override these. See docs/adr/0001-typescript-rewrite.md.
       swarmflow_repo:
         type: string
         required: false

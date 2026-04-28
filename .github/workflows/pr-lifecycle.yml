@@ -2,6 +2,9 @@
 # and (if eligible) auto-merge or enqueue.
 #
 # Reusable. Called by orchestrator.yml; do not call directly.
+#
+# Phase 1.5: dispatches `command: hello-world` to validate the architecture.
+# Phase 2c will swap to `command: pr-lifecycle`.
 
 name: pipeline / pr-lifecycle
 
@@ -18,7 +21,6 @@ on:
         type: string
         required: true
       dry_run:
-        description: Smoke/test mode — skip the actual merge call
         type: boolean
         required: false
         default: false
@@ -45,157 +47,25 @@ jobs:
   lifecycle:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout caller
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      # When this workflow is called from another repo, `./.github/actions/X`
-      # references resolve against the caller's checkout — which doesn't
-      # contain swarmflow's composites. Side-load swarmflow at the same ref
-      # the caller pinned so `./.swarmflow/...` paths consistently work below.
-      # We can't introspect this from `github.workflow_ref` (always the entry
-      # workflow) so the entrypoint passes it through as an input.
-      - uses: actions/checkout@v4
+      - name: Side-load swarmflow at the pinned ref
+        uses: actions/checkout@v4
         with:
           repository: ${{ inputs.swarmflow_repo }}
           ref: ${{ inputs.swarmflow_ref }}
           path: .swarmflow
 
-      - id: token
-        uses: ./.swarmflow/.github/actions/app-token
+      - name: Run pr-lifecycle command
+        uses: ./.swarmflow
         with:
-          app_id: ${{ secrets.APP_ID }}
-          private_key: ${{ secrets.APP_PRIVATE_KEY }}
-
-      - id: cfg
-        uses: ./.swarmflow/.github/actions/load-config
-
-      # Conventional-commit format is the gating contract — fail early so the
-      # required check turns red and merge is blocked at the ruleset level.
-      - id: parse
-        uses: ./.swarmflow/.github/actions/parse-commits
-        with:
-          range: origin/${{ inputs.target_branch }}..HEAD
-          reject_invalid: 'true'
-
-      # Decide auto-merge eligibility BEFORE writing the PR body so the body
-      # reflects the decision.
-      - id: eligibility
-        shell: bash
-        env:
-          COMMITS: ${{ steps.parse.outputs.commits_json_path }}
-          ALLOWED: ${{ steps.cfg.outputs.auto_merge_types_json }}
-        run: |
-          set -euo pipefail
-          # Eligible iff every commit is in the allowlist AND no breaking change.
-          breaking=$(jq 'any(.[]; .breaking == true)' "$COMMITS")
-          types=$(jq -c '[.[] | .type] | unique' "$COMMITS")
-          all_allowed=$(jq -n --argjson t "$types" --argjson a "$ALLOWED" \
-            '($t | all(. as $x | $a | index($x) != null))')
-          if [[ "$breaking" == "true" || "$all_allowed" != "true" ]]; then
-            echo "eligible=false" >> "$GITHUB_OUTPUT"
-            echo "reason=human-review" >> "$GITHUB_OUTPUT"
-          else
-            echo "eligible=true" >> "$GITHUB_OUTPUT"
-            echo "reason=auto-merge" >> "$GITHUB_OUTPUT"
-          fi
-
-      - id: render
-        uses: ./.swarmflow/.github/actions/render-pr-body
-        with:
-          commits_json_path: ${{ steps.parse.outputs.commits_json_path }}
-          bump: ${{ steps.parse.outputs.bump }}
-          target: ${{ inputs.target_branch }}
-          mode: feature
-          # Show "pending" only when a quality workflow is actually configured;
-          # otherwise omit the line so the body doesn't claim a check is in
-          # flight that will never run.
-          checks: ${{ steps.cfg.outputs.workflows_quality != '' && 'pending' || '' }}
-
-      - name: Update PR title and body
-        env:
-          GH_TOKEN: ${{ steps.token.outputs.token }}
-          PR: ${{ inputs.pr_number }}
-          TITLE: ${{ steps.render.outputs.title }}
-          BODY: ${{ steps.render.outputs.body_path }}
-        run: |
-          gh pr edit "$PR" --title "$TITLE" --body-file "$BODY"
-
-      # Quality gate: dispatch the adopter's quality workflow if configured.
-      # We invoke via workflow_dispatch + wait, rather than workflow_call,
-      # because the adopter's workflow file path is dynamic per repo.
-      - name: Dispatch quality workflow
-        if: steps.cfg.outputs.workflows_quality != ''
-        env:
-          GH_TOKEN: ${{ steps.token.outputs.token }}
-          QWF: ${{ steps.cfg.outputs.workflows_quality }}
-          PR: ${{ inputs.pr_number }}
-          SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-        run: |
-          gh workflow run "$QWF" --ref "${{ inputs.source_branch }}" \
-            -f pr_number="$PR" -f sha="$SHA"
-
-      - name: Wait for quality workflow
-        id: quality
-        if: steps.cfg.outputs.workflows_quality != ''
-        uses: ./.swarmflow/.github/actions/wait-run
-        with:
-          repo: ${{ github.repository }}
-          workflow: ${{ steps.cfg.outputs.workflows_quality }}
-          branch: ${{ inputs.source_branch }}
-          token: ${{ steps.token.outputs.token }}
-          timeout: '300'
-
-      # Re-render the PR body with the actual quality outcome so reviewers
-      # don't see "pending" indefinitely. Runs even on quality failure (so
-      # ❌ failed lands on the body before the job exits).
-      - name: Re-render PR body with quality outcome
-        if: always() && (steps.quality.conclusion == 'success' || steps.quality.conclusion == 'failure')
-        id: render_final
-        uses: ./.swarmflow/.github/actions/render-pr-body
-        with:
-          commits_json_path: ${{ steps.parse.outputs.commits_json_path }}
-          bump: ${{ steps.parse.outputs.bump }}
-          target: ${{ inputs.target_branch }}
-          mode: feature
-          checks: ${{ steps.quality.conclusion == 'success' && '✅ passed' || '❌ failed' }}
-
-      - name: Update PR body with quality outcome
-        if: always() && (steps.quality.conclusion == 'success' || steps.quality.conclusion == 'failure')
-        env:
-          GH_TOKEN: ${{ steps.token.outputs.token }}
-          PR: ${{ inputs.pr_number }}
-          TITLE: ${{ steps.render_final.outputs.title }}
-          BODY: ${{ steps.render_final.outputs.body_path }}
-        run: |
-          gh pr edit "$PR" --title "$TITLE" --body-file "$BODY"
-
-      - name: Auto-merge
-        if: steps.eligibility.outputs.eligible == 'true'
-        id: queue_check
-        uses: ./.swarmflow/.github/actions/detect-merge-queue
-        env:
-          GH_TOKEN: ${{ steps.token.outputs.token }}
-        with:
-          branch: ${{ inputs.target_branch }}
-          override: ${{ steps.cfg.outputs.merge_queue }}
-
-      - name: Merge or enqueue
-        if: steps.eligibility.outputs.eligible == 'true'
-        uses: ./.swarmflow/.github/actions/auto-merge
-        env:
-          GH_TOKEN: ${{ steps.token.outputs.token }}
-        with:
+          command: hello-world
           pr_number: ${{ inputs.pr_number }}
-          use_queue: ${{ steps.queue_check.outputs.enabled }}
-          merge_strategy: ${{ steps.cfg.outputs.merge_strategy }}
+          source_branch: ${{ inputs.source_branch }}
+          target_branch: ${{ inputs.target_branch }}
           dry_run: ${{ inputs.dry_run }}
-
-      - name: Mark ready for review
-        if: steps.eligibility.outputs.eligible != 'true'
-        env:
-          GH_TOKEN: ${{ steps.token.outputs.token }}
-          PR: ${{ inputs.pr_number }}
-        run: |
-          gh pr comment "$PR" --body \
-            ":eyes: Ready for human review — change type requires approval before merge."
+          app_id: ${{ secrets.APP_ID }}
+          app_private_key: ${{ secrets.APP_PRIVATE_KEY }}

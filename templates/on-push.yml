@@ -1,10 +1,6 @@
 # Entrypoint: push events to managed branches.
 # Fires after a PR is merged (the merge commit lands on the branch).
 # This file is identical across all adopting repos. Copy it as-is.
-#
-# Note: this WILL fire for pushes by the GitHub App bot (which uses an
-# installation token, not GITHUB_TOKEN), enabling the promotion and
-# release chain to continue automatically.
 
 name: Pipeline — Push
 
@@ -15,19 +11,18 @@ on:
       - staging
       - develop
 
-# Permissions granted to the called orchestrator chain. GitHub validates
-# every workflow_call target at load time — even ones gated by `if:` that
-# never run for this event — so the caller must cover the union of all
-# pipeline workflows: pr-lifecycle, promote, and release.
+# GitHub validates every workflow_call target eagerly at load time, so the
+# caller must grant the union of permissions across all branches' chains
+# (pr-lifecycle, promote, release). Removing any of these will cause a
+# startup_failure.
 permissions:
   actions: write
   checks: write
   contents: write
   pull-requests: write
 
-# One promotion/release run per branch at a time. A second push (e.g. two
-# PRs merging in quick succession) queues rather than cancels — we don't
-# want to drop a release trigger.
+# One promotion/release run per branch at a time. Don't cancel — losing a
+# release trigger is worse than queueing a few seconds.
 concurrency:
   group: pipeline-push-${{ github.ref_name }}
   cancel-in-progress: false
@@ -39,10 +34,6 @@ jobs:
       event_type: push
       source_branch: ${{ github.ref_name }}
       target_branch: ${{ github.ref_name }}
-      # Keep these in sync with the @v1 above. The reusable workflows need to
-      # side-load swarmflow's composites and can't introspect their own ref.
-      swarmflow_repo: point-source/swarmflow
-      swarmflow_ref: v1
     secrets:
       APP_ID: ${{ secrets.APP_ID }}
       APP_PRIVATE_KEY: ${{ secrets.APP_PRIVATE_KEY }}
