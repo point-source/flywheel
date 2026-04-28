@@ -17,6 +17,8 @@ export interface Commit {
   message: string;
   title: string;
   body: string;
+  /** ISO 8601 commit date as reported by GitHub (committer.date). */
+  committerDate: string;
 }
 
 export interface PRSummary {
@@ -148,7 +150,13 @@ export function createGitHubClient(token: string, repoFullName?: string): GitHub
       return all.map((c) => {
         const message = c.commit.message;
         const { title, body } = splitMessage(message);
-        return { sha: c.sha, message, title, body };
+        return {
+          sha: c.sha,
+          message,
+          title,
+          body,
+          committerDate: c.commit.committer?.date ?? c.commit.author?.date ?? new Date(0).toISOString(),
+        };
       });
     },
 
@@ -162,7 +170,13 @@ export function createGitHubClient(token: string, repoFullName?: string): GitHub
       return all.data.map((c) => {
         const message = c.commit.message;
         const { title, body } = splitMessage(message);
-        return { sha: c.sha, message, title, body };
+        return {
+          sha: c.sha,
+          message,
+          title,
+          body,
+          committerDate: c.commit.committer?.date ?? c.commit.author?.date ?? new Date(0).toISOString(),
+        };
       });
     },
 

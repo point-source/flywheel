@@ -125,11 +125,17 @@ export function createFakeGh(init: FakeGhInit = {}): FakeGh {
   return fake;
 }
 
-export function makeCommit(sha: string, message: string): Commit {
+export function makeCommit(sha: string, message: string, committerDate?: string): Commit {
   const idx = message.indexOf("\n");
   const title = idx === -1 ? message : message.slice(0, idx);
   const body = idx === -1 ? "" : message.slice(idx + 1).replace(/^\n+/, "");
-  return { sha, message, title, body };
+  return {
+    sha,
+    message,
+    title,
+    body,
+    committerDate: committerDate ?? new Date(0).toISOString(),
+  };
 }
 
 export function silentLogger() {

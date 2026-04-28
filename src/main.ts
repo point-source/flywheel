@@ -8,6 +8,7 @@ import { loadConfig } from "./config.js";
 import { createGitHubClient, type PullRequest } from "./github.js";
 import { runPrFlow } from "./pr-flow.js";
 import { runPushFlow } from "./push-flow.js";
+import { runPromotion } from "./promotion.js";
 
 const CONFIG_FILE = ".flywheel.yml";
 
@@ -69,6 +70,14 @@ async function run(): Promise<void> {
       log: { info: (msg) => core.info(msg) },
     });
     core.setOutput("managed_branch", outcome.kind === "release" ? "true" : "false");
+
+    // Promotion PR upsert is independent of the release flow per spec §Event chain.
+    await runPromotion({
+      branchRef,
+      config,
+      gh,
+      log,
+    });
     return;
   }
 
