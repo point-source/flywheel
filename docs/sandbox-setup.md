@@ -38,17 +38,35 @@ never against `flywheel` itself or any production target.
      (squash-only), require a passing PR before merging.
    - Allow auto-merge in repo settings (Settings → General → Pull Requests).
 
-5. **Mint a fine-grained Personal Access Token** scoped only to
-   `point-source/flywheel-sandbox`:
-   - **Contents**: read and write
-   - **Pull requests**: read and write
-   - **Issues**: read and write (for labels)
-   - **Workflows**: write (for Layer 3 only)
-   - **Metadata**: read (always required)
+5. **Use the `flywheel-build-e2e` GitHub App for auth.** A single App
+   mints short-lived installation tokens; no human-owned PATs to rotate.
+   - The App lives under the `point-source` org.
+   - Required permissions on the App:
+     - **Repository → Contents**: read and write
+     - **Repository → Pull requests**: read and write
+     - **Repository → Issues**: read and write (for labels)
+     - **Repository → Workflows**: write (Layer 3 only)
+     - **Repository → Metadata**: read (always required)
+   - **Install** the App on `point-source/flywheel-sandbox` (and only that
+     repo — don't grant org-wide access).
 
-6. **Store the PAT** as the `SANDBOX_GH_PAT` repository secret on the
-   `flywheel` repo (Settings → Secrets and variables → Actions → New repository
-   secret). Rotate every 90 days; document the rotation date in this file.
+6. **Store the App credentials as repo secrets** on `point-source/flywheel`
+   (Settings → Secrets and variables → Actions):
+   - `E2E_APP_ID` — the `flywheel-build-e2e` App ID (numeric).
+   - `E2E_APP_PRIVATE_KEY` — the App's private key, PEM format including
+     the `BEGIN/END` lines.
+
+   The `Integration tests` workflow (`.github/workflows/integration.yml`)
+   uses [`actions/create-github-app-token`](https://github.com/actions/create-github-app-token)
+   to mint a token at job start, scoped to `flywheel-sandbox` only, and
+   exports it as `SANDBOX_GH_TOKEN` for the test step.
+
+   Rotate the App's private key per your org's policy. Token rotation is
+   automatic — each CI run mints a fresh installation token.
+
+   For local runs, set `SANDBOX_GH_TOKEN` in your shell to either an App
+   installation token (use `gh` to mint one) or a fine-grained PAT with
+   the same scopes; the test code is auth-method-agnostic.
 
 ## Daily operating contract
 
@@ -57,7 +75,7 @@ never against `flywheel` itself or any production target.
   deletes the branch.
 - The long-lived branches above are immutable from the test perspective —
   tests target them but never push directly to them.
-- If the sandbox accumulates leftover branches (test crash, PAT expiry,
+- If the sandbox accumulates leftover branches (test crash, token expiry,
   cancelled CI run), prune with:
 
   ```bash
@@ -70,4 +88,4 @@ never against `flywheel` itself or any production target.
 
 Don't. One sandbox repo is enough — test isolation is enforced via per-test
 branch naming, not per-test repos. Adding more sandboxes splits state and
-multiplies PAT-rotation overhead.
+multiplies App-installation overhead.

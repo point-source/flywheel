@@ -7,7 +7,7 @@ import {
   INTEGRATION_BASE,
   SANDBOX_OWNER,
   SANDBOX_REPO,
-  hasSandboxPat,
+  hasSandboxToken,
   sandboxGh,
   sandboxOctokit,
 } from "../helpers/sandbox-client.js";
@@ -84,7 +84,7 @@ function configForStream(sourceBranch: string): FlywheelConfig {
   };
 }
 
-describe.skipIf(!hasSandboxPat)("integration: promotion PR upsert", () => {
+describe.skipIf(!hasSandboxToken)("integration: promotion PR upsert", () => {
   afterEach(async () => {
     await runTeardown();
   });

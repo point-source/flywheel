@@ -138,7 +138,7 @@ Before opening a PR:
 `testing_strategy.md` documents three test layers:
 
 - **Layer 1 (unit)** — implemented. `tests/*.test.ts` covers parsing, validation, increment computation, label decisions, promotion dedup, idempotency, and the GraphQL auto-merge fallback. Run `npm test`.
-- **Layer 2 (integration)** — being introduced. Real-Octokit tests under `tests/integration/` running against `point-source/flywheel-sandbox`. Requires the `SANDBOX_GH_PAT` secret; provisioning is documented in [`docs/sandbox-setup.md`](./docs/sandbox-setup.md).
+- **Layer 2 (integration)** — being introduced. Real-Octokit tests under `tests/integration/` running against `point-source/flywheel-sandbox`. CI mints a token from the `flywheel-build-e2e` GitHub App and exports it as `SANDBOX_GH_TOKEN`; provisioning is documented in [`docs/sandbox-setup.md`](./docs/sandbox-setup.md).
 - **Layer 3 (E2E)** — deferred. Sandbox branches are pre-positioned so Layer 3 can be added without re-provisioning.
 
 Until Layer 2 lands fully, the dogfood and personal-sandbox loops above are still the primary end-to-end validation path.

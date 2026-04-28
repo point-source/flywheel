@@ -112,9 +112,11 @@ fake.
 ### Tooling
 
 Vitest, no parallelism (one PR pool — file-level isolation enforced via
-`vitest.integration.config.ts`). The sandbox PAT is supplied via
-`SANDBOX_GH_PAT`. Tests are skipped automatically if the secret is missing
-(forks).
+`vitest.integration.config.ts`). Auth is supplied via `SANDBOX_GH_TOKEN`,
+which CI mints from the `flywheel-build-e2e` GitHub App per run; locally
+any token (App installation token or fine-grained PAT) with the right
+scopes works. Tests skip automatically when the env var is missing
+(fork PRs, contributors without provisioning access).
 
 ### Sandbox repo configuration
 
@@ -259,12 +261,12 @@ it('upserts a promotion PR rather than creating duplicates', async () => {
 
 ### CI wiring
 
-A new `integration-tests` job in `.github/workflows/integration.yml` (or as a
-new job inside `verify-dist.yml`) runs `npm run test:integration` on PR
-open/sync and on push to `develop`. The job is skipped when
-`secrets.SANDBOX_GH_PAT` is unavailable (fork PRs). After the suite is
-observed stable for ~1 week, the job becomes a required check for merging to
-`develop`.
+`.github/workflows/integration.yml` mints an installation token from the
+`flywheel-build-e2e` App via `actions/create-github-app-token`, exports it
+as `SANDBOX_GH_TOKEN`, and runs `npm run test:integration` on PR open/sync
+and on push to `develop`/`main`. The job is gated on same-repo PRs (App
+secrets are not exposed to fork PRs). After the suite is observed stable
+for ~1 week, the job becomes a required check for merging to `develop`.
 
 ---
 

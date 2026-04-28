@@ -9,7 +9,7 @@ import { silentLogger } from "../../helpers/fakeGh.js";
 import {
   SANDBOX_OWNER,
   SANDBOX_REPO,
-  hasSandboxPat,
+  hasSandboxToken,
   sandboxGh,
   sandboxOctokit,
 } from "../helpers/sandbox-client.js";
@@ -17,7 +17,7 @@ import { sandboxConfig } from "../helpers/sandbox-config.js";
 import { createTestPR, fetchPR, uniqueBranch } from "../helpers/test-pr.js";
 import { registerForTeardown, runTeardown } from "../helpers/teardown.js";
 
-describe.skipIf(!hasSandboxPat)("integration: label application", () => {
+describe.skipIf(!hasSandboxToken)("integration: label application", () => {
   afterEach(async () => {
     await runTeardown();
   });

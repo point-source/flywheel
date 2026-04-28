@@ -2,12 +2,12 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { runPrFlow } from "../../../src/pr-flow.js";
 import { silentLogger } from "../../helpers/fakeGh.js";
-import { hasSandboxPat, sandboxGh } from "../helpers/sandbox-client.js";
+import { hasSandboxToken, sandboxGh } from "../helpers/sandbox-client.js";
 import { sandboxConfig } from "../helpers/sandbox-config.js";
 import { createTestPR, fetchPR, uniqueBranch } from "../helpers/test-pr.js";
 import { registerForTeardown, runTeardown } from "../helpers/teardown.js";
 
-describe.skipIf(!hasSandboxPat)("integration: PR title rewrite", () => {
+describe.skipIf(!hasSandboxToken)("integration: PR title rewrite", () => {
   afterEach(async () => {
     await runTeardown();
   });
