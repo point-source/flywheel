@@ -2,9 +2,6 @@
 # and (if eligible) auto-merge or enqueue.
 #
 # Reusable. Called by orchestrator.yml; do not call directly.
-#
-# Phase 1.5: dispatches `command: hello-world` to validate the architecture.
-# Phase 2c will swap to `command: pr-lifecycle`.
 
 name: pipeline / pr-lifecycle
 
@@ -62,7 +59,7 @@ jobs:
       - name: Run pr-lifecycle command
         uses: ./.swarmflow
         with:
-          command: hello-world
+          command: pr-lifecycle
           pr_number: ${{ inputs.pr_number }}
           source_branch: ${{ inputs.source_branch }}
           target_branch: ${{ inputs.target_branch }}
