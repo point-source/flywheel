@@ -150,6 +150,8 @@ npm run verify-dist   # rebuilds and fails if dist/ drifts from source
 
 Source is TypeScript under `src/`; the bundled `dist/index.js` is committed and is what GitHub executes. The `verify-dist` workflow ensures the bundle stays in sync.
 
+See [CONTRIBUTING.md](./CONTRIBUTING.md) for the full contributor workflow, sandbox testing, and PR conventions.
+
 ## License
 
 MIT — see [LICENSE.md](./LICENSE.md).
@@ -158,5 +160,6 @@ MIT — see [LICENSE.md](./LICENSE.md).
 
 - **[spec.md](./spec.md)** — full specification
 - **[docs/adopter-setup.md](./docs/adopter-setup.md)** — adopter walkthrough
+- **[CONTRIBUTING.md](./CONTRIBUTING.md)** — contributor and sandbox-testing guide
 - **[docs/maintainer-setup.md](./docs/maintainer-setup.md)** — operating Flywheel itself
 - **[docs/maintainer-release-process.md](./docs/maintainer-release-process.md)** — cutting a Flywheel release
