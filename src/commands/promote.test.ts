@@ -8,6 +8,7 @@ import type { GitProvider } from '../core/version.js';
 interface MockOctokit {
   octokit: Octokit;
   compareCommits: ReturnType<typeof vi.fn>;
+  compareCommitsWithBasehead: ReturnType<typeof vi.fn>;
   listCommits: ReturnType<typeof vi.fn>;
   getBranch: ReturnType<typeof vi.fn>;
   createRef: ReturnType<typeof vi.fn>;
@@ -19,6 +20,11 @@ interface MockOctokit {
 
 function buildMockOctokit(): MockOctokit {
   const compareCommits = vi.fn().mockResolvedValue({ data: { commits: [] } });
+  // Default to "head ahead by 1" so the promotion-PR upsert path runs in
+  // existing tests; specific tests override to 0 to exercise the no-op branch.
+  const compareCommitsWithBasehead = vi
+    .fn()
+    .mockResolvedValue({ data: { ahead_by: 1, behind_by: 0, commits: [] } });
   const listCommits = vi.fn().mockResolvedValue({ data: [] });
   const getBranch = vi
     .fn()
@@ -30,7 +36,7 @@ function buildMockOctokit(): MockOctokit {
   const pullsUpdate = vi.fn().mockResolvedValue({ data: {} });
   const octokit = {
     rest: {
-      repos: { compareCommits, listCommits, getBranch },
+      repos: { compareCommits, compareCommitsWithBasehead, listCommits, getBranch },
       git: { createRef },
       actions: { createWorkflowDispatch: dispatch },
       pulls: { list: pullsList, create: pullsCreate, update: pullsUpdate },
@@ -39,6 +45,7 @@ function buildMockOctokit(): MockOctokit {
   return {
     octokit,
     compareCommits,
+    compareCommitsWithBasehead,
     listCommits,
     getBranch,
     createRef,
@@ -276,6 +283,32 @@ describe('runPromoteWithOctokit > pre-release counter increments', () => {
     });
 
     expect(mock.createRef.mock.calls[0]![0].ref).toBe('refs/tags/v1.0.1-dev.4');
+  });
+});
+
+describe('runPromoteWithOctokit > no commits between source and target', () => {
+  // Happens immediately after a baseline reset (and harmlessly during the
+  // e2e pin step's force-push of develop = staging = main): pulls.create
+  // would error with "No commits between staging and develop". Skip the PR
+  // upsert in that case rather than crashing the run.
+  it('skips promotion PR when source has zero commits ahead of target', async () => {
+    const mock = buildMockOctokit();
+    setCommits(mock, ['fix: handle null token']);
+    mock.compareCommitsWithBasehead.mockResolvedValue({
+      data: { ahead_by: 0, behind_by: 0, commits: [] },
+    });
+
+    await runPromoteWithOctokit(mock.octokit, buildConfig(), buildGitProvider(), {
+      branch: 'develop',
+      dryRun: false,
+      repo: 'point-source/sandbox',
+    });
+
+    expect(mock.pullsCreate).not.toHaveBeenCalled();
+    expect(mock.pullsUpdate).not.toHaveBeenCalled();
+    // Tag + build still happen — promote skipping is only about the PR upsert.
+    expect(mock.createRef).toHaveBeenCalledOnce();
+    expect(mock.dispatch).toHaveBeenCalledOnce();
   });
 });
 

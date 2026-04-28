@@ -139,11 +139,103 @@ jobs:
           # baseline content and the pipeline can't start.
           git push origin --force main:develop main:staging
 
-      # --- Fixture 1: fix PR → develop (auto-merge eligible) -----------------
-      # Should: rewrite PR title to canonical, run quality (no-op without
-      # quality workflow configured), enable auto-merge → land on develop →
-      # promote dispatches build + tags v*-dev.*.
-      - name: 'Fixture 1: open fix PR to develop'
+      # Capture the latest on-push run id on develop BEFORE fixtures begin.
+      # The pin step force-pushed develop, which fires an on-push run that
+      # is unrelated to (and noisier than) what later fixtures want to wait
+      # for. wait-run.sh's SINCE_RUN_ID skips runs <= this baseline.
+      - name: Snapshot baseline on-push run id on develop
+        id: baseline
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+        run: |
+          set -euo pipefail
+          # `0` is a safe sentinel meaning "no prior run" if jq returns null.
+          rid=$(gh run list --repo "$SANDBOX" --workflow on-push.yml --limit 50 \
+                  --json databaseId,headBranch \
+                  --jq '[.[] | select(.headBranch == "develop")] | .[0].databaseId // 0')
+          echo "develop_run_id=$rid" >> "$GITHUB_OUTPUT"
+          echo "::notice::baseline on-push run id on develop = $rid"
+
+      # --- Fixture 1: chore-only PR → develop (learning #3) -----------------
+      # Run BEFORE the fix-PR fixture so the diff-since-baseline contains
+      # only chore commits — guarantees promote.ts's hasChanges=false branch
+      # is exercised regardless of how fast the fix PR auto-merges later.
+      # Should: pr-lifecycle rewrites title (already canonical here) →
+      # auto-merge → on-push fires → promote runs but creates NO tag (no
+      # bump-eligible commits since baseline) → build IS dispatched
+      # (publish_on_develop=true by default).
+      - name: 'Fixture 1: open chore PR to develop'
+        id: chore
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+        working-directory: sandbox
+        run: |
+          set -euo pipefail
+          br="${RUN_NS}-chore"
+          git checkout -b "$br" origin/develop
+          printf '%s\n' "$RUN_NS chore" > "chore-${RUN_NS}.txt"
+          git add "chore-${RUN_NS}.txt"
+          git commit -m "chore: e2e chore-only ${RUN_NS}"
+          git push origin "$br"
+          url=$(gh pr create --repo "$SANDBOX" \
+                  --base develop --head "$br" \
+                  --title "chore: e2e chore-only ${RUN_NS}" \
+                  --body "chore-only fixture (learning #3)")
+          echo "pr=$(basename "$url")" >> "$GITHUB_OUTPUT"
+          echo "branch=$br" >> "$GITHUB_OUTPUT"
+
+      - name: Wait for pr-lifecycle on chore PR
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          REPO: ${{ env.SANDBOX }}
+          WORKFLOW: on-pr.yml
+          BRANCH: ${{ steps.chore.outputs.branch }}
+          TIMEOUT: '600'
+        run: ./scripts/e2e/wait-run.sh
+
+      # Auto-merge fires asynchronously after the required check goes green.
+      # Without this wait, the next step would race the teardown and the
+      # promote run wouldn't have been triggered yet.
+      - name: Wait for chore PR to merge
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          REPO: ${{ env.SANDBOX }}
+          PR: ${{ steps.chore.outputs.pr }}
+          TIMEOUT: '300'
+        run: ./scripts/e2e/wait-merged.sh
+
+      - name: Wait for promote on develop after chore merge
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          REPO: ${{ env.SANDBOX }}
+          WORKFLOW: on-push.yml
+          BRANCH: develop
+          TIMEOUT: '600'
+          # Skip the pin step's on-push run on develop (which is older).
+          SINCE_RUN_ID: ${{ steps.baseline.outputs.develop_run_id }}
+        run: ./scripts/e2e/wait-run.sh
+
+      - name: Assert no v*-dev tag was created for the chore-only push
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+        working-directory: sandbox
+        run: |
+          set -euo pipefail
+          git fetch origin --tags
+          # Chore commit is develop's tip right now (the fix fixture hasn't
+          # opened its PR yet). Learning #3: if the diff-since-baseline is
+          # chore-only, promote must NOT mint a tag.
+          tags=$(git tag --points-at origin/develop -l 'v*-dev.*' || true)
+          if [[ -n "$tags" ]]; then
+            echo "::error::chore-only push created a tag (learning #3 violated): $tags"
+            exit 1
+          fi
+          echo "::notice::chore-only push correctly created no tag"
+
+      # --- Fixture 2: fix PR → develop (auto-merge eligible) ----------------
+      # Validates pr-lifecycle's title-rewrite path. Doesn't wait for the
+      # merge to land — the chore fixture already exercised the merge chain.
+      - name: 'Fixture 2: open fix PR to develop'
         id: fix
         env:
           GH_TOKEN: ${{ steps.token.outputs.token }}
@@ -182,64 +274,6 @@ jobs:
             echo "::error::expected canonical title, got: $title"
             exit 1
           }
-
-      # --- Fixture 2: chore-only push → develop (learning #3) ----------------
-      # Should: NO version tag, but build IS dispatched (publish_on_develop=true
-      # by default). Verifies promote.ts:hasChanges=false branch.
-      - name: 'Fixture 2: push chore-only to develop'
-        id: chore
-        env:
-          GH_TOKEN: ${{ steps.token.outputs.token }}
-        working-directory: sandbox
-        run: |
-          set -euo pipefail
-          br="${RUN_NS}-chore"
-          git checkout -b "$br" origin/develop
-          printf '%s\n' "$RUN_NS chore" > "chore-${RUN_NS}.txt"
-          git add "chore-${RUN_NS}.txt"
-          git commit -m "chore: e2e chore-only ${RUN_NS}"
-          git push origin "$br"
-          url=$(gh pr create --repo "$SANDBOX" \
-                  --base develop --head "$br" \
-                  --title "chore: e2e chore-only ${RUN_NS}" \
-                  --body "chore-only fixture (learning #3)")
-          echo "pr=$(basename "$url")" >> "$GITHUB_OUTPUT"
-          echo "branch=$br" >> "$GITHUB_OUTPUT"
-
-      - name: Wait for pr-lifecycle on chore PR
-        env:
-          GH_TOKEN: ${{ steps.token.outputs.token }}
-          REPO: ${{ env.SANDBOX }}
-          WORKFLOW: on-pr.yml
-          BRANCH: ${{ steps.chore.outputs.branch }}
-          TIMEOUT: '600'
-        run: ./scripts/e2e/wait-run.sh
-
-      - name: Wait for promote on develop after chore merge
-        env:
-          GH_TOKEN: ${{ steps.token.outputs.token }}
-          REPO: ${{ env.SANDBOX }}
-          WORKFLOW: on-push.yml
-          BRANCH: develop
-          TIMEOUT: '600'
-        run: ./scripts/e2e/wait-run.sh
-
-      - name: Assert no v*-dev tag was created for the chore-only push
-        env:
-          GH_TOKEN: ${{ steps.token.outputs.token }}
-        working-directory: sandbox
-        run: |
-          set -euo pipefail
-          git fetch origin --tags
-          # The chore commit is on develop; if learning #3 holds, no tag
-          # should have been created for it. List tags reachable from
-          # develop's tip and ensure none are dev-tags namespaced to this run.
-          tags=$(git tag --points-at origin/develop -l 'v*-dev.*' || true)
-          if [[ -n "$tags" ]]; then
-            echo "::error::chore-only push created a tag (learning #3 violated): $tags"
-            exit 1
-          fi
-          echo "::notice::chore-only push correctly created no tag"
 
       # --- Fixture 3: invalid conventional-commit PR --------------------------
       # Should: required check fails (parseCommitsStrict throws), no auto-merge.

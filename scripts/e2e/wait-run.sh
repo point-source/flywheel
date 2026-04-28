@@ -7,8 +7,12 @@
 # Used by .github/workflows/e2e.yml. Internal to the e2e harness — adopters
 # don't reference this. Replaces the .github/actions/wait-run composite.
 #
+# When SINCE_RUN_ID is set, runs with databaseId <= SINCE_RUN_ID are
+# ignored. Use this to skip stale runs from earlier e2e steps (e.g. the
+# pin step's on-push runs that fire before fixtures begin).
+#
 # Usage: REPO=owner/name WORKFLOW=on-pr.yml BRANCH=feature/x \
-#        TIMEOUT=600 GH_TOKEN=... wait-run.sh
+#        TIMEOUT=600 GH_TOKEN=... [SINCE_RUN_ID=...] wait-run.sh
 
 set -euo pipefail
 
@@ -17,15 +21,17 @@ set -euo pipefail
 : "${BRANCH:?BRANCH is required}"
 : "${GH_TOKEN:?GH_TOKEN is required}"
 : "${TIMEOUT:=600}"
+: "${SINCE_RUN_ID:=0}"
 
 # gh's --branch flag (and the underlying actions/runs ?branch= API param)
 # returns empty for short-lived branches and recently force-rewritten refs
 # even when matching runs exist. Post-filter on headBranch instead
-# (learning #7).
+# (learning #7). Also drop runs with databaseId <= SINCE_RUN_ID so we don't
+# pick up stale runs from earlier e2e steps.
 get_row() {
   gh run list --repo "$REPO" --workflow "$WORKFLOW" --limit 50 \
     --json databaseId,headBranch,status,conclusion \
-    --jq "[.[] | select(.headBranch == \"$BRANCH\")] | .[0] // empty"
+    --jq "[.[] | select(.headBranch == \"$BRANCH\") | select(.databaseId > ${SINCE_RUN_ID})] | .[0] // empty"
 }
 
 # Give the trigger a moment to register as a run before polling.

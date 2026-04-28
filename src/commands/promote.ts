@@ -109,24 +109,36 @@ export async function runPromoteWithOctokit(
   const nextBranch = nextBranchInChain(branch, config.pipeline.branches);
   if (nextBranch) {
     if (!inputs.dryRun) {
-      const title = `chore(release): promote ${branch} → ${nextBranch} (v${computed.version})`;
-      const body = renderPromotionBody({
-        commits,
-        bump,
-        source: branch,
-        target: nextBranch,
-        version: computed.version,
-      });
-      const result = await upsertPullRequest({
-        octokit,
-        owner,
-        repo,
-        head: branch,
-        base: nextBranch,
-        title,
-        body,
-      });
-      core.info(`promotion PR ${result.created ? 'created' : 'updated'}: #${result.number}`);
+      // GitHub rejects pulls.create with "No commits between X and Y" when
+      // source and target are at the same SHA — this happens immediately
+      // after a baseline reset (and harmlessly during the e2e pin step).
+      // Skip PR upsert in that case; a future commit will trigger promote
+      // again. Existing promotion PRs (if any) get their body refreshed.
+      const ahead = await commitsAheadOfTarget(octokit, owner, repo, branch, nextBranch);
+      if (ahead === 0) {
+        core.info(
+          `no commits on ${branch} ahead of ${nextBranch} — skipping promotion PR`,
+        );
+      } else {
+        const title = `chore(release): promote ${branch} → ${nextBranch} (v${computed.version})`;
+        const body = renderPromotionBody({
+          commits,
+          bump,
+          source: branch,
+          target: nextBranch,
+          version: computed.version,
+        });
+        const result = await upsertPullRequest({
+          octokit,
+          owner,
+          repo,
+          head: branch,
+          base: nextBranch,
+          title,
+          body,
+        });
+        core.info(`promotion PR ${result.created ? 'created' : 'updated'}: #${result.number}`);
+      }
     }
   } else {
     core.info(`no downstream branch enabled — nothing to promote ${branch} into`);
@@ -159,6 +171,21 @@ async function listCommitsSince(
     per_page: 100,
   });
   return data.map((c) => ({ sha: c.sha, message: c.commit.message }));
+}
+
+async function commitsAheadOfTarget(
+  octokit: Octokit,
+  owner: string,
+  repo: string,
+  head: string,
+  base: string,
+): Promise<number> {
+  const { data } = await octokit.rest.repos.compareCommitsWithBasehead({
+    owner,
+    repo,
+    basehead: `${base}...${head}`,
+  });
+  return data.ahead_by;
 }
 
 async function tagBranchTip(
