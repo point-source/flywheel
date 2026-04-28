@@ -84,6 +84,47 @@ never against `flywheel` itself or any production target.
     | xargs -I{} gh api -X DELETE /repos/point-source/flywheel-sandbox/git/refs/heads/{}
   ```
 
+## Layer 3 workflow installation
+
+Layer 3 e2e tests trigger the action chain by opening, merging, and pushing
+to the long-lived `e2e-*` branches in the sandbox. For the chain to fire,
+the sandbox repo must carry its own `flywheel-pr.yml` and `flywheel-push.yml`
+workflows, pinned to `point-source/flywheel@develop` (Layer 3 validates
+already-merged code).
+
+The adopter templates ship as the canonical source — repin and copy:
+
+```bash
+# From a clone of point-source/flywheel-sandbox (on a feature branch):
+cp /path/to/flywheel/scripts/templates/flywheel-pr.yml .github/workflows/
+cp /path/to/flywheel/scripts/templates/flywheel-push.yml .github/workflows/
+sed -i '' 's|point-source/flywheel@v1|point-source/flywheel@develop|' \
+  .github/workflows/flywheel-{pr,push}.yml
+git add .github/workflows && git commit -m "ci: install flywheel workflows for Layer 3"
+git push origin <branch>
+# Then merge to e2e-main, and forward to e2e-staging, e2e-develop, e2e-customer-acme.
+# pull_request events read workflows from the BASE branch — every managed
+# branch needs its own copy.
+```
+
+Apply the branch + tag rulesets via the helper script (replaces the manual
+steps for the new branches):
+
+```bash
+/path/to/flywheel/scripts/apply-rulesets.sh point-source/flywheel-sandbox \
+  --app-id <flywheel-build-e2e App ID> \
+  --branches "e2e-main,e2e-staging,e2e-develop,e2e-customer-acme"
+```
+
+Layer 3 cleanup branches its tests under `e2e/<scenario>-<unix-millis>`
+(distinct from Layer 2's `test/...` prefix); the same prune command works:
+
+```bash
+gh api -X GET /repos/point-source/flywheel-sandbox/branches --jq '.[].name' \
+  | grep '^e2e/' \
+  | xargs -I{} gh api -X DELETE /repos/point-source/flywheel-sandbox/git/refs/heads/{}
+```
+
 ## When to use a different sandbox
 
 Don't. One sandbox repo is enough — test isolation is enforced via per-test

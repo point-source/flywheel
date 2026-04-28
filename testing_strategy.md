@@ -2,20 +2,20 @@
 
 ## Overview
 
-Flywheel has three testing layers. Layer 1 (unit) is implemented and is where
-the bulk of decision logic is verified. Layer 2 (integration) is being
-introduced now to exercise `pr-conductor` against the real GitHub API on a
-dedicated sandbox repo. Layer 3 (end-to-end) is deferred — its scenarios are
-preserved below as a roadmap.
+Flywheel has three testing layers, all implemented. Layer 1 (unit) verifies
+the bulk of decision logic. Layer 2 (integration) exercises `pr-conductor`
+against the real GitHub API on a dedicated sandbox repo. Layer 3 (end-to-end)
+drives the full Actions event chain on that same sandbox.
 
 | Layer | What it tests | Speed | Status | Runs on |
 |---|---|---|---|---|
 | Unit | Pure logic, no I/O | Milliseconds | **Implemented** | Every file save; required check on PR / push |
-| Integration | `pr-conductor` against real GitHub API | Seconds | **In progress** | PR open/sync; push to `develop` (skipped on forks) |
-| End-to-end | Full Actions event chain on sandbox | Minutes | **Deferred** | (planned) merge to `develop` |
+| Integration | `pr-conductor` against real GitHub API | Seconds | **Implemented** | PR open/sync; push to `develop`/`main` (skipped on forks) |
+| End-to-end | Full Actions event chain on sandbox | Minutes | **Implemented** | Push to `develop` (skipped on forks) |
 
-Sandbox repo (`point-source/flywheel-sandbox`) provisioning is documented in
-[`docs/sandbox-setup.md`](docs/sandbox-setup.md). Layer 2 tests require it.
+Sandbox repo (`point-source/flywheel-sandbox`) provisioning — including the
+Layer 3 workflow installation step — is documented in
+[`docs/sandbox-setup.md`](docs/sandbox-setup.md). Layers 2 and 3 require it.
 
 ---
 
@@ -271,45 +271,102 @@ for ~1 week, the job becomes a required check for merging to `develop`.
 
 ---
 
-## Layer 3 — End-to-end tests (deferred)
+## Layer 3 — End-to-end tests
 
-**Status: not implemented.** This section is preserved as a roadmap. The
-sandbox repo's `e2e-main`, `e2e-staging`, `e2e-develop`, and
-`e2e-customer-acme` branches are pre-positioned so this layer can be added
-later without re-provisioning.
+Drives the full Actions event chain on `point-source/flywheel-sandbox`. Each
+scenario opens a real PR, merges it (or pushes a real commit), then polls the
+sandbox until the published action workflow has labeled, auto-merged, opened
+a promotion PR, or cut a tag. Slow (30–120s per scenario); runs only on push
+to `develop` (post-merge).
 
-E2E tests would push real commits, open real PRs, and poll GitHub state until
-the workflow chain reaches the expected end state. Slow (30–90s per scenario);
-intended to run only on merge to `develop`.
+### Sandbox-side prerequisite
 
-### Planned scenarios
+The sandbox repo carries its own `flywheel-pr.yml` and `flywheel-push.yml`
+workflows pinned to `point-source/flywheel@develop`. Provisioning is in
+[`docs/sandbox-setup.md`](docs/sandbox-setup.md#layer-3-workflow-installation).
+Because Layer 3 pins to `@develop`, it validates code already merged to
+develop — feature-branch changes ride on Layer 2 confidence.
+
+### Tooling
+
+Vitest, no parallelism (`vitest.e2e.config.ts` enforces `fileParallelism: false`,
+180s `testTimeout`). Auth: same `SANDBOX_GH_TOKEN` env var as Layer 2 (CI mints
+it from the `flywheel-build-e2e` GitHub App). `npm run test:e2e` runs the
+suite. Tests skip when the env var is missing.
+
+### Layout
 
 ```
 tests/e2e/
+  helpers/
+    poll-until.ts        # generic polling assertion (signature below)
+    sandbox-e2e.ts       # pushCommit, mergePR, getRefSha, listTagsMatching,
+                         # deleteTag, getCheckRuns, getPRMergeState, getRepoFile
+    run-baseline.ts      # snapshotRunIds + waitForRunAfter — filters stale
+                         # workflow runs by id > baseline so long-lived branches
+                         # don't surface unrelated prior runs
+    tag-cleanup.ts       # snapshotTags + cleanupNewTags for semantic-release output
   scenarios/
-    01-fix-auto-merges.test.ts                   # fix PR labeled and merged
-    02-feat-needs-review.test.ts                 # feat PR labeled needs-review, no auto_merge
+    01-fix-auto-merges.test.ts
+    02-feat-needs-review.test.ts
     03-breaking-fix-needs-review.test.ts
     04-invalid-title-blocks-merge.test.ts
     05-promotion-pr-created-on-merge.test.ts
     06-chore-no-promotion.test.ts
     07-promotion-pr-accumulates.test.ts
-    08-multi-stream-tag-isolation.test.ts        # main-line v${version} vs customer-acme/v${version}
-    09-semantic-release-dry-run.test.ts          # tag created in expected format
-  helpers/
-    poll-until.ts                                # generic polling assertion
-    sandbox.ts                                   # branch/PR ops
+    08-multi-stream-tag-isolation.test.ts
+    09-tag-format-from-live-config.test.ts
 ```
 
-The polling helper signature:
+Polling helper signature:
 
 ```typescript
 export async function pollUntil<T>(
   fn: () => Promise<T>,
   predicate: (result: T) => boolean,
-  options = { intervalMs: 3000, timeoutMs: 90000 }
+  options?: { intervalMs?: number; timeoutMs?: number; description?: string },
 ): Promise<T>
 ```
+
+Defaults: `intervalMs=3000`, `timeoutMs=90_000`. On timeout, throws an Error
+including the `description` and the last value in JSON.
+
+### Test isolation
+
+Each test creates a uniquely-named feature branch (`e2e/<scenario>-<unix-millis>`)
+off the relevant long-lived branch. Long-lived branches accumulate state
+across runs by design — tests assert on **shape** (label present, tag prefix
+matches, PR base/head correct), not on specific version numbers. `afterEach`
+closes test PRs and deletes test branches via `tests/integration/helpers/teardown.ts`;
+tag-creating scenarios snapshot the tag set in `beforeEach` and delete any
+new tags in `afterEach`.
+
+Workflow-run polling uses a baseline-id filter (`run-baseline.ts`) — without
+it, tests that wait for `flywheel-push.yml` to fire on a long-lived branch
+would surface stale runs from prior tests and false-pass. Source of this
+pattern: pre-reset commit `238aca0`.
+
+### Scenario 09 — pragmatic deviation
+
+The original roadmap listed `09-semantic-release-dry-run.test.ts` with the
+note "tag created in expected format" — self-contradictory (a dry-run does
+not create). The shipped `09-tag-format-from-live-config.test.ts` instead
+loads the live sandbox `.flywheel.yml` and exercises `chooseTagFormat`
+directly for each stream, asserting that `main-line → v${version}`,
+`customer-acme → customer-acme/v${version}`, `integration → integration/v${version}`.
+This catches the only thing the dry-run could have caught (cross-stream tag
+collision) without mutating the sandbox or shelling out to `npx`.
+
+### Risk: scenario 01 flakiness
+
+Native auto-merge can stick at `mergeStateStatus: BLOCKED` even with all
+required checks green (observed in the pre-reset harness; commits `87d5643`,
+`60fe99a`). Mitigations in scenario 01: 120s timeout instead of the 90s
+default; on failure, pollUntil dumps `mergeable_state`, `auto_merge`, and
+all check_runs on the head SHA. If the scenario flakes more than once across
+≥3 CI runs, file a separate issue to port the pre-reset direct-merge fallback
+into `runPrFlow`. The harness intentionally does not paper over this in
+test-side code — Layer 3's job is to test flywheel as flywheel.
 
 ---
 
@@ -330,11 +387,14 @@ broken `.flywheel.yml` fails CI before it reaches an actual run.
 |---|---|
 | File save (local) | Unit tests in watch mode |
 | PR open / synchronize | `verify-dist` (typecheck + unit + dist drift) + `integration-tests` |
-| Merge to `develop` | All of the above + (planned) E2E suite |
-| Merge to `main` | All of the above + semantic-release |
+| Push to `develop` | All of the above + `e2e-tests` |
+| Push to `main` | All of the above + semantic-release |
 
-Integration and (future) E2E jobs are skipped on PRs from forks (no sandbox
-App-token access). Maintainers re-run them via `workflow_dispatch` after review.
+Integration and E2E jobs are skipped on PRs from forks (no sandbox App-token
+access). Maintainers re-run them via `workflow_dispatch` after review. The
+e2e job runs `scripts/doctor.sh` against the sandbox as a pre-flight so
+configuration drift (missing branches, secret expiry, ruleset removal) fails
+fast with a clear diagnostic instead of timing out scenario-by-scenario.
 
 ---
 
