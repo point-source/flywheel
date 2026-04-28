@@ -32,23 +32,28 @@ Full instructions in [`docs/ONBOARDING.md`](./docs/ONBOARDING.md).
 
 ## What's in this repo
 
-| Path                     | Contents                                              |
-|--------------------------|-------------------------------------------------------|
-| `.github/workflows/`     | Reusable workflows (orchestrator, pr-lifecycle, promote, release) plus self-CI |
-| `.github/actions/`       | Composite actions used by the workflows               |
-| `scripts/`               | Bash helpers (`commit-parse.sh`, `version-bump.sh`, etc.) |
-| `tests/bats/`            | Bash unit tests                                       |
-| `templates/`             | Files adopters copy into their repo                   |
-| `docs/`                  | `ONBOARDING.md`, `CONFIG.md`, `RULESETS.md`           |
-| `spec.md`                | Source of truth for the design                        |
+| Path                  | Contents                                                                |
+|-----------------------|-------------------------------------------------------------------------|
+| `action.yml`          | Root action — single `node20` entry, dispatches on the `command` input  |
+| `src/`                | TypeScript source (commands, core modules, GitHub adapters)             |
+| `dist/`               | `ncc`-bundled action (`dist/index.js`); committed, regenerated on build |
+| `.github/workflows/`  | Reusable workflows (orchestrator, pr-lifecycle, promote, release) + CI  |
+| `templates/`          | Files adopters copy into their repo                                     |
+| `scripts/e2e/`        | E2e harness helpers (internal, not adopter-facing)                      |
+| `docs/`               | `ONBOARDING.md`, `CONFIG.md`, `RULESETS.md`, `E2E.md`, `adr/`           |
+| `spec.md`             | Source of truth for the design                                          |
 
 ## Design
 
-The full design is in [`spec.md`](./spec.md). Highlights:
+The full design is in [`spec.md`](./spec.md). The TypeScript-rewrite rationale
+is in [`docs/adr/0001-typescript-rewrite.md`](./docs/adr/0001-typescript-rewrite.md).
+Highlights:
 
-- **Pure YAML + bash + `gh` CLI.** No Node, no `dist/`, no compiled actions.
-  Composite actions are used as small wrappers when an inline `run:` block
-  would exceed ~30 lines.
+- **Single bundled action.** All logic lives in `dist/index.js`; reusable
+  workflows are thin (~25 lines each) and do `actions/checkout@v4` of
+  swarmflow at the pinned ref + one `uses: ./.swarmflow` step. This avoids
+  the cross-repo composite-resolution problem that defeated the bash
+  prototype (see ADR for details).
 - **JIT versioning.** Versions are computed at push time, never at PR-open
   time, so they always reflect what actually landed.
 - **Bot identity.** All write actions go through a GitHub App installation
@@ -58,9 +63,10 @@ The full design is in [`spec.md`](./spec.md). Highlights:
 ## Running tests locally
 
 ```sh
-brew install bats-core jq    # macOS
-sudo apt install bats jq     # Debian/Ubuntu
-bats tests/bats/
+npm install
+npm test          # vitest, ~120 unit tests including all 12 hard-won learnings
+npm run build     # ncc bundle; dist/ must be committed
+npm run lint      # eslint
 ```
 
 ## License

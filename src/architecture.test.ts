@@ -10,9 +10,7 @@ const TEMPLATES_DIR = join(process.cwd(), 'templates');
 // `./.github/actions/X` is reintroduced. The rewrite's whole point is one
 // `uses: ./.swarmflow` per workflow (the bundled-action checkout pattern).
 // Static check: if any of the OWNED reusable workflows references
-// `./.github/actions/`, fail. (e2e.yml and smoke.yml remain on the rewrite
-// branch as legacy files until the final squash-merge — they're outside
-// this guardrail's scope.)
+// `./.github/actions/`, fail.
 const OWNED_REUSABLE = ['orchestrator.yml', 'pr-lifecycle.yml', 'promote.yml', 'release.yml'];
 
 describe('architecture > no per-composite cross-repo action references (learning #12)', () => {
