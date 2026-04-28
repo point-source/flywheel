@@ -1,0 +1,22 @@
+name: Integration tests
+on:
+  pull_request:
+  push:
+    branches: ["develop", "main"]
+
+jobs:
+  integration:
+    runs-on: ubuntu-latest
+    # Skip on PRs from forks: SANDBOX_GH_PAT is not exposed to fork PRs and
+    # the suite would skip every test anyway. Save the CI minutes.
+    if: ${{ github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - run: npm ci
+      - name: Run integration tests
+        env:
+          SANDBOX_GH_PAT: ${{ secrets.SANDBOX_GH_PAT }}
+        run: npm run test:integration
