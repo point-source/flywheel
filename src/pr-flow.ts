@@ -17,7 +17,16 @@ import {
 export type PrFlowOutcome =
   | { kind: "unmanaged" }
   | { kind: "parse-failed" }
-  | { kind: "labeled"; label: typeof FLYWHEEL_AUTO_MERGE_LABEL | typeof FLYWHEEL_NEEDS_REVIEW_LABEL; autoMergeEnabled: boolean; autoMergeReason?: string };
+  | {
+      kind: "labeled";
+      label: typeof FLYWHEEL_AUTO_MERGE_LABEL | typeof FLYWHEEL_NEEDS_REVIEW_LABEL;
+      autoMergeEnabled: boolean;
+      merged: boolean;
+      autoMergeReason?: string;
+      directMergeReason?: string;
+    };
+
+export const FLYWHEEL_TITLE_CHECK = "flywheel/conventional-commit";
 
 export interface PrFlowDeps {
   pr: PullRequest;
@@ -42,7 +51,7 @@ export async function runPrFlow({ pr, config, gh, log }: PrFlowDeps): Promise<Pr
   if (!parsed) {
     const summary = `Title is not a valid conventional commit. Expected \`<type>[(<scope>)][!]: <description>\` where type is one of ${VALID_TYPES.join(", ")}.`;
     await gh.createCheck({
-      name: "flywheel/conventional-commit",
+      name: FLYWHEEL_TITLE_CHECK,
       conclusion: "failure",
       summary,
       details: `Got: ${pr.title}`,
@@ -51,6 +60,16 @@ export async function runPrFlow({ pr, config, gh, log }: PrFlowDeps): Promise<Pr
     log.warning(`PR #${pr.number}: invalid conventional commit title — failing check posted.`);
     return { kind: "parse-failed" };
   }
+
+  // Title is valid — always post a passing check so adopters can require
+  // flywheel/conventional-commit in branch protection without it disappearing
+  // for non-failing cases (which would surface as "Expected — Waiting for status").
+  await gh.createCheck({
+    name: FLYWHEEL_TITLE_CHECK,
+    conclusion: "success",
+    summary: `Valid conventional commit title.`,
+    headSha: pr.headSha,
+  });
 
   const commits = await gh.listPullCommits(pr.number);
   const breakingFromBodies = commits.some((c) => detectBreakingInBody(c.body));
@@ -85,16 +104,44 @@ export async function runPrFlow({ pr, config, gh, log }: PrFlowDeps): Promise<Pr
     const result = await gh.enableAutoMerge(pr.nodeId, method);
     if (result.ok) {
       log.info(`PR #${pr.number}: auto-merge enabled (${method.toLowerCase()}).`);
-      return { kind: "labeled", label: FLYWHEEL_AUTO_MERGE_LABEL, autoMergeEnabled: true };
+      return {
+        kind: "labeled",
+        label: FLYWHEEL_AUTO_MERGE_LABEL,
+        autoMergeEnabled: true,
+        merged: false,
+      };
     }
+
+    // Native auto-merge declined. Most common cause when an adopter has no
+    // required status checks: the PR is in clean state, so GitHub considers
+    // there's nothing to schedule auto-merge against. Fall back to a direct
+    // merge — the App's installation token can perform it provided branch
+    // protection rules are satisfied.
+    log.info(
+      `PR #${pr.number}: native auto-merge declined (${result.reason}); attempting direct merge.`,
+    );
+    const directMerge = await gh.mergePR(pr.number, method);
+    if (directMerge.ok) {
+      log.info(`PR #${pr.number}: direct merge succeeded (${directMerge.sha.slice(0, 7)}).`);
+      return {
+        kind: "labeled",
+        label: FLYWHEEL_AUTO_MERGE_LABEL,
+        autoMergeEnabled: false,
+        merged: true,
+        autoMergeReason: result.reason,
+      };
+    }
+
     log.warning(
-      `PR #${pr.number}: could not enable native auto-merge — ${result.reason}. Label applied; merge requires manual action.`,
+      `PR #${pr.number}: native auto-merge and direct merge both failed — auto-merge: ${result.reason}; direct: ${directMerge.reason}. Label applied; merge requires manual action.`,
     );
     return {
       kind: "labeled",
       label: FLYWHEEL_AUTO_MERGE_LABEL,
       autoMergeEnabled: false,
+      merged: false,
       autoMergeReason: result.reason,
+      directMergeReason: directMerge.reason,
     };
   }
 
@@ -104,7 +151,12 @@ export async function runPrFlow({ pr, config, gh, log }: PrFlowDeps): Promise<Pr
     await gh.disableAutoMerge(pr.nodeId);
   }
   log.info(`PR #${pr.number}: ${matchKey} not in auto_merge list for ${branch.name} → needs review.`);
-  return { kind: "labeled", label: FLYWHEEL_NEEDS_REVIEW_LABEL, autoMergeEnabled: false };
+  return {
+    kind: "labeled",
+    label: FLYWHEEL_NEEDS_REVIEW_LABEL,
+    autoMergeEnabled: false,
+    merged: false,
+  };
 }
 
 function findBranch(config: FlywheelConfig, baseRef: string): Branch | null {

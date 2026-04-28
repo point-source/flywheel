@@ -32,6 +32,10 @@ export type EnableAutoMergeResult =
   | { ok: true }
   | { ok: false; reason: string };
 
+export type MergeResult =
+  | { ok: true; sha: string }
+  | { ok: false; reason: string; status?: number };
+
 export type MergeMethod = "SQUASH" | "REBASE" | "MERGE";
 
 export interface CreateCheckOptions {
@@ -55,6 +59,7 @@ export interface GitHubClient {
     method: MergeMethod,
   ): Promise<EnableAutoMergeResult>;
   disableAutoMerge(prNodeId: string): Promise<void>;
+  mergePR(prNumber: number, method: MergeMethod): Promise<MergeResult>;
 
   listPullCommits(prNumber: number): Promise<Commit[]>;
   listBranchCommits(branch: string, perPage?: number): Promise<Commit[]>;
@@ -137,6 +142,22 @@ export function createGitHubClient(token: string, repoFullName?: string): GitHub
         );
       } catch {
         // Idempotent: ignore "not enabled" errors.
+      }
+    },
+
+    async mergePR(pull_number, method) {
+      try {
+        const res = await octokit.rest.pulls.merge({
+          owner,
+          repo,
+          pull_number,
+          merge_method: method.toLowerCase() as "squash" | "rebase" | "merge",
+        });
+        return { ok: true, sha: res.data.sha };
+      } catch (err: unknown) {
+        const status = (err as { status?: number } | undefined)?.status;
+        const message = err instanceof Error ? err.message : String(err);
+        return { ok: false, reason: message, ...(status !== undefined ? { status } : {}) };
       }
     },
 

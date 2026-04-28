@@ -126,10 +126,31 @@ describe("runPrFlow", () => {
     expect(gh.autoMergeDisabledFor).toContain("PR_node_7");
   });
 
-  it("auto-merge fallback: GraphQL refusal logs warning and continues with label intact", async () => {
+  it("auto-merge declines (clean PR, no required checks) → direct-merge fallback succeeds", async () => {
+    const gh = createFakeGh({
+      pullCommits: { 7: [makeCommit("a", "fix: x")] },
+      enableAutoMergeResponse: { ok: false, reason: "Pull request is in clean status" },
+      // mergePRResponse defaults to { ok: true, sha: "merged..." }
+    });
+    const { log } = silentLogger();
+
+    const outcome = await runPrFlow({ pr: makePR(), config: baseConfig, gh, log });
+
+    expect(outcome).toMatchObject({
+      kind: "labeled",
+      label: FLYWHEEL_AUTO_MERGE_LABEL,
+      autoMergeEnabled: false,
+      merged: true,
+    });
+    expect(gh.prLabels[7]).toContain(FLYWHEEL_AUTO_MERGE_LABEL);
+    expect(gh.directMergedPRs).toContain(7);
+  });
+
+  it("auto-merge AND direct-merge both fail → labeled, not merged, warning logged", async () => {
     const gh = createFakeGh({
       pullCommits: { 7: [makeCommit("a", "fix: x")] },
       enableAutoMergeResponse: { ok: false, reason: "Auto merge is not allowed for this repository" },
+      mergePRResponse: { ok: false, reason: "Required status check 'build' is missing", status: 405 },
     });
     const { log, warnings } = silentLogger();
 
@@ -139,9 +160,11 @@ describe("runPrFlow", () => {
       kind: "labeled",
       label: FLYWHEEL_AUTO_MERGE_LABEL,
       autoMergeEnabled: false,
+      merged: false,
     });
     expect(gh.prLabels[7]).toContain(FLYWHEEL_AUTO_MERGE_LABEL);
-    expect(warnings.some((w) => w.includes("could not enable native auto-merge"))).toBe(true);
+    expect(gh.directMergedPRs).not.toContain(7);
+    expect(warnings.some((w) => w.includes("native auto-merge and direct merge both failed"))).toBe(true);
   });
 
   it("unmanaged base ref → no-op: no API calls beyond an info log", async () => {

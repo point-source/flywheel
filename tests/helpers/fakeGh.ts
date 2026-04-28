@@ -4,6 +4,7 @@ import type {
   EnableAutoMergeResult,
   GitHubClient,
   MergeMethod,
+  MergeResult,
   PRSummary,
 } from "../../src/github.js";
 
@@ -17,6 +18,7 @@ export interface FakeGhInit {
   branchCommits?: Record<string, Commit[]>;
   openPRs?: Record<string, PRSummary[]>;
   enableAutoMergeResponse?: EnableAutoMergeResult;
+  mergePRResponse?: MergeResult;
   prLabels?: Record<number, string[]>;
 }
 
@@ -29,6 +31,7 @@ export interface FakeGh extends GitHubClient {
   createdPRs: Array<{ title: string; body: string; head: string; base: string }>;
   autoMergeEnabledFor: string[];
   autoMergeDisabledFor: string[];
+  directMergedPRs: number[];
 }
 
 export function createFakeGh(init: FakeGhInit = {}): FakeGh {
@@ -40,10 +43,13 @@ export function createFakeGh(init: FakeGhInit = {}): FakeGh {
   const createdPRs: Array<{ title: string; body: string; head: string; base: string }> = [];
   const autoMergeEnabledFor: string[] = [];
   const autoMergeDisabledFor: string[] = [];
+  const directMergedPRs: number[] = [];
   const pullCommits = init.pullCommits ?? {};
   const branchCommits = init.branchCommits ?? {};
   const openPRs = init.openPRs ?? {};
   const enableAutoMergeResponse: EnableAutoMergeResult = init.enableAutoMergeResponse ?? { ok: true };
+  const mergePRResponse: MergeResult =
+    init.mergePRResponse ?? { ok: true, sha: "merged0000000000000000000000000000000000" };
 
   const log = (method: string, args: unknown) => calls.push({ method, args });
 
@@ -56,6 +62,7 @@ export function createFakeGh(init: FakeGhInit = {}): FakeGh {
     createdPRs,
     autoMergeEnabledFor,
     autoMergeDisabledFor,
+    directMergedPRs,
     owner: "testorg",
     repo: "testrepo",
 
@@ -88,6 +95,12 @@ export function createFakeGh(init: FakeGhInit = {}): FakeGh {
     async disableAutoMerge(prNodeId) {
       log("disableAutoMerge", { prNodeId });
       autoMergeDisabledFor.push(prNodeId);
+    },
+
+    async mergePR(prNumber, method) {
+      log("mergePR", { prNumber, method });
+      if (mergePRResponse.ok) directMergedPRs.push(prNumber);
+      return mergePRResponse;
     },
 
     async listPullCommits(prNumber) {

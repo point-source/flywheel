@@ -31153,6 +31153,21 @@ function createGitHubClient(token, repoFullName) {
       } catch {
       }
     },
+    async mergePR(pull_number, method) {
+      try {
+        const res = await octokit.rest.pulls.merge({
+          owner,
+          repo,
+          pull_number,
+          merge_method: method.toLowerCase()
+        });
+        return { ok: true, sha: res.data.sha };
+      } catch (err) {
+        const status = err?.status;
+        const message = err instanceof Error ? err.message : String(err);
+        return { ok: false, reason: message, ...status !== void 0 ? { status } : {} };
+      }
+    },
     async listPullCommits(pull_number) {
       const all = await octokit.paginate(octokit.rest.pulls.listCommits, {
         owner,
@@ -31238,6 +31253,7 @@ var FLYWHEEL_AUTO_MERGE_LABEL = "flywheel:auto-merge";
 var FLYWHEEL_NEEDS_REVIEW_LABEL = "flywheel:needs-review";
 
 // src/pr-flow.ts
+var FLYWHEEL_TITLE_CHECK = "flywheel/conventional-commit";
 async function runPrFlow({ pr, config, gh, log }) {
   const branch = findBranch(config, pr.baseRef);
   if (!branch) {
@@ -31248,7 +31264,7 @@ async function runPrFlow({ pr, config, gh, log }) {
   if (!parsed) {
     const summary = `Title is not a valid conventional commit. Expected \`<type>[(<scope>)][!]: <description>\` where type is one of ${VALID_TYPES.join(", ")}.`;
     await gh.createCheck({
-      name: "flywheel/conventional-commit",
+      name: FLYWHEEL_TITLE_CHECK,
       conclusion: "failure",
       summary,
       details: `Got: ${pr.title}`,
@@ -31257,6 +31273,12 @@ async function runPrFlow({ pr, config, gh, log }) {
     log.warning(`PR #${pr.number}: invalid conventional commit title \u2014 failing check posted.`);
     return { kind: "parse-failed" };
   }
+  await gh.createCheck({
+    name: FLYWHEEL_TITLE_CHECK,
+    conclusion: "success",
+    summary: `Valid conventional commit title.`,
+    headSha: pr.headSha
+  });
   const commits = await gh.listPullCommits(pr.number);
   const breakingFromBodies = commits.some((c) => detectBreakingInBody(c.body));
   const increment = computeIncrement(parsed, breakingFromBodies);
@@ -31287,16 +31309,37 @@ async function runPrFlow({ pr, config, gh, log }) {
     const result = await gh.enableAutoMerge(pr.nodeId, method);
     if (result.ok) {
       log.info(`PR #${pr.number}: auto-merge enabled (${method.toLowerCase()}).`);
-      return { kind: "labeled", label: FLYWHEEL_AUTO_MERGE_LABEL, autoMergeEnabled: true };
+      return {
+        kind: "labeled",
+        label: FLYWHEEL_AUTO_MERGE_LABEL,
+        autoMergeEnabled: true,
+        merged: false
+      };
+    }
+    log.info(
+      `PR #${pr.number}: native auto-merge declined (${result.reason}); attempting direct merge.`
+    );
+    const directMerge = await gh.mergePR(pr.number, method);
+    if (directMerge.ok) {
+      log.info(`PR #${pr.number}: direct merge succeeded (${directMerge.sha.slice(0, 7)}).`);
+      return {
+        kind: "labeled",
+        label: FLYWHEEL_AUTO_MERGE_LABEL,
+        autoMergeEnabled: false,
+        merged: true,
+        autoMergeReason: result.reason
+      };
     }
     log.warning(
-      `PR #${pr.number}: could not enable native auto-merge \u2014 ${result.reason}. Label applied; merge requires manual action.`
+      `PR #${pr.number}: native auto-merge and direct merge both failed \u2014 auto-merge: ${result.reason}; direct: ${directMerge.reason}. Label applied; merge requires manual action.`
     );
     return {
       kind: "labeled",
       label: FLYWHEEL_AUTO_MERGE_LABEL,
       autoMergeEnabled: false,
-      autoMergeReason: result.reason
+      merged: false,
+      autoMergeReason: result.reason,
+      directMergeReason: directMerge.reason
     };
   }
   await gh.addLabels(pr.number, [FLYWHEEL_NEEDS_REVIEW_LABEL]);
@@ -31305,7 +31348,12 @@ async function runPrFlow({ pr, config, gh, log }) {
     await gh.disableAutoMerge(pr.nodeId);
   }
   log.info(`PR #${pr.number}: ${matchKey} not in auto_merge list for ${branch.name} \u2192 needs review.`);
-  return { kind: "labeled", label: FLYWHEEL_NEEDS_REVIEW_LABEL, autoMergeEnabled: false };
+  return {
+    kind: "labeled",
+    label: FLYWHEEL_NEEDS_REVIEW_LABEL,
+    autoMergeEnabled: false,
+    merged: false
+  };
 }
 function findBranch(config, baseRef) {
   for (const stream of config.streams) {
