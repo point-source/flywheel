@@ -774,9 +774,28 @@ The entrypoint workflows list all three branch names in their `branches:` filter
 
 ---
 
+## Quality workflow contract
+
+The quality workflow is invoked by `pr-lifecycle` via `workflow_dispatch` and receives:
+
+```yaml
+inputs:
+  pr_number:
+    required: true
+    type: string
+  sha:
+    required: true
+    type: string
+```
+
+The workflow is expected to (1) check out the repo at `inputs.sha`, (2) run whatever lint/test/static-analysis the adopter wants, and (3) post check results against `inputs.sha` (e.g., via `actions/checkout` + a check-runs API call, or simply by exiting non-zero). The orchestrator polls for completion and treats the workflow's `conclusion` as the merge gate.
+
+`version` and `environment` are intentionally **not** passed — at PR-open time the version is not yet computed (it depends on what else lands first; see "Version computation rules"), and `environment` doesn't apply to PR validation. Quality is about whether THIS PR's commits meet the bar, independent of where they will eventually be deployed.
+
+See `templates/pipeline-quality.yml.example` for a starter.
+
 ## Open questions / deferred decisions
 
-- **Quality check interface:** What inputs does `pipeline-quality.yml` receive? Likely `version`, `environment`, and `pr_number`. To be specified when quality check integration is designed.
 - **Notification hooks:** Should the pipeline post Slack/email notifications on release? Out of scope for v1, can be added as a post-publish step in user-defined `pipeline-publish.yml`.
 - **Monorepo support:** Multiple releasable packages in one repo. Not in scope for v1 — `release-please` supports this via manifest mode and could be integrated later.
 - **Release branch backport:** In `full` mode, if a `fix` merges to `main` directly (e.g. emergency), should it be automatically back-ported to `staging` and `develop`? Currently not handled — the assumption is that all changes flow bottom-up.
