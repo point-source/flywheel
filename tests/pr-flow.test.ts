@@ -176,6 +176,63 @@ describe("runPrFlow", () => {
     expect(gh.createdChecks[0]!.headSha).toMatch(/^abcdef/);
   });
 
+  it("label flip: PR previously labeled needs-review now eligible (retitled feat: → fix:) → label flipped, auto-merge enabled", async () => {
+    const gh = createFakeGh({
+      pullCommits: { 7: [makeCommit("a", "fix: actually a fix")] },
+      prLabels: { 7: [FLYWHEEL_NEEDS_REVIEW_LABEL] },
+    });
+    const { log } = silentLogger();
+
+    await runPrFlow({
+      pr: makePR({
+        title: "fix: actually a fix",
+        labels: [FLYWHEEL_NEEDS_REVIEW_LABEL],
+      }),
+      config: baseConfig,
+      gh,
+      log,
+    });
+
+    expect(gh.prLabels[7]).toContain(FLYWHEEL_AUTO_MERGE_LABEL);
+    expect(gh.prLabels[7]).not.toContain(FLYWHEEL_NEEDS_REVIEW_LABEL);
+    expect(gh.autoMergeEnabledFor).toContain("PR_node_7");
+    expect(gh.autoMergeDisabledFor).toEqual([]);
+  });
+
+  it("idempotent across two consecutive runs against the same fakeGh — final state matches first run, no extra updatePR", async () => {
+    const gh = createFakeGh({
+      pullCommits: { 7: [makeCommit("a", "fix(auth): handle token refresh race condition")] },
+    });
+    const { log } = silentLogger();
+
+    const initialPr = makePR();
+    await runPrFlow({ pr: initialPr, config: baseConfig, gh, log });
+
+    const writtenTitle = gh.prTitles[7] ?? initialPr.title;
+    const writtenBody = gh.prBodies[7] ?? initialPr.body;
+    const labelsAfterRun1 = [...(gh.prLabels[7] ?? [])];
+
+    // Simulate GitHub returning the post-run-1 state on a retry.
+    const updatedPr = {
+      ...initialPr,
+      title: writtenTitle,
+      body: writtenBody,
+      labels: labelsAfterRun1,
+    };
+    await runPrFlow({ pr: updatedPr, config: baseConfig, gh, log });
+
+    // State idempotency: labels are the AUTO_MERGE singleton, no duplication or flip.
+    expect(gh.prLabels[7]).toEqual([FLYWHEEL_AUTO_MERGE_LABEL]);
+    // Title/body unchanged from run-1 result.
+    expect(gh.prTitles[7] ?? writtenTitle).toBe(writtenTitle);
+    expect(gh.prBodies[7] ?? writtenBody).toBe(writtenBody);
+    // Body-rewrite idempotency: updatePR only fired on run 1.
+    expect(gh.calls.filter((c) => c.method === "updatePR")).toHaveLength(1);
+    // Never tried to remove the auto-merge label or disable auto-merge.
+    expect(gh.calls.filter((c) => c.method === "removeLabel")).toEqual([]);
+    expect(gh.autoMergeDisabledFor).toEqual([]);
+  });
+
   it("does not call updatePR when title and body are already correct", async () => {
     const idempotentTitle = "fix: handle token refresh race condition";
     const gh = createFakeGh({
