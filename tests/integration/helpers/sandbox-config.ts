@@ -38,6 +38,7 @@ export const sandboxConfig: FlywheelConfig = {
       branches: [
         {
           name: "integration-test-base",
+          prerelease: "int",
           auto_merge: ["fix", "chore", "perf", "style", "test"],
         },
       ],
