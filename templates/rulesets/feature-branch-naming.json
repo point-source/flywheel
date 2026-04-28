@@ -11,9 +11,12 @@
   "bypass_actors": [],
   "rules": [
     {
-      "type": "creation",
+      "type": "branch_name_pattern",
       "parameters": {
-        "name_pattern": "^(feat|fix|chore|refactor|perf|style|test|docs)/.+$"
+        "operator": "regex",
+        "pattern": "^(feat|fix|chore|refactor|perf|style|test|docs)/.+$",
+        "name": "swarmflow / branch name prefix",
+        "negate": false
       }
     }
   ]
