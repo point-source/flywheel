@@ -65,8 +65,16 @@ import via either:
   orchestrator's job. If you rename the `orchestrate` job in your
   entrypoint workflows, update this context.
 - Linear history required (squash or rebase only)
-- Merge queue rule included; remove if your plan does not support it
 - Bypass for the swarmflow App so its push during promote/release works
+
+**Merge queue (optional, manual setup):** the default template does NOT
+include a merge_queue rule because the API requires a long parameters block
+(merge_method, grouping_strategy, timeouts, etc.) and many adopters won't
+need it. To enable: in the GitHub UI, edit the "swarmflow / managed
+branches" ruleset and add a "Merge queue" rule — the UI auto-fills sensible
+defaults. The pipeline auto-detects merge queue at runtime via the
+GitHub API and routes to the enqueue API instead of native auto-merge
+when it's active.
 
 ## Ruleset 2 — PR conversation hygiene
 

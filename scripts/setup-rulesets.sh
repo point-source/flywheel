@@ -16,10 +16,11 @@
 #                              managed  - "swarmflow / managed branches"
 #                              tags     - "swarmflow / version tags"
 #                              naming   - "swarmflow / feature branch naming"
-#                            The merge_queue rule inside `managed` may fail on
-#                            plans without merge queue available; if so, edit
-#                            templates/rulesets/managed-branches.json to
-#                            remove the `{ "type": "merge_queue" }` line.
+#
+#                            The default `managed` template does NOT include
+#                            the merge_queue rule (the API requires a long
+#                            parameters block; UI setup is easier). See
+#                            docs/RULESETS.md "Merge queue (optional)".
 #
 #   -h, --help               Show this help.
 #

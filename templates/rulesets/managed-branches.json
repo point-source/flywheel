@@ -34,7 +34,6 @@
           { "context": "orchestrate / run" }
         ]
       }
-    },
-    { "type": "merge_queue" }
+    }
   ]
 }
