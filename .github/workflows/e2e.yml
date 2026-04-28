@@ -2,6 +2,7 @@ name: E2E tests
 on:
   push:
     branches: ["develop"]
+  workflow_dispatch:
 
 concurrency:
   group: e2e-${{ github.ref }}
