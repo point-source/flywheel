@@ -54,7 +54,7 @@ Replace `<APP_INSTALLATION_ACTOR_ID>` with your installed App's actor id
       "parameters": {
         "strict_required_status_checks_policy": false,
         "required_status_checks": [
-          { "context": "pipeline / pr-lifecycle / lifecycle" }
+          { "context": "orchestrate / run" }
         ]
       }
     },
