@@ -92,10 +92,13 @@ export async function runPrLifecycleWithOctokit(
   //      quality, when configured as a required check via branch protection
   //      per docs/RULESETS.md). We don't need to gate it ourselves.
   //
-  // The quality dispatch + body re-render still happens below for adopter
-  // visibility (learning #5). If quality fails, we throw at the end so the
-  // run surfaces the failure; auto-merge stays enabled and waits for the
-  // required check, but never fires until quality is green on a future push.
+  // Auto-merge alone is unreliable in practice: e2e validation observed
+  // PRs sitting at `mergeStateStatus: BLOCKED` indefinitely with all
+  // required checks SUCCESS — auto-merge never firing. We keep enabling
+  // it (cheap, and useful as a safety net for queued/strict scenarios)
+  // but ALSO call `pulls.merge` directly after quality passes; the bot's
+  // ruleset bypass lets that direct call succeed even when the native
+  // engine gets stuck. See the post-quality block below.
   if (eligible) {
     const useQueue = await isMergeQueueEnabled({
       octokit,
