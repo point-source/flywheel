@@ -81449,7 +81449,272 @@ function promote_parseOwnerRepo(repo) {
     return [owner, name];
 }
 
+;// CONCATENATED MODULE: ./src/core/changelog.ts
+const SECTION_TITLES = {
+    feat: 'Features',
+    fix: 'Bug Fixes',
+    perf: 'Performance Improvements',
+    refactor: 'Code Refactoring',
+    docs: 'Documentation',
+    style: 'Styles',
+    test: 'Tests',
+    chore: 'Miscellaneous Chores',
+};
+const SECTION_ORDER = ['feat', 'fix', 'perf', 'refactor', 'docs', 'style', 'test', 'chore'];
+function changelog_renderChangelogFragment(opts) {
+    const host = opts.host ?? 'https://github.com';
+    const date = opts.date ?? new Date().toISOString().slice(0, 10);
+    const repoUrl = `${host}/${opts.owner}/${opts.repository}`;
+    // Header: `## [v1.2.3](compareUrl) (date)` if we have a previous version,
+    // else `## v1.2.3 (date)`.
+    let header;
+    if (opts.previousVersion) {
+        const compareUrl = `${repoUrl}/compare/v${opts.previousVersion}...v${opts.version}`;
+        header = `## [${opts.version}](${compareUrl}) (${date})`;
+    }
+    else {
+        header = `## ${opts.version} (${date})`;
+    }
+    const groups = changelog_groupByType(opts.commits);
+    const sections = [];
+    // Breaking-change section first if any commits are breaking.
+    const breaking = opts.commits.filter((c) => c.breaking);
+    if (breaking.length > 0) {
+        const lines = ['### ⚠ BREAKING CHANGES', ''];
+        for (const c of breaking) {
+            lines.push(`* ${changelog_formatCommitLine(c, repoUrl)}`);
+        }
+        sections.push(lines.join('\n'));
+    }
+    for (const type of SECTION_ORDER) {
+        const group = groups[type];
+        if (!group || group.length === 0)
+            continue;
+        const title = SECTION_TITLES[type] ?? type;
+        const lines = [`### ${title}`, ''];
+        for (const c of group) {
+            lines.push(`* ${changelog_formatCommitLine(c, repoUrl)}`);
+        }
+        sections.push(lines.join('\n'));
+    }
+    // Other types (not in SECTION_ORDER) — append at end.
+    const otherTypes = Object.keys(groups).filter((t) => !SECTION_ORDER.includes(t));
+    for (const type of otherTypes) {
+        const group = groups[type];
+        const lines = [`### ${type}`, ''];
+        for (const c of group) {
+            lines.push(`* ${changelog_formatCommitLine(c, repoUrl)}`);
+        }
+        sections.push(lines.join('\n'));
+    }
+    if (sections.length === 0) {
+        sections.push('_No notable changes._');
+    }
+    return [header, '', ...sections].join('\n\n') + '\n';
+}
+function changelog_formatCommitLine(c, repoUrl) {
+    const scope = c.scope ? `**${c.scope}:** ` : '';
+    const sha = c.sha.slice(0, 7);
+    return `${scope}${c.bareMessage} ([${sha}](${repoUrl}/commit/${c.sha}))`;
+}
+function changelog_groupByType(commits) {
+    const out = {};
+    for (const c of commits) {
+        if (!c.type)
+            continue;
+        (out[c.type] ??= []).push(c);
+    }
+    return out;
+}
+/**
+ * Prepend a fragment to existing CHANGELOG.md content. Ensures exactly one
+ * blank line between the new fragment and the prior content. Returns the
+ * full new file contents.
+ */
+function prependFragment(existing, fragment) {
+    const trimmedFragment = fragment.replace(/\s+$/, '');
+    const trimmedExisting = existing.replace(/^\s+/, '');
+    if (trimmedExisting === '')
+        return trimmedFragment + '\n';
+    return trimmedFragment + '\n\n' + trimmedExisting;
+}
+
+;// CONCATENATED MODULE: ./src/commands/release.ts
+
+
+
+
+
+
+
+
+/**
+ * Action entry point: mint an App token, then run the release pipeline.
+ * Tests use `runReleaseWithOctokit` to skip the auth bootstrap.
+ */
+async function runRelease(inputs) {
+    const [owner, repo] = release_parseOwnerRepo(inputs.repo);
+    const token = await mintAppToken({
+        appId: inputs.appId,
+        privateKey: inputs.appPrivateKey,
+        owner,
+        repo,
+    });
+    const octokit = getOctokit(token);
+    const { loadConfig } = await Promise.resolve(/* import() */).then(__nccwpck_require__.bind(__nccwpck_require__, 9263));
+    const config = loadConfig();
+    const git = createCliGitProvider();
+    await runReleaseWithOctokit(octokit, config, git, inputs);
+}
+/**
+ * Run the release pipeline against a pre-built Octokit client.
+ *
+ * Sequence (learning #11 ordering matters): list commits since last release
+ * tag → compute bump and version → if hasChanges: render changelog →
+ * **tag branch tip → create GitHub Release → commit CHANGELOG.md** →
+ * dispatch build with environment=production. The CHANGELOG.md commit
+ * comes LAST so a crash mid-flow leaves a tag + release as the recovery
+ * point (re-running sees the tag and short-circuits). If the order were
+ * reversed, a crash after the file commit but before tagging would put
+ * the repo in a confusing half-released state.
+ *
+ * Chore-only push: `bump=none` → `hasChanges=false` → log + return. No
+ * tag, no release, no build. Per spec §440.
+ */
+async function runReleaseWithOctokit(octokit, config, git, inputs) {
+    const [owner, repo] = release_parseOwnerRepo(inputs.repo);
+    const baseTag = await git.describeReachableReleaseTag();
+    const rawCommits = await release_listCommitsSince(octokit, owner, repo, baseTag, inputs.branch);
+    const commits = parseCommits(rawCommits);
+    const bump = computeBump(commits);
+    const computed = await computeVersion({
+        branch: inputs.branch,
+        bump,
+        initialVersion: config.initial_version,
+        git,
+    });
+    if (!computed.hasChanges) {
+        core.info(`chore-only push to main — no release cut`);
+        return;
+    }
+    const previousVersion = baseTag ? baseTag.replace(/^v/, '') : undefined;
+    const fragment = changelog_renderChangelogFragment({
+        commits,
+        version: computed.version,
+        previousVersion,
+        owner,
+        repository: repo,
+    });
+    if (inputs.dryRun) {
+        core.info(`[dry-run] would release v${computed.version}`);
+        core.info(`[dry-run] changelog fragment:\n${fragment}`);
+        return;
+    }
+    // 1. Tag the branch tip.
+    const branchSha = await release_tagBranchTip(octokit, owner, repo, inputs.branch, computed.version);
+    core.info(`tagged main as v${computed.version} @ ${branchSha}`);
+    // 2. Create GitHub Release. This is the public publication point — once
+    //    this exists, the version is "out". Subsequent steps are recoverable.
+    await octokit.rest.repos.createRelease({
+        owner,
+        repo,
+        tag_name: `v${computed.version}`,
+        name: `v${computed.version}`,
+        body: fragment,
+        target_commitish: branchSha,
+    });
+    core.info(`created GitHub Release v${computed.version}`);
+    // 3. Commit CHANGELOG.md update. Must come AFTER tag+release per learning
+    //    #11 — recovery semantics depend on the tag being authoritative.
+    await commitChangelogUpdate(octokit, owner, repo, inputs.branch, fragment, computed.version);
+    core.info(`committed CHANGELOG.md update for v${computed.version}`);
+    // 4. Dispatch the production build. The build workflow is responsible
+    //    for triggering publish on completion (per spec §283).
+    await dispatchWorkflow({
+        octokit,
+        owner,
+        repo,
+        workflow: config.pipeline.workflows.build,
+        ref: inputs.branch,
+        inputs: {
+            version: computed.version,
+            environment: 'production',
+            changelog: fragment,
+            artifact_path: 'dist/',
+        },
+    });
+    core.info(`build dispatched for production @ v${computed.version}`);
+}
+async function release_listCommitsSince(octokit, owner, repo, baseTag, branch) {
+    if (baseTag) {
+        const { data } = await octokit.rest.repos.compareCommits({
+            owner,
+            repo,
+            base: baseTag,
+            head: branch,
+        });
+        return data.commits.map((c) => ({ sha: c.sha, message: c.commit.message }));
+    }
+    const { data } = await octokit.rest.repos.listCommits({
+        owner,
+        repo,
+        sha: branch,
+        per_page: 100,
+    });
+    return data.map((c) => ({ sha: c.sha, message: c.commit.message }));
+}
+async function release_tagBranchTip(octokit, owner, repo, branch, version) {
+    const { data: branchData } = await octokit.rest.repos.getBranch({ owner, repo, branch });
+    const sha = branchData.commit.sha;
+    await octokit.rest.git.createRef({
+        owner,
+        repo,
+        ref: `refs/tags/v${version}`,
+        sha,
+    });
+    return sha;
+}
+async function commitChangelogUpdate(octokit, owner, repo, branch, fragment, version) {
+    let existingContent = '';
+    let existingSha;
+    try {
+        const { data } = await octokit.rest.repos.getContent({
+            owner,
+            repo,
+            path: 'CHANGELOG.md',
+            ref: branch,
+        });
+        if (Array.isArray(data) || data.type !== 'file') {
+            throw new Error('CHANGELOG.md is unexpectedly a directory');
+        }
+        existingContent = Buffer.from(data.content, 'base64').toString('utf8');
+        existingSha = data.sha;
+    }
+    catch (err) {
+        // 404 = file doesn't exist yet; that's expected on first release.
+        if (err.status !== 404)
+            throw err;
+    }
+    const newContent = prependFragment(existingContent, fragment);
+    await octokit.rest.repos.createOrUpdateFileContents({
+        owner,
+        repo,
+        path: 'CHANGELOG.md',
+        message: `chore(release): v${version}\n\n[skip ci]`,
+        content: Buffer.from(newContent, 'utf8').toString('base64'),
+        sha: existingSha,
+        branch,
+    });
+}
+function release_parseOwnerRepo(repo) {
+    const [owner, name] = repo.split('/');
+    if (!owner || !name)
+        throw new Error(`invalid GITHUB_REPOSITORY: ${repo}`);
+    return [owner, name];
+}
+
 ;// CONCATENATED MODULE: ./src/index.ts
+
 
 
 
@@ -81494,6 +81759,14 @@ async function run() {
             });
             return;
         case 'release':
+            await runRelease({
+                appId: core.getInput('app_id', { required: true }),
+                appPrivateKey: core.getInput('app_private_key', { required: true }),
+                branch: 'main',
+                dryRun: core.getBooleanInput('dry_run'),
+                repo: requireRepo(),
+            });
+            return;
         case 'render-pr-body':
             core.setFailed(`Command "${command}" is not yet implemented`);
             return;

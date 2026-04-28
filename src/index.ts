@@ -1,6 +1,7 @@
 import * as core from '@actions/core';
 import { runPrLifecycle } from './commands/pr-lifecycle.js';
 import { runPromote } from './commands/promote.js';
+import { runRelease } from './commands/release.js';
 
 type Command = 'pr-lifecycle' | 'promote' | 'release' | 'render-pr-body' | 'hello-world';
 
@@ -50,6 +51,14 @@ async function run(): Promise<void> {
       });
       return;
     case 'release':
+      await runRelease({
+        appId: core.getInput('app_id', { required: true }),
+        appPrivateKey: core.getInput('app_private_key', { required: true }),
+        branch: 'main',
+        dryRun: core.getBooleanInput('dry_run'),
+        repo: requireRepo(),
+      });
+      return;
     case 'render-pr-body':
       core.setFailed(`Command "${command}" is not yet implemented`);
       return;
