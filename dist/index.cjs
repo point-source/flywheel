@@ -30784,7 +30784,7 @@ var ALLOWED_AUTO_MERGE_ENTRIES = /* @__PURE__ */ new Set([
   ...VALID_TYPES,
   ...VALID_TYPES.map((t) => `${t}!`)
 ]);
-var TITLE_RE = /^([a-z]+)(?:\(([^)]+)\))?(!?):\s+(.+)$/;
+var TITLE_RE = /^([a-z]+)(?:\(([^)]+)\))?(!?):\s*(\S.*)$/;
 function parseTitle(title) {
   const match = TITLE_RE.exec(title.trim());
   if (!match) return null;

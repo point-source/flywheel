@@ -19,7 +19,7 @@ export const ALLOWED_AUTO_MERGE_ENTRIES = new Set<string>([
   ...VALID_TYPES.map((t) => `${t}!`),
 ]);
 
-const TITLE_RE = /^([a-z]+)(?:\(([^)]+)\))?(!?):\s+(.+)$/;
+const TITLE_RE = /^([a-z]+)(?:\(([^)]+)\))?(!?):\s*(\S.*)$/;
 
 export function parseTitle(title: string): ParsedTitle | null {
   const match = TITLE_RE.exec(title.trim());

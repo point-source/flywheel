@@ -42,8 +42,20 @@ describe("parseTitle", () => {
   it("rejects non-conventional titles", () => {
     expect(parseTitle("just a regular sentence")).toBeNull();
     expect(parseTitle("Fix: capitalised type is not allowed")).toBeNull();
-    expect(parseTitle("fix:no-space-after-colon")).toBeNull();
     expect(parseTitle("nope: not a real type")).toBeNull();
+    expect(parseTitle("fix:")).toBeNull();
+    expect(parseTitle("fix:   ")).toBeNull();
+  });
+
+  it("accepts missing-space-after-colon as a typo to be normalized downstream", () => {
+    const p = parseTitle("fix(auth):handle token refresh");
+    expect(p).toEqual({
+      type: "fix",
+      scope: "auth",
+      breaking: false,
+      description: "handle token refresh",
+      raw: "fix(auth):handle token refresh",
+    });
   });
 });
 
