@@ -30,7 +30,7 @@ Flywheel is not a long-running orchestrator. It is a collection of short-lived, 
 
 ### 1. `pr-conductor` (Flywheel's only custom code)
 
-A TypeScript GitHub Action, published to the GitHub Actions marketplace as `flywheel-ci/flywheel@v1`. Implemented with Deno for native TypeScript execution without a compilation step.
+A TypeScript GitHub Action, published to the GitHub Actions marketplace as `point-source/flywheel@v1`. Implemented with Deno for native TypeScript execution without a compilation step.
 
 Reacts to `pull_request` events and `push` events on managed branches. It is stateless — reads `.flywheel.yml`, reads/writes the PR or repo state, and exits. Holds no state between runs.
 
@@ -407,7 +407,7 @@ This determines whether the promotion PR itself gets `flywheel:auto-merge` or `f
 
 ### Distribution
 
-Flywheel is published to the GitHub Actions marketplace as `flywheel-ci/flywheel@v1`. Adopters reference it directly — no forking required. The marketplace Action contains `pr-conductor` (TypeScript/Deno). The two thin entrypoint workflow files (`flywheel-pr.yml`, `flywheel-push.yml`) are copied once into the adopting repo.
+Flywheel is published to the GitHub Actions marketplace as `point-source/flywheel@v1`. Adopters reference it directly — no forking required. The marketplace Action contains `pr-conductor` (TypeScript/Deno). The two thin entrypoint workflow files (`flywheel-pr.yml`, `flywheel-push.yml`) are copied once into the adopting repo.
 
 ### What you need
 
@@ -448,7 +448,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: flywheel-ci/flywheel@v1
+      - uses: point-source/flywheel@v1
         with:
           event: pull_request
           token: ${{ secrets.GH_PAT }}
@@ -472,7 +472,7 @@ jobs:
         with:
           fetch-depth: 0
           token: ${{ secrets.GH_PAT }}
-      - uses: flywheel-ci/flywheel@v1
+      - uses: point-source/flywheel@v1
         id: flywheel
         with:
           event: push

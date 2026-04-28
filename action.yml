@@ -1,6 +1,6 @@
 name: Flywheel
 description: GitHub Actions-native CI/CD orchestration for teams and AI agent swarms.
-author: flywheel-ci
+author: point-source
 branding:
   icon: rotate-cw
   color: blue

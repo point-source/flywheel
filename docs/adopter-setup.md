@@ -20,7 +20,7 @@ Flywheel needs a token with these scopes:
 Either:
 
 - **Personal Access Token (classic)** — quickest path. Create one with `repo` + `workflow` scope and store it as repo secret `GH_PAT`. The samples below use this.
-- **GitHub App installation token** — recommended for production. Create a GitHub App with the same scopes, install it on your repo, and store its `APP_ID` + `APP_PRIVATE_KEY` as secrets. Use [`actions/create-github-app-token`](https://github.com/actions/create-github-app-token) at the start of each workflow to mint a short-lived installation token, then pass that to `flywheel-ci/flywheel`. See GitHub's [Creating a GitHub App](https://docs.github.com/en/apps/creating-github-apps/about-creating-github-apps/creating-a-github-app) docs.
+- **GitHub App installation token** — recommended for production. Create a GitHub App with the same scopes, install it on your repo, and store its `APP_ID` + `APP_PRIVATE_KEY` as secrets. Use [`actions/create-github-app-token`](https://github.com/actions/create-github-app-token) at the start of each workflow to mint a short-lived installation token, then pass that to `point-source/flywheel`. See GitHub's [Creating a GitHub App](https://docs.github.com/en/apps/creating-github-apps/about-creating-github-apps/creating-a-github-app) docs.
 
 `GITHUB_TOKEN` works for most operations but cannot trigger downstream workflows from PRs it creates — promotion PRs opened with `GITHUB_TOKEN` will not fire your `flywheel-pr.yml`. Use a PAT or App token for the dogfooded promotion flow.
 
@@ -85,7 +85,7 @@ flywheel:
 
 ## 3. Add the Flywheel workflows
 
-Both files reference `flywheel-ci/flywheel@v1` — a floating major tag that picks up bug-fix and feature releases automatically. Pin to an exact version like `flywheel-ci/flywheel@v1.2.3` if you need fully reproducible runs.
+Both files reference `point-source/flywheel@v1` — a floating major tag that picks up bug-fix and feature releases automatically. Pin to an exact version like `point-source/flywheel@v1.2.3` if you need fully reproducible runs.
 
 Create `.github/workflows/flywheel-pr.yml`:
 
@@ -103,7 +103,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: flywheel-ci/flywheel@v1
+      - uses: point-source/flywheel@v1
         with:
           event: pull_request
           token: ${{ secrets.GH_PAT }}
@@ -127,7 +127,7 @@ jobs:
         with:
           fetch-depth: 0
           token: ${{ secrets.GH_PAT }}
-      - uses: flywheel-ci/flywheel@v1
+      - uses: point-source/flywheel@v1
         id: flywheel
         with:
           event: push

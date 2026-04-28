@@ -1,20 +1,20 @@
 # Sandbox repo setup
 
-This file documents the one-time provisioning of `flywheel-ci/flywheel-sandbox`,
+This file documents the one-time provisioning of `point-source/flywheel-sandbox`,
 the repo that backs Flywheel's Layer 2 (integration) and Layer 3 (E2E) tests.
 See [`testing_strategy.md`](../testing_strategy.md) for the testing architecture.
 
 ## What it is
 
-A public repository (`flywheel-ci/flywheel-sandbox`) used exclusively to host
+A public repository (`point-source/flywheel-sandbox`) used exclusively to host
 real PRs, real labels, and real auto-merge enablement against the GitHub API.
 Tests in `tests/integration/` and (later) `tests/e2e/` run against this repo —
-never against `swarmflow` itself or any production target.
+never against `flywheel` itself or any production target.
 
 ## Provisioning checklist
 
 1. **Create the repo.**
-   - Owner: `flywheel-ci` (org).
+   - Owner: `point-source` (org).
    - Visibility: public.
    - Initialize with a README.
    - No template, no license required (it's test infrastructure, not user-facing).
@@ -39,7 +39,7 @@ never against `swarmflow` itself or any production target.
    - Allow auto-merge in repo settings (Settings → General → Pull Requests).
 
 5. **Mint a fine-grained Personal Access Token** scoped only to
-   `flywheel-ci/flywheel-sandbox`:
+   `point-source/flywheel-sandbox`:
    - **Contents**: read and write
    - **Pull requests**: read and write
    - **Issues**: read and write (for labels)
@@ -47,7 +47,7 @@ never against `swarmflow` itself or any production target.
    - **Metadata**: read (always required)
 
 6. **Store the PAT** as the `SANDBOX_GH_PAT` repository secret on the
-   `swarmflow` repo (Settings → Secrets and variables → Actions → New repository
+   `flywheel` repo (Settings → Secrets and variables → Actions → New repository
    secret). Rotate every 90 days; document the rotation date in this file.
 
 ## Daily operating contract
@@ -61,9 +61,9 @@ never against `swarmflow` itself or any production target.
   cancelled CI run), prune with:
 
   ```bash
-  gh api -X GET /repos/flywheel-ci/flywheel-sandbox/branches --jq '.[].name' \
+  gh api -X GET /repos/point-source/flywheel-sandbox/branches --jq '.[].name' \
     | grep '^test/' \
-    | xargs -I{} gh api -X DELETE /repos/flywheel-ci/flywheel-sandbox/git/refs/heads/{}
+    | xargs -I{} gh api -X DELETE /repos/point-source/flywheel-sandbox/git/refs/heads/{}
   ```
 
 ## When to use a different sandbox

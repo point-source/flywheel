@@ -2,7 +2,7 @@ import * as github from "@actions/github";
 
 import { createGitHubClient, type GitHubClient } from "../../../src/github.js";
 
-export const SANDBOX_OWNER = "flywheel-ci";
+export const SANDBOX_OWNER = "point-source";
 export const SANDBOX_REPO = "flywheel-sandbox";
 export const SANDBOX_REPO_FULL = `${SANDBOX_OWNER}/${SANDBOX_REPO}`;
 export const INTEGRATION_BASE = "integration-test-base";

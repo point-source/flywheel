@@ -1,7 +1,7 @@
 import type { FlywheelConfig } from "../../../src/types.js";
 
 /**
- * Mirror of the .flywheel.yml committed to flywheel-ci/flywheel-sandbox.
+ * Mirror of the .flywheel.yml committed to point-source/flywheel-sandbox.
  * Kept in TS form so integration tests don't depend on the sandbox repo's
  * working copy at test time. If the sandbox config changes, update this too.
  */

@@ -57,7 +57,7 @@ The action references itself once published. Until the first release, workflows 
 2. Open `rewrite/flywheel → main` PR. Merge.
 3. semantic-release fires on the push to `main` and cuts `v1.0.0`. GitHub Release published.
 4. Manually move the floating `v1` tag to that commit (Phase 6's `release-major-tag.yml` automates this going forward).
-5. Open a follow-up PR flipping `flywheel-pr.yml` and `flywheel-push.yml` from `uses: ./` to `uses: flywheel-ci/flywheel@v1`. From here on, swarmflow consumes itself from the marketplace.
+5. Open a follow-up PR flipping `flywheel-pr.yml` and `flywheel-push.yml` from `uses: ./` to `uses: point-source/flywheel@v1`. From here on, flywheel consumes itself from the marketplace.
 
 ## Marketplace listing
 

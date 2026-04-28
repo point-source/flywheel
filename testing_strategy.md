@@ -14,7 +14,7 @@ preserved below as a roadmap.
 | Integration | `pr-conductor` against real GitHub API | Seconds | **In progress** | PR open/sync; push to `develop` (skipped on forks) |
 | End-to-end | Full Actions event chain on sandbox | Minutes | **Deferred** | (planned) merge to `develop` |
 
-Sandbox repo (`flywheel-ci/flywheel-sandbox`) provisioning is documented in
+Sandbox repo (`point-source/flywheel-sandbox`) provisioning is documented in
 [`docs/sandbox-setup.md`](docs/sandbox-setup.md). Layer 2 tests require it.
 
 ---
@@ -104,7 +104,7 @@ no errors.
 ## Layer 2 — Integration tests
 
 Exercises `pr-conductor`'s production code paths against the real GitHub API
-on `flywheel-ci/flywheel-sandbox`. These are not Actions-workflow tests —
+on `point-source/flywheel-sandbox`. These are not Actions-workflow tests —
 they invoke the same exported functions production uses (`runPrFlow`,
 `runPromotion`) with a real-Octokit-backed `GitHubClient` instead of the
 fake.
@@ -165,7 +165,7 @@ forces `fileParallelism: false` and a 60 second default timeout.
 ```
 tests/integration/
   helpers/
-    sandbox-client.ts     # real-Octokit GitHubClient bound to flywheel-ci/flywheel-sandbox
+    sandbox-client.ts     # real-Octokit GitHubClient bound to point-source/flywheel-sandbox
     test-pr.ts            # createTestPR, closeTestPR, unique branch naming
     teardown.ts           # afterEach cleanup contract
   pr-conductor/

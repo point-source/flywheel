@@ -2,7 +2,7 @@
 
 Thanks for hacking on Flywheel. This guide covers everything you need to make a change, validate it locally, and submit a PR with confidence.
 
-> The repo on disk is named **swarmflow**; the published action and product are named **Flywheel**. They refer to the same thing.
+> The GitHub repo, the published action, and the product are all named **Flywheel** (`point-source/flywheel`).
 
 ## Prerequisites
 
@@ -112,11 +112,11 @@ When your change could meaningfully break adopters (schema changes, validation s
    ```
 3. Copy `flywheel-pr.yml` / `flywheel-push.yml` from [`docs/adopter-setup.md`](./docs/adopter-setup.md), but replace
    ```yaml
-   uses: flywheel-ci/flywheel@v1
+   uses: point-source/flywheel@v1
    ```
    with a reference to your fork on the branch you're testing:
    ```yaml
-   uses: <your-handle>/swarmflow@<your-branch>
+   uses: <your-handle>/flywheel@<your-branch>
    ```
    Push your branch (with a freshly built `dist/index.js`) so GitHub Actions can resolve the ref.
 4. Add a `GH_PAT` secret with the scopes listed in [`docs/adopter-setup.md`](./docs/adopter-setup.md#1-create-a-token).
@@ -138,7 +138,7 @@ Before opening a PR:
 `testing_strategy.md` documents three test layers:
 
 - **Layer 1 (unit)** — implemented. `tests/*.test.ts` covers parsing, validation, increment computation, label decisions, promotion dedup, idempotency, and the GraphQL auto-merge fallback. Run `npm test`.
-- **Layer 2 (integration)** — being introduced. Real-Octokit tests under `tests/integration/` running against `flywheel-ci/flywheel-sandbox`. Requires the `SANDBOX_GH_PAT` secret; provisioning is documented in [`docs/sandbox-setup.md`](./docs/sandbox-setup.md).
+- **Layer 2 (integration)** — being introduced. Real-Octokit tests under `tests/integration/` running against `point-source/flywheel-sandbox`. Requires the `SANDBOX_GH_PAT` secret; provisioning is documented in [`docs/sandbox-setup.md`](./docs/sandbox-setup.md).
 - **Layer 3 (E2E)** — deferred. Sandbox branches are pre-positioned so Layer 3 can be added without re-provisioning.
 
 Until Layer 2 lands fully, the dogfood and personal-sandbox loops above are still the primary end-to-end validation path.
