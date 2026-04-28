@@ -1,0 +1,6 @@
+flywheel:
+  streams:
+    - name: main-line
+      branches:
+        - name: main
+          auto-merge: [fix]

@@ -1,0 +1,8 @@
+flywheel:
+  streams:
+    - name: main-line
+      branches:
+        - name: develop
+          auto_merge: [fix]
+        - name: main
+          auto_merge: []
