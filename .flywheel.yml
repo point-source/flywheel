@@ -1,0 +1,18 @@
+# Provisional config — replaced in Phase 5 with the dogfood config targeting `main`.
+flywheel:
+  streams:
+    - name: main-line
+      branches:
+        - name: rewrite/flywheel
+          auto_merge:
+            - fix
+            - chore
+            - docs
+            - ci
+            - build
+            - refactor
+            - style
+            - test
+            - perf
+  merge_strategy: squash
+  initial_version: 0.1.0
