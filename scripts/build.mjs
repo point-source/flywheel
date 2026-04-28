@@ -6,7 +6,7 @@ await build({
   platform: "node",
   target: "node24",
   format: "cjs",
-  outfile: "dist/index.js",
+  outfile: "dist/index.cjs",
   minify: false,
   sourcemap: false,
   legalComments: "none",
