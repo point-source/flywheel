@@ -135,7 +135,13 @@ Before opening a PR:
 
 ## Status of `testing_strategy.md`
 
-`testing_strategy.md` describes the **target** three-layer test architecture (unit, integration via Octokit, end-to-end via an external sandbox repo). The repo currently implements **Layer 1 only** — vitest unit tests under `tests/` against fixtures in `test-fixtures/`. The integration helpers, polling utilities, and external sandbox repo (`flywheel-ci/flywheel-sandbox`) referenced in that doc are not yet built. Treat it as a roadmap, not a description of current state. Until those layers exist, the dogfood and personal-sandbox loops above are how you validate end-to-end behaviour.
+`testing_strategy.md` documents three test layers:
+
+- **Layer 1 (unit)** — implemented. `tests/*.test.ts` covers parsing, validation, increment computation, label decisions, promotion dedup, idempotency, and the GraphQL auto-merge fallback. Run `npm test`.
+- **Layer 2 (integration)** — being introduced. Real-Octokit tests under `tests/integration/` running against `flywheel-ci/flywheel-sandbox`. Requires the `SANDBOX_GH_PAT` secret; provisioning is documented in [`docs/sandbox-setup.md`](./docs/sandbox-setup.md).
+- **Layer 3 (E2E)** — deferred. Sandbox branches are pre-positioned so Layer 3 can be added without re-provisioning.
+
+Until Layer 2 lands fully, the dogfood and personal-sandbox loops above are still the primary end-to-end validation path.
 
 ## Other docs
 
