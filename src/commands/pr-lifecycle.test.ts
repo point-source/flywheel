@@ -230,6 +230,41 @@ describe('runPrLifecycleWithOctokit > human-review path', () => {
   });
 });
 
+// When the sandbox/adopter has `Allow auto-merge` disabled, the GraphQL
+// mutation throws "Auto merge is not allowed for this repository". We
+// translate that to a graceful degradation: a clear warning + a
+// human-review comment. The required check passes so reviewers can still
+// land the PR manually.
+describe('runPrLifecycleWithOctokit > auto-merge disabled fallback', () => {
+  it('posts a guidance comment and emits a warning when auto-merge is not allowed', async () => {
+    const mock = buildMockOctokit();
+    fixPr(mock);
+    mock.graphql.mockRejectedValueOnce(
+      new Error(
+        'Request failed due to following response errors:\n - Auto merge is not allowed for this repository',
+      ),
+    );
+    const warnSpy = vi.spyOn(core, 'warning').mockImplementation(() => undefined);
+
+    await runPrLifecycleWithOctokit(mock.octokit, buildConfig(), {
+      prNumber: 42,
+      sourceBranch: 'feature/x',
+      targetBranch: 'develop',
+      dryRun: false,
+      repo: 'point-source/sandbox',
+    });
+
+    // Warning mentions the setting and points at RULESETS.md.
+    expect(warnSpy).toHaveBeenCalled();
+    expect(warnSpy.mock.calls[0]![0]).toMatch(/Allow auto-merge/);
+    expect(warnSpy.mock.calls[0]![0]).toMatch(/RULESETS\.md/);
+
+    // A guidance comment is posted.
+    expect(mock.issuesCreateComment).toHaveBeenCalledOnce();
+    expect(mock.issuesCreateComment.mock.calls[0]![0].body).toMatch(/auto-merge is disabled/);
+  });
+});
+
 describe('runPrLifecycleWithOctokit > strict commit parsing', () => {
   it('throws if any commit is non-conventional (gates the required check)', async () => {
     const mock = buildMockOctokit();

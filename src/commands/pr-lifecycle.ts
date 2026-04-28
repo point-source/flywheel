@@ -130,6 +130,26 @@ export async function runPrLifecycleWithOctokit(
       dryRun: inputs.dryRun,
     });
     core.info(`auto-merge result: ${result}`);
+
+    // If the repo has `Allow auto-merge` disabled, fall back to a human-review
+    // comment so the run still succeeds and reviewers see a clear next-step.
+    // Spec §565 requires the toggle ON; this is a graceful degradation, not a
+    // workaround. The warning points adopters at the fix.
+    if (result === 'not_allowed') {
+      core.warning(
+        'Auto-merge is disabled in this repository\'s settings. ' +
+          'Enable "Allow auto-merge" under Settings → General (see docs/RULESETS.md §128). ' +
+          'Falling back to a human-review comment.',
+      );
+      await octokit.rest.issues.createComment({
+        owner,
+        repo,
+        issue_number: inputs.prNumber,
+        body:
+          ':eyes: Ready for human review — auto-merge is disabled in repo settings. ' +
+          'Enable "Allow auto-merge" under Settings → General to let the bot merge eligible PRs.',
+      });
+    }
   } else {
     await octokit.rest.issues.createComment({
       owner,

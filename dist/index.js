@@ -75230,6 +75230,12 @@ async function isMergeQueueEnabled(opts) {
  *
  * Per spec.md §54, this is the only auto-merge path. Manual merges go
  * through the human-review flow.
+ *
+ * If the repo has auto-merge disabled (`Allow auto-merge: Disabled` in
+ * Settings → General), GraphQL returns "Auto merge is not allowed for this
+ * repository". We catch that specific error and return `'not_allowed'` so
+ * pr-lifecycle can fall back to a comment + warning instead of failing the
+ * required check. Other GraphQL errors propagate.
  */
 async function enableAutoMergeOrEnqueue(opts) {
     if (opts.dryRun) {
@@ -75239,8 +75245,25 @@ async function enableAutoMergeOrEnqueue(opts) {
         await enqueueViaGraphQL(opts);
         return 'enqueued';
     }
-    await enableAutoMergeViaGraphQL(opts);
-    return 'merged';
+    try {
+        await enableAutoMergeViaGraphQL(opts);
+        return 'merged';
+    }
+    catch (err) {
+        if (isAutoMergeNotAllowedError(err)) {
+            return 'not_allowed';
+        }
+        throw err;
+    }
+}
+function isAutoMergeNotAllowedError(err) {
+    if (!(err instanceof Error))
+        return false;
+    // Octokit's GraphqlResponseError flattens error messages into err.message.
+    // The exact GitHub phrasing is stable: "Auto merge is not allowed for this
+    // repository". Match on the substring to remain resilient to small wording
+    // changes (e.g. trailing punctuation).
+    return /Auto merge is not allowed/i.test(err.message);
 }
 /**
  * GraphQL mutation: enablePullRequestAutoMerge. Maps the REST mergeStrategy
@@ -81036,6 +81059,22 @@ async function runPrLifecycleWithOctokit(octokit, config, inputs) {
             dryRun: inputs.dryRun,
         });
         core.info(`auto-merge result: ${result}`);
+        // If the repo has `Allow auto-merge` disabled, fall back to a human-review
+        // comment so the run still succeeds and reviewers see a clear next-step.
+        // Spec §565 requires the toggle ON; this is a graceful degradation, not a
+        // workaround. The warning points adopters at the fix.
+        if (result === 'not_allowed') {
+            core.warning('Auto-merge is disabled in this repository\'s settings. ' +
+                'Enable "Allow auto-merge" under Settings → General (see docs/RULESETS.md §128). ' +
+                'Falling back to a human-review comment.');
+            await octokit.rest.issues.createComment({
+                owner,
+                repo,
+                issue_number: inputs.prNumber,
+                body: ':eyes: Ready for human review — auto-merge is disabled in repo settings. ' +
+                    'Enable "Allow auto-merge" under Settings → General to let the bot merge eligible PRs.',
+            });
+        }
     }
     else {
         await octokit.rest.issues.createComment({

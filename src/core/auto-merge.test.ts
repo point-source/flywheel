@@ -58,6 +58,37 @@ describe('enableAutoMergeOrEnqueue > merge strategy mapping', () => {
   });
 });
 
+// Spec §565 requires "Allow auto-merge: Enabled" in repo settings. When an
+// adopter forgets, the GraphQL mutation returns "Auto merge is not allowed
+// for this repository". We surface this as `'not_allowed'` so callers can
+// fall back gracefully instead of failing the required check.
+describe('enableAutoMergeOrEnqueue > auto-merge disabled in repo settings', () => {
+  it('returns "not_allowed" when GraphQL throws "Auto merge is not allowed"', async () => {
+    const { octokit, graphql } = fakeOctokit();
+    graphql.mockRejectedValueOnce(
+      new Error(
+        'Request failed due to following response errors:\n - Auto merge is not allowed for this repository',
+      ),
+    );
+    const result = await enableAutoMergeOrEnqueue({
+      octokit, owner: 'o', repo: 'r', prNumber: 1, prNodeId: 'id',
+      useQueue: false, mergeStrategy: 'squash', dryRun: false,
+    });
+    expect(result).toBe('not_allowed');
+  });
+
+  it('rethrows other GraphQL errors (does not silently swallow)', async () => {
+    const { octokit, graphql } = fakeOctokit();
+    graphql.mockRejectedValueOnce(new Error('Some other GitHub error'));
+    await expect(
+      enableAutoMergeOrEnqueue({
+        octokit, owner: 'o', repo: 'r', prNumber: 1, prNodeId: 'id',
+        useQueue: false, mergeStrategy: 'squash', dryRun: false,
+      }),
+    ).rejects.toThrow('Some other GitHub error');
+  });
+});
+
 describe('enableAutoMergeOrEnqueue > merge queue routing', () => {
   it('uses enqueuePullRequest when useQueue=true', async () => {
     const { octokit, graphql } = fakeOctokit();

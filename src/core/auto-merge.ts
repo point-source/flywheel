@@ -14,7 +14,12 @@ export interface AutoMergeOptions {
   dryRun: boolean;
 }
 
-export type AutoMergeResult = 'merged' | 'enqueued' | 'skipped';
+/**
+ * `not_allowed` means the repo has `Allow auto-merge` disabled (spec §565
+ * requires it to be on). Surfaced separately from `merged` so callers can
+ * fall back to a human-review comment instead of crashing the run.
+ */
+export type AutoMergeResult = 'merged' | 'enqueued' | 'skipped' | 'not_allowed';
 
 /**
  * Either enable GitHub native auto-merge on the PR, or add it to the merge
@@ -23,6 +28,12 @@ export type AutoMergeResult = 'merged' | 'enqueued' | 'skipped';
  *
  * Per spec.md §54, this is the only auto-merge path. Manual merges go
  * through the human-review flow.
+ *
+ * If the repo has auto-merge disabled (`Allow auto-merge: Disabled` in
+ * Settings → General), GraphQL returns "Auto merge is not allowed for this
+ * repository". We catch that specific error and return `'not_allowed'` so
+ * pr-lifecycle can fall back to a comment + warning instead of failing the
+ * required check. Other GraphQL errors propagate.
  */
 export async function enableAutoMergeOrEnqueue(
   opts: AutoMergeOptions,
@@ -36,8 +47,24 @@ export async function enableAutoMergeOrEnqueue(
     return 'enqueued';
   }
 
-  await enableAutoMergeViaGraphQL(opts);
-  return 'merged';
+  try {
+    await enableAutoMergeViaGraphQL(opts);
+    return 'merged';
+  } catch (err) {
+    if (isAutoMergeNotAllowedError(err)) {
+      return 'not_allowed';
+    }
+    throw err;
+  }
+}
+
+function isAutoMergeNotAllowedError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  // Octokit's GraphqlResponseError flattens error messages into err.message.
+  // The exact GitHub phrasing is stable: "Auto merge is not allowed for this
+  // repository". Match on the substring to remain resilient to small wording
+  // changes (e.g. trailing punctuation).
+  return /Auto merge is not allowed/i.test(err.message);
 }
 
 /**
