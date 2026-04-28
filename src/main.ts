@@ -4,17 +4,46 @@ import { readFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 
+import { mintInstallationToken } from "./auth.js";
 import { loadConfig } from "./config.js";
 import { createGitHubClient, type PullRequest } from "./github.js";
 import { runPrFlow } from "./pr-flow.js";
 import { runPushFlow } from "./push-flow.js";
 import { runPromotion } from "./promotion.js";
+import { findMissingPermissions, formatMissingPermissionsError } from "./preflight.js";
 
 const CONFIG_FILE = ".flywheel.yml";
 
 async function run(): Promise<void> {
   const event = core.getInput("event", { required: true });
-  const token = core.getInput("token", { required: true });
+  const appId = core.getInput("app-id", { required: true });
+  const privateKey = core.getInput("app-private-key", { required: true });
+
+  const ctx = github.context;
+  const owner = ctx.repo.owner;
+  const repo = ctx.repo.repo;
+
+  let auth;
+  try {
+    auth = await mintInstallationToken(appId, privateKey, owner, repo);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    core.setFailed(`Could not mint installation token for ${owner}/${repo}: ${msg}`);
+    return;
+  }
+  core.setSecret(auth.token);
+  core.setOutput("token", auth.token);
+
+  const missing = findMissingPermissions(auth.permissions);
+  if (missing.length > 0) {
+    core.setFailed(formatMissingPermissionsError(missing, auth.appSlug, `${owner}/${repo}`));
+    return;
+  }
+  core.info(
+    `Pre-flight: App permissions verified (${Object.keys(auth.permissions).length} granted, ` +
+      `installation ${auth.installationId}).`,
+  );
+  const token = auth.token;
 
   const workspace = process.env.GITHUB_WORKSPACE ?? process.cwd();
   const configPath = join(workspace, CONFIG_FILE);

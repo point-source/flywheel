@@ -3654,11 +3654,11 @@ var require_util2 = __commonJS({
       }
       return location;
     }
-    function requestCurrentURL(request) {
-      return request.urlList[request.urlList.length - 1];
+    function requestCurrentURL(request7) {
+      return request7.urlList[request7.urlList.length - 1];
     }
-    function requestBadPort(request) {
-      const url = requestCurrentURL(request);
+    function requestBadPort(request7) {
+      const url = requestCurrentURL(request7);
       if (urlIsHttpHttpsScheme(url) && badPortsSet.has(url.port)) {
         return "blocked";
       }
@@ -3725,7 +3725,7 @@ var require_util2 = __commonJS({
       }
       return true;
     }
-    function setRequestReferrerPolicyOnRedirect(request, actualResponse) {
+    function setRequestReferrerPolicyOnRedirect(request7, actualResponse) {
       const { headersList } = actualResponse;
       const policyHeader = (headersList.get("referrer-policy") ?? "").split(",");
       let policy = "";
@@ -3739,7 +3739,7 @@ var require_util2 = __commonJS({
         }
       }
       if (policy !== "") {
-        request.referrerPolicy = policy;
+        request7.referrerPolicy = policy;
       }
     }
     function crossOriginResourcePolicyCheck() {
@@ -3756,33 +3756,33 @@ var require_util2 = __commonJS({
       header = httpRequest.mode;
       httpRequest.headersList.set("sec-fetch-mode", header);
     }
-    function appendRequestOriginHeader(request) {
-      let serializedOrigin = request.origin;
-      if (request.responseTainting === "cors" || request.mode === "websocket") {
+    function appendRequestOriginHeader(request7) {
+      let serializedOrigin = request7.origin;
+      if (request7.responseTainting === "cors" || request7.mode === "websocket") {
         if (serializedOrigin) {
-          request.headersList.append("origin", serializedOrigin);
+          request7.headersList.append("origin", serializedOrigin);
         }
-      } else if (request.method !== "GET" && request.method !== "HEAD") {
-        switch (request.referrerPolicy) {
+      } else if (request7.method !== "GET" && request7.method !== "HEAD") {
+        switch (request7.referrerPolicy) {
           case "no-referrer":
             serializedOrigin = null;
             break;
           case "no-referrer-when-downgrade":
           case "strict-origin":
           case "strict-origin-when-cross-origin":
-            if (request.origin && urlHasHttpsScheme(request.origin) && !urlHasHttpsScheme(requestCurrentURL(request))) {
+            if (request7.origin && urlHasHttpsScheme(request7.origin) && !urlHasHttpsScheme(requestCurrentURL(request7))) {
               serializedOrigin = null;
             }
             break;
           case "same-origin":
-            if (!sameOrigin(request, requestCurrentURL(request))) {
+            if (!sameOrigin(request7, requestCurrentURL(request7))) {
               serializedOrigin = null;
             }
             break;
           default:
         }
         if (serializedOrigin) {
-          request.headersList.append("origin", serializedOrigin);
+          request7.headersList.append("origin", serializedOrigin);
         }
       }
     }
@@ -3814,26 +3814,26 @@ var require_util2 = __commonJS({
         referrerPolicy: policyContainer.referrerPolicy
       };
     }
-    function determineRequestsReferrer(request) {
-      const policy = request.referrerPolicy;
+    function determineRequestsReferrer(request7) {
+      const policy = request7.referrerPolicy;
       assert(policy);
       let referrerSource = null;
-      if (request.referrer === "client") {
+      if (request7.referrer === "client") {
         const globalOrigin = getGlobalOrigin();
         if (!globalOrigin || globalOrigin.origin === "null") {
           return "no-referrer";
         }
         referrerSource = new URL(globalOrigin);
-      } else if (request.referrer instanceof URL) {
-        referrerSource = request.referrer;
+      } else if (request7.referrer instanceof URL) {
+        referrerSource = request7.referrer;
       }
       let referrerURL = stripURLForReferrer(referrerSource);
       const referrerOrigin = stripURLForReferrer(referrerSource, true);
       if (referrerURL.toString().length > 4096) {
         referrerURL = referrerOrigin;
       }
-      const areSameOrigin = sameOrigin(request, referrerURL);
-      const isNonPotentiallyTrustWorthy = isURLPotentiallyTrustworthy(referrerURL) && !isURLPotentiallyTrustworthy(request.url);
+      const areSameOrigin = sameOrigin(request7, referrerURL);
+      const isNonPotentiallyTrustWorthy = isURLPotentiallyTrustworthy(referrerURL) && !isURLPotentiallyTrustworthy(request7.url);
       switch (policy) {
         case "origin":
           return referrerOrigin != null ? referrerOrigin : stripURLForReferrer(referrerSource, true);
@@ -3844,7 +3844,7 @@ var require_util2 = __commonJS({
         case "origin-when-cross-origin":
           return areSameOrigin ? referrerURL : referrerOrigin;
         case "strict-origin-when-cross-origin": {
-          const currentURL = requestCurrentURL(request);
+          const currentURL = requestCurrentURL(request7);
           if (sameOrigin(referrerURL, currentURL)) {
             return referrerURL;
           }
@@ -4004,7 +4004,7 @@ var require_util2 = __commonJS({
       }
       return true;
     }
-    function tryUpgradeRequestToAPotentiallyTrustworthyURL(request) {
+    function tryUpgradeRequestToAPotentiallyTrustworthyURL(request7) {
     }
     function sameOrigin(A, B) {
       if (A.origin === B.origin && A.origin === "null") {
@@ -5892,25 +5892,25 @@ var require_request = __commonJS({
       static [kHTTP2BuildRequest](origin, opts, handler) {
         const headers = opts.headers;
         opts = { ...opts, headers: null };
-        const request = new _Request(origin, opts, handler);
-        request.headers = {};
+        const request7 = new _Request(origin, opts, handler);
+        request7.headers = {};
         if (Array.isArray(headers)) {
           if (headers.length % 2 !== 0) {
             throw new InvalidArgumentError("headers array must be even");
           }
           for (let i = 0; i < headers.length; i += 2) {
-            processHeader(request, headers[i], headers[i + 1], true);
+            processHeader(request7, headers[i], headers[i + 1], true);
           }
         } else if (headers && typeof headers === "object") {
           const keys = Object.keys(headers);
           for (let i = 0; i < keys.length; i++) {
             const key = keys[i];
-            processHeader(request, key, headers[key], true);
+            processHeader(request7, key, headers[key], true);
           }
         } else if (headers != null) {
           throw new InvalidArgumentError("headers must be an object or an array");
         }
-        return request;
+        return request7;
       }
       static [kHTTP2CopyHeaders](raw) {
         const rawHeaders = raw.split("\r\n");
@@ -5935,26 +5935,26 @@ var require_request = __commonJS({
       return skipAppend ? val : `${key}: ${val}\r
 `;
     }
-    function processHeader(request, key, val, skipAppend = false) {
+    function processHeader(request7, key, val, skipAppend = false) {
       if (val && (typeof val === "object" && !Array.isArray(val))) {
         throw new InvalidArgumentError(`invalid ${key} header`);
       } else if (val === void 0) {
         return;
       }
-      if (request.host === null && key.length === 4 && key.toLowerCase() === "host") {
+      if (request7.host === null && key.length === 4 && key.toLowerCase() === "host") {
         if (headerCharRegex.exec(val) !== null) {
           throw new InvalidArgumentError(`invalid ${key} header`);
         }
-        request.host = val;
-      } else if (request.contentLength === null && key.length === 14 && key.toLowerCase() === "content-length") {
-        request.contentLength = parseInt(val, 10);
-        if (!Number.isFinite(request.contentLength)) {
+        request7.host = val;
+      } else if (request7.contentLength === null && key.length === 14 && key.toLowerCase() === "content-length") {
+        request7.contentLength = parseInt(val, 10);
+        if (!Number.isFinite(request7.contentLength)) {
           throw new InvalidArgumentError("invalid content-length header");
         }
-      } else if (request.contentType === null && key.length === 12 && key.toLowerCase() === "content-type") {
-        request.contentType = val;
-        if (skipAppend) request.headers[key] = processHeaderValue(key, val, skipAppend);
-        else request.headers += processHeaderValue(key, val);
+      } else if (request7.contentType === null && key.length === 12 && key.toLowerCase() === "content-type") {
+        request7.contentType = val;
+        if (skipAppend) request7.headers[key] = processHeaderValue(key, val, skipAppend);
+        else request7.headers += processHeaderValue(key, val);
       } else if (key.length === 17 && key.toLowerCase() === "transfer-encoding") {
         throw new InvalidArgumentError("invalid transfer-encoding header");
       } else if (key.length === 10 && key.toLowerCase() === "connection") {
@@ -5962,7 +5962,7 @@ var require_request = __commonJS({
         if (value !== "close" && value !== "keep-alive") {
           throw new InvalidArgumentError("invalid connection header");
         } else if (value === "close") {
-          request.reset = true;
+          request7.reset = true;
         }
       } else if (key.length === 10 && key.toLowerCase() === "keep-alive") {
         throw new InvalidArgumentError("invalid keep-alive header");
@@ -5976,15 +5976,15 @@ var require_request = __commonJS({
         if (Array.isArray(val)) {
           for (let i = 0; i < val.length; i++) {
             if (skipAppend) {
-              if (request.headers[key]) request.headers[key] += `,${processHeaderValue(key, val[i], skipAppend)}`;
-              else request.headers[key] = processHeaderValue(key, val[i], skipAppend);
+              if (request7.headers[key]) request7.headers[key] += `,${processHeaderValue(key, val[i], skipAppend)}`;
+              else request7.headers[key] = processHeaderValue(key, val[i], skipAppend);
             } else {
-              request.headers += processHeaderValue(key, val[i]);
+              request7.headers += processHeaderValue(key, val[i]);
             }
           }
         } else {
-          if (skipAppend) request.headers[key] = processHeaderValue(key, val, skipAppend);
-          else request.headers += processHeaderValue(key, val);
+          if (skipAppend) request7.headers[key] = processHeaderValue(key, val, skipAppend);
+          else request7.headers += processHeaderValue(key, val);
         }
       }
     }
@@ -7148,10 +7148,10 @@ var require_client = __commonJS({
       }
       [kDispatch](opts, handler) {
         const origin = opts.origin || this[kUrl].origin;
-        const request = this[kHTTPConnVersion] === "h2" ? Request[kHTTP2BuildRequest](origin, opts, handler) : Request[kHTTP1BuildRequest](origin, opts, handler);
-        this[kQueue].push(request);
+        const request7 = this[kHTTPConnVersion] === "h2" ? Request[kHTTP2BuildRequest](origin, opts, handler) : Request[kHTTP1BuildRequest](origin, opts, handler);
+        this[kQueue].push(request7);
         if (this[kResuming]) {
-        } else if (util.bodyLength(request.body) == null && util.isIterable(request.body)) {
+        } else if (util.bodyLength(request7.body) == null && util.isIterable(request7.body)) {
           this[kResuming] = 1;
           process.nextTick(resume, this);
         } else {
@@ -7175,8 +7175,8 @@ var require_client = __commonJS({
         return new Promise((resolve) => {
           const requests = this[kQueue].splice(this[kPendingIdx]);
           for (let i = 0; i < requests.length; i++) {
-            const request = requests[i];
-            errorRequest(this, request, err);
+            const request7 = requests[i];
+            errorRequest(this, request7, err);
           }
           const callback = () => {
             if (this[kClosedResolve]) {
@@ -7224,13 +7224,13 @@ var require_client = __commonJS({
         assert(this[kPending] === 0);
         const requests = client[kQueue].splice(client[kRunningIdx]);
         for (let i = 0; i < requests.length; i++) {
-          const request = requests[i];
-          errorRequest(this, request, err);
+          const request7 = requests[i];
+          errorRequest(this, request7, err);
         }
       } else if (client[kRunning] > 0) {
-        const request = client[kQueue][client[kRunningIdx]];
+        const request7 = client[kQueue][client[kRunningIdx]];
         client[kQueue][client[kRunningIdx]++] = null;
-        errorRequest(client, request, err);
+        errorRequest(client, request7, err);
       }
       client[kPendingIdx] = client[kRunningIdx];
       assert(client[kRunning] === 0);
@@ -7438,8 +7438,8 @@ var require_client = __commonJS({
         if (socket.destroyed) {
           return -1;
         }
-        const request = client[kQueue][client[kRunningIdx]];
-        if (!request) {
+        const request7 = client[kQueue][client[kRunningIdx]];
+        if (!request7) {
           return -1;
         }
       }
@@ -7479,12 +7479,12 @@ var require_client = __commonJS({
       onUpgrade(head) {
         const { upgrade, client, socket, headers, statusCode } = this;
         assert(upgrade);
-        const request = client[kQueue][client[kRunningIdx]];
-        assert(request);
+        const request7 = client[kQueue][client[kRunningIdx]];
+        assert(request7);
         assert(!socket.destroyed);
         assert(socket === client[kSocket]);
         assert(!this.paused);
-        assert(request.upgrade || request.method === "CONNECT");
+        assert(request7.upgrade || request7.method === "CONNECT");
         this.statusCode = null;
         this.statusText = "";
         this.shouldKeepAlive = null;
@@ -7501,7 +7501,7 @@ var require_client = __commonJS({
         client[kQueue][client[kRunningIdx]++] = null;
         client.emit("disconnect", client[kUrl], [client], new InformationalError("upgrade"));
         try {
-          request.onUpgrade(statusCode, headers, socket);
+          request7.onUpgrade(statusCode, headers, socket);
         } catch (err) {
           util.destroy(socket, err);
         }
@@ -7512,8 +7512,8 @@ var require_client = __commonJS({
         if (socket.destroyed) {
           return -1;
         }
-        const request = client[kQueue][client[kRunningIdx]];
-        if (!request) {
+        const request7 = client[kQueue][client[kRunningIdx]];
+        if (!request7) {
           return -1;
         }
         assert(!this.upgrade);
@@ -7522,23 +7522,23 @@ var require_client = __commonJS({
           util.destroy(socket, new SocketError("bad response", util.getSocketInfo(socket)));
           return -1;
         }
-        if (upgrade && !request.upgrade) {
+        if (upgrade && !request7.upgrade) {
           util.destroy(socket, new SocketError("bad upgrade", util.getSocketInfo(socket)));
           return -1;
         }
         assert.strictEqual(this.timeoutType, TIMEOUT_HEADERS);
         this.statusCode = statusCode;
         this.shouldKeepAlive = shouldKeepAlive || // Override llhttp value which does not allow keepAlive for HEAD.
-        request.method === "HEAD" && !socket[kReset] && this.connection.toLowerCase() === "keep-alive";
+        request7.method === "HEAD" && !socket[kReset] && this.connection.toLowerCase() === "keep-alive";
         if (this.statusCode >= 200) {
-          const bodyTimeout = request.bodyTimeout != null ? request.bodyTimeout : client[kBodyTimeout];
+          const bodyTimeout = request7.bodyTimeout != null ? request7.bodyTimeout : client[kBodyTimeout];
           this.setTimeout(bodyTimeout, TIMEOUT_BODY);
         } else if (this.timeout) {
           if (this.timeout.refresh) {
             this.timeout.refresh();
           }
         }
-        if (request.method === "CONNECT") {
+        if (request7.method === "CONNECT") {
           assert(client[kRunning] === 1);
           this.upgrade = true;
           return 2;
@@ -7569,11 +7569,11 @@ var require_client = __commonJS({
         } else {
           socket[kReset] = true;
         }
-        const pause = request.onHeaders(statusCode, headers, this.resume, statusText) === false;
-        if (request.aborted) {
+        const pause = request7.onHeaders(statusCode, headers, this.resume, statusText) === false;
+        if (request7.aborted) {
           return -1;
         }
-        if (request.method === "HEAD") {
+        if (request7.method === "HEAD") {
           return 1;
         }
         if (statusCode < 200) {
@@ -7590,8 +7590,8 @@ var require_client = __commonJS({
         if (socket.destroyed) {
           return -1;
         }
-        const request = client[kQueue][client[kRunningIdx]];
-        assert(request);
+        const request7 = client[kQueue][client[kRunningIdx]];
+        assert(request7);
         assert.strictEqual(this.timeoutType, TIMEOUT_BODY);
         if (this.timeout) {
           if (this.timeout.refresh) {
@@ -7604,7 +7604,7 @@ var require_client = __commonJS({
           return -1;
         }
         this.bytesRead += buf.length;
-        if (request.onData(buf) === false) {
+        if (request7.onData(buf) === false) {
           return constants.ERROR.PAUSED;
         }
       }
@@ -7616,8 +7616,8 @@ var require_client = __commonJS({
         if (upgrade) {
           return;
         }
-        const request = client[kQueue][client[kRunningIdx]];
-        assert(request);
+        const request7 = client[kQueue][client[kRunningIdx]];
+        assert(request7);
         assert(statusCode >= 100);
         this.statusCode = null;
         this.statusText = "";
@@ -7631,11 +7631,11 @@ var require_client = __commonJS({
         if (statusCode < 200) {
           return;
         }
-        if (request.method !== "HEAD" && contentLength && bytesRead !== parseInt(contentLength, 10)) {
+        if (request7.method !== "HEAD" && contentLength && bytesRead !== parseInt(contentLength, 10)) {
           util.destroy(socket, new ResponseContentLengthMismatchError());
           return -1;
         }
-        request.onComplete(headers);
+        request7.onComplete(headers);
         client[kQueue][client[kRunningIdx]++] = null;
         if (socket[kWriting]) {
           assert.strictEqual(client[kRunning], 0);
@@ -7693,8 +7693,8 @@ var require_client = __commonJS({
         assert(client[kPendingIdx] === client[kRunningIdx]);
         const requests = client[kQueue].splice(client[kRunningIdx]);
         for (let i = 0; i < requests.length; i++) {
-          const request = requests[i];
-          errorRequest(client, request, err);
+          const request7 = requests[i];
+          errorRequest(client, request7, err);
         }
         assert(client[kSize] === 0);
       }
@@ -7724,13 +7724,13 @@ var require_client = __commonJS({
         assert(client[kPending] === 0);
         const requests = client[kQueue].splice(client[kRunningIdx]);
         for (let i = 0; i < requests.length; i++) {
-          const request = requests[i];
-          errorRequest(client, request, err);
+          const request7 = requests[i];
+          errorRequest(client, request7, err);
         }
       } else if (client[kRunning] > 0 && err.code !== "UND_ERR_INFO") {
-        const request = client[kQueue][client[kRunningIdx]];
+        const request7 = client[kQueue][client[kRunningIdx]];
         client[kQueue][client[kRunningIdx]++] = null;
-        errorRequest(client, request, err);
+        errorRequest(client, request7, err);
       }
       client[kPendingIdx] = client[kRunningIdx];
       assert(client[kRunning] === 0);
@@ -7863,8 +7863,8 @@ var require_client = __commonJS({
         if (err.code === "ERR_TLS_CERT_ALTNAME_INVALID") {
           assert(client[kRunning] === 0);
           while (client[kPending] > 0 && client[kQueue][client[kPendingIdx]].servername === client[kServerName]) {
-            const request = client[kQueue][client[kPendingIdx]++];
-            errorRequest(client, request, err);
+            const request7 = client[kQueue][client[kPendingIdx]++];
+            errorRequest(client, request7, err);
           }
         } else {
           onError(client, err);
@@ -7918,8 +7918,8 @@ var require_client = __commonJS({
             }
           } else if (client[kRunning] > 0 && socket[kParser].statusCode < 200) {
             if (socket[kParser].timeoutType !== TIMEOUT_HEADERS) {
-              const request2 = client[kQueue][client[kRunningIdx]];
-              const headersTimeout = request2.headersTimeout != null ? request2.headersTimeout : client[kHeadersTimeout];
+              const request8 = client[kQueue][client[kRunningIdx]];
+              const headersTimeout = request8.headersTimeout != null ? request8.headersTimeout : client[kHeadersTimeout];
               socket[kParser].setTimeout(headersTimeout, TIMEOUT_HEADERS);
             }
           }
@@ -7941,13 +7941,13 @@ var require_client = __commonJS({
         if (client[kRunning] >= (client[kPipelining] || 1)) {
           return;
         }
-        const request = client[kQueue][client[kPendingIdx]];
-        if (client[kUrl].protocol === "https:" && client[kServerName] !== request.servername) {
+        const request7 = client[kQueue][client[kPendingIdx]];
+        if (client[kUrl].protocol === "https:" && client[kServerName] !== request7.servername) {
           if (client[kRunning] > 0) {
             return;
           }
-          client[kServerName] = request.servername;
-          if (socket && socket.servername !== request.servername) {
+          client[kServerName] = request7.servername;
+          if (socket && socket.servername !== request7.servername) {
             util.destroy(socket, new InformationalError("servername changed"));
             return;
           }
@@ -7962,16 +7962,16 @@ var require_client = __commonJS({
         if (socket.destroyed || socket[kWriting] || socket[kReset] || socket[kBlocking]) {
           return;
         }
-        if (client[kRunning] > 0 && !request.idempotent) {
+        if (client[kRunning] > 0 && !request7.idempotent) {
           return;
         }
-        if (client[kRunning] > 0 && (request.upgrade || request.method === "CONNECT")) {
+        if (client[kRunning] > 0 && (request7.upgrade || request7.method === "CONNECT")) {
           return;
         }
-        if (client[kRunning] > 0 && util.bodyLength(request.body) !== 0 && (util.isStream(request.body) || util.isAsyncIterable(request.body))) {
+        if (client[kRunning] > 0 && util.bodyLength(request7.body) !== 0 && (util.isStream(request7.body) || util.isAsyncIterable(request7.body))) {
           return;
         }
-        if (!request.aborted && write(client, request)) {
+        if (!request7.aborted && write(client, request7)) {
           client[kPendingIdx]++;
         } else {
           client[kQueue].splice(client[kPendingIdx], 1);
@@ -7981,12 +7981,12 @@ var require_client = __commonJS({
     function shouldSendContentLength(method) {
       return method !== "GET" && method !== "HEAD" && method !== "OPTIONS" && method !== "TRACE" && method !== "CONNECT";
     }
-    function write(client, request) {
+    function write(client, request7) {
       if (client[kHTTPConnVersion] === "h2") {
-        writeH2(client, client[kHTTP2Session], request);
+        writeH2(client, client[kHTTP2Session], request7);
         return;
       }
-      const { body, method, path, host, upgrade, headers, blocking, reset } = request;
+      const { body, method, path, host, upgrade, headers, blocking, reset } = request7;
       const expectsPayload = method === "PUT" || method === "POST" || method === "PATCH";
       if (body && typeof body.read === "function") {
         body.read(0);
@@ -7994,31 +7994,31 @@ var require_client = __commonJS({
       const bodyLength = util.bodyLength(body);
       let contentLength = bodyLength;
       if (contentLength === null) {
-        contentLength = request.contentLength;
+        contentLength = request7.contentLength;
       }
       if (contentLength === 0 && !expectsPayload) {
         contentLength = null;
       }
-      if (shouldSendContentLength(method) && contentLength > 0 && request.contentLength !== null && request.contentLength !== contentLength) {
+      if (shouldSendContentLength(method) && contentLength > 0 && request7.contentLength !== null && request7.contentLength !== contentLength) {
         if (client[kStrictContentLength]) {
-          errorRequest(client, request, new RequestContentLengthMismatchError());
+          errorRequest(client, request7, new RequestContentLengthMismatchError());
           return false;
         }
         process.emitWarning(new RequestContentLengthMismatchError());
       }
       const socket = client[kSocket];
       try {
-        request.onConnect((err) => {
-          if (request.aborted || request.completed) {
+        request7.onConnect((err) => {
+          if (request7.aborted || request7.completed) {
             return;
           }
-          errorRequest(client, request, err || new RequestAbortedError());
+          errorRequest(client, request7, err || new RequestAbortedError());
           util.destroy(socket, new InformationalError("aborted"));
         });
       } catch (err) {
-        errorRequest(client, request, err);
+        errorRequest(client, request7, err);
       }
-      if (request.aborted) {
+      if (request7.aborted) {
         return false;
       }
       if (method === "HEAD") {
@@ -8057,7 +8057,7 @@ upgrade: ${upgrade}\r
         header += headers;
       }
       if (channels.sendHeaders.hasSubscribers) {
-        channels.sendHeaders.publish({ request, headers: header, socket });
+        channels.sendHeaders.publish({ request: request7, headers: header, socket });
       }
       if (!body || bodyLength === 0) {
         if (contentLength === 0) {
@@ -8069,7 +8069,7 @@ upgrade: ${upgrade}\r
           socket.write(`${header}\r
 `, "latin1");
         }
-        request.onRequestSent();
+        request7.onRequestSent();
       } else if (util.isBuffer(body)) {
         assert(contentLength === body.byteLength, "buffer body must have content length");
         socket.cork();
@@ -8078,46 +8078,46 @@ upgrade: ${upgrade}\r
 `, "latin1");
         socket.write(body);
         socket.uncork();
-        request.onBodySent(body);
-        request.onRequestSent();
+        request7.onBodySent(body);
+        request7.onRequestSent();
         if (!expectsPayload) {
           socket[kReset] = true;
         }
       } else if (util.isBlobLike(body)) {
         if (typeof body.stream === "function") {
-          writeIterable({ body: body.stream(), client, request, socket, contentLength, header, expectsPayload });
+          writeIterable({ body: body.stream(), client, request: request7, socket, contentLength, header, expectsPayload });
         } else {
-          writeBlob({ body, client, request, socket, contentLength, header, expectsPayload });
+          writeBlob({ body, client, request: request7, socket, contentLength, header, expectsPayload });
         }
       } else if (util.isStream(body)) {
-        writeStream({ body, client, request, socket, contentLength, header, expectsPayload });
+        writeStream({ body, client, request: request7, socket, contentLength, header, expectsPayload });
       } else if (util.isIterable(body)) {
-        writeIterable({ body, client, request, socket, contentLength, header, expectsPayload });
+        writeIterable({ body, client, request: request7, socket, contentLength, header, expectsPayload });
       } else {
         assert(false);
       }
       return true;
     }
-    function writeH2(client, session, request) {
-      const { body, method, path, host, upgrade, expectContinue, signal, headers: reqHeaders } = request;
+    function writeH2(client, session, request7) {
+      const { body, method, path, host, upgrade, expectContinue, signal, headers: reqHeaders } = request7;
       let headers;
       if (typeof reqHeaders === "string") headers = Request[kHTTP2CopyHeaders](reqHeaders.trim());
       else headers = reqHeaders;
       if (upgrade) {
-        errorRequest(client, request, new Error("Upgrade not supported for H2"));
+        errorRequest(client, request7, new Error("Upgrade not supported for H2"));
         return false;
       }
       try {
-        request.onConnect((err) => {
-          if (request.aborted || request.completed) {
+        request7.onConnect((err) => {
+          if (request7.aborted || request7.completed) {
             return;
           }
-          errorRequest(client, request, err || new RequestAbortedError());
+          errorRequest(client, request7, err || new RequestAbortedError());
         });
       } catch (err) {
-        errorRequest(client, request, err);
+        errorRequest(client, request7, err);
       }
-      if (request.aborted) {
+      if (request7.aborted) {
         return false;
       }
       let stream;
@@ -8128,11 +8128,11 @@ upgrade: ${upgrade}\r
         session.ref();
         stream = session.request(headers, { endStream: false, signal });
         if (stream.id && !stream.pending) {
-          request.onUpgrade(null, null, stream);
+          request7.onUpgrade(null, null, stream);
           ++h2State.openStreams;
         } else {
           stream.once("ready", () => {
-            request.onUpgrade(null, null, stream);
+            request7.onUpgrade(null, null, stream);
             ++h2State.openStreams;
           });
         }
@@ -8150,14 +8150,14 @@ upgrade: ${upgrade}\r
       }
       let contentLength = util.bodyLength(body);
       if (contentLength == null) {
-        contentLength = request.contentLength;
+        contentLength = request7.contentLength;
       }
       if (contentLength === 0 || !expectsPayload) {
         contentLength = null;
       }
-      if (shouldSendContentLength(method) && contentLength > 0 && request.contentLength != null && request.contentLength !== contentLength) {
+      if (shouldSendContentLength(method) && contentLength > 0 && request7.contentLength != null && request7.contentLength !== contentLength) {
         if (client[kStrictContentLength]) {
-          errorRequest(client, request, new RequestContentLengthMismatchError());
+          errorRequest(client, request7, new RequestContentLengthMismatchError());
           return false;
         }
         process.emitWarning(new RequestContentLengthMismatchError());
@@ -8182,15 +8182,15 @@ upgrade: ${upgrade}\r
       ++h2State.openStreams;
       stream.once("response", (headers2) => {
         const { [HTTP2_HEADER_STATUS]: statusCode, ...realHeaders } = headers2;
-        if (request.onHeaders(Number(statusCode), realHeaders, stream.resume.bind(stream), "") === false) {
+        if (request7.onHeaders(Number(statusCode), realHeaders, stream.resume.bind(stream), "") === false) {
           stream.pause();
         }
       });
       stream.once("end", () => {
-        request.onComplete([]);
+        request7.onComplete([]);
       });
       stream.on("data", (chunk) => {
-        if (request.onData(chunk) === false) {
+        if (request7.onData(chunk) === false) {
           stream.pause();
         }
       });
@@ -8208,7 +8208,7 @@ upgrade: ${upgrade}\r
       });
       stream.once("frameError", (type2, code) => {
         const err = new InformationalError(`HTTP/2: "frameError" received - type ${type2}, code ${code}`);
-        errorRequest(client, request, err);
+        errorRequest(client, request7, err);
         if (client[kHTTP2Session] && !client[kHTTP2Session].destroyed && !this.closed && !this.destroyed) {
           h2State.streams -= 1;
           util.destroy(stream, err);
@@ -8217,20 +8217,20 @@ upgrade: ${upgrade}\r
       return true;
       function writeBodyH2() {
         if (!body) {
-          request.onRequestSent();
+          request7.onRequestSent();
         } else if (util.isBuffer(body)) {
           assert(contentLength === body.byteLength, "buffer body must have content length");
           stream.cork();
           stream.write(body);
           stream.uncork();
           stream.end();
-          request.onBodySent(body);
-          request.onRequestSent();
+          request7.onBodySent(body);
+          request7.onRequestSent();
         } else if (util.isBlobLike(body)) {
           if (typeof body.stream === "function") {
             writeIterable({
               client,
-              request,
+              request: request7,
               contentLength,
               h2stream: stream,
               expectsPayload,
@@ -8242,7 +8242,7 @@ upgrade: ${upgrade}\r
             writeBlob({
               body,
               client,
-              request,
+              request: request7,
               contentLength,
               expectsPayload,
               h2stream: stream,
@@ -8254,7 +8254,7 @@ upgrade: ${upgrade}\r
           writeStream({
             body,
             client,
-            request,
+            request: request7,
             contentLength,
             expectsPayload,
             socket: client[kSocket],
@@ -8265,7 +8265,7 @@ upgrade: ${upgrade}\r
           writeIterable({
             body,
             client,
-            request,
+            request: request7,
             contentLength,
             expectsPayload,
             header: "",
@@ -8277,11 +8277,11 @@ upgrade: ${upgrade}\r
         }
       }
     }
-    function writeStream({ h2stream, body, client, request, socket, contentLength, header, expectsPayload }) {
+    function writeStream({ h2stream, body, client, request: request7, socket, contentLength, header, expectsPayload }) {
       assert(contentLength !== 0 || client[kRunning] === 0, "stream body cannot be pipelined");
       if (client[kHTTPConnVersion] === "h2") {
         let onPipeData = function(chunk) {
-          request.onBodySent(chunk);
+          request7.onBodySent(chunk);
         };
         const pipe = pipeline(
           body,
@@ -8291,7 +8291,7 @@ upgrade: ${upgrade}\r
               util.destroy(body, err);
               util.destroy(h2stream, err);
             } else {
-              request.onRequestSent();
+              request7.onRequestSent();
             }
           }
         );
@@ -8303,7 +8303,7 @@ upgrade: ${upgrade}\r
         return;
       }
       let finished = false;
-      const writer = new AsyncWriter({ socket, request, contentLength, client, expectsPayload, header });
+      const writer = new AsyncWriter({ socket, request: request7, contentLength, client, expectsPayload, header });
       const onData = function(chunk) {
         if (finished) {
           return;
@@ -8359,7 +8359,7 @@ upgrade: ${upgrade}\r
       }
       socket.on("drain", onDrain).on("error", onFinished);
     }
-    async function writeBlob({ h2stream, body, client, request, socket, contentLength, header, expectsPayload }) {
+    async function writeBlob({ h2stream, body, client, request: request7, socket, contentLength, header, expectsPayload }) {
       assert(contentLength === body.size, "blob body must have content length");
       const isH2 = client[kHTTPConnVersion] === "h2";
       try {
@@ -8379,8 +8379,8 @@ upgrade: ${upgrade}\r
           socket.write(buffer);
           socket.uncork();
         }
-        request.onBodySent(buffer);
-        request.onRequestSent();
+        request7.onBodySent(buffer);
+        request7.onRequestSent();
         if (!expectsPayload) {
           socket[kReset] = true;
         }
@@ -8389,7 +8389,7 @@ upgrade: ${upgrade}\r
         util.destroy(isH2 ? h2stream : socket, err);
       }
     }
-    async function writeIterable({ h2stream, body, client, request, socket, contentLength, header, expectsPayload }) {
+    async function writeIterable({ h2stream, body, client, request: request7, socket, contentLength, header, expectsPayload }) {
       assert(contentLength !== 0 || client[kRunning] === 0, "iterator body cannot be pipelined");
       let callback = null;
       function onDrain() {
@@ -8415,7 +8415,7 @@ upgrade: ${upgrade}\r
               throw socket[kError];
             }
             const res = h2stream.write(chunk);
-            request.onBodySent(chunk);
+            request7.onBodySent(chunk);
             if (!res) {
               await waitForDrain();
             }
@@ -8423,14 +8423,14 @@ upgrade: ${upgrade}\r
         } catch (err) {
           h2stream.destroy(err);
         } finally {
-          request.onRequestSent();
+          request7.onRequestSent();
           h2stream.end();
           h2stream.off("close", onDrain).off("drain", onDrain);
         }
         return;
       }
       socket.on("close", onDrain).on("drain", onDrain);
-      const writer = new AsyncWriter({ socket, request, contentLength, client, expectsPayload, header });
+      const writer = new AsyncWriter({ socket, request: request7, contentLength, client, expectsPayload, header });
       try {
         for await (const chunk of body) {
           if (socket[kError]) {
@@ -8448,9 +8448,9 @@ upgrade: ${upgrade}\r
       }
     }
     var AsyncWriter = class {
-      constructor({ socket, request, contentLength, client, expectsPayload, header }) {
+      constructor({ socket, request: request7, contentLength, client, expectsPayload, header }) {
         this.socket = socket;
-        this.request = request;
+        this.request = request7;
         this.contentLength = contentLength;
         this.client = client;
         this.bytesWritten = 0;
@@ -8459,7 +8459,7 @@ upgrade: ${upgrade}\r
         socket[kWriting] = true;
       }
       write(chunk) {
-        const { socket, request, contentLength, client, bytesWritten, expectsPayload, header } = this;
+        const { socket, request: request7, contentLength, client, bytesWritten, expectsPayload, header } = this;
         if (socket[kError]) {
           throw socket[kError];
         }
@@ -8498,7 +8498,7 @@ ${len.toString(16)}\r
         this.bytesWritten += len;
         const ret = socket.write(chunk);
         socket.uncork();
-        request.onBodySent(chunk);
+        request7.onBodySent(chunk);
         if (!ret) {
           if (socket[kParser].timeout && socket[kParser].timeoutType === TIMEOUT_HEADERS) {
             if (socket[kParser].timeout.refresh) {
@@ -8509,8 +8509,8 @@ ${len.toString(16)}\r
         return ret;
       }
       end() {
-        const { socket, contentLength, client, bytesWritten, expectsPayload, header, request } = this;
-        request.onRequestSent();
+        const { socket, contentLength, client, bytesWritten, expectsPayload, header, request: request7 } = this;
+        request7.onRequestSent();
         socket[kWriting] = false;
         if (socket[kError]) {
           throw socket[kError];
@@ -8553,10 +8553,10 @@ ${len.toString(16)}\r
         }
       }
     };
-    function errorRequest(client, request, err) {
+    function errorRequest(client, request7, err) {
       try {
-        request.onError(err);
-        assert(request.aborted);
+        request7.onError(err);
+        assert(request7.aborted);
       } catch (err2) {
         client.emit("error", err2);
       }
@@ -9209,7 +9209,7 @@ var require_readable = __commonJS({
     var kBody = Symbol("kBody");
     var kAbort = Symbol("abort");
     var kContentType = Symbol("kContentType");
-    var noop = () => {
+    var noop6 = () => {
     };
     module2.exports = class BodyReadable extends Readable {
       constructor({
@@ -9331,7 +9331,7 @@ var require_readable = __commonJS({
         return new Promise((resolve, reject) => {
           const signalListenerCleanup = signal ? util.addAbortListener(signal, () => {
             this.destroy();
-          }) : noop;
+          }) : noop6;
           this.on("close", function() {
             signalListenerCleanup();
             if (signal && signal.aborted) {
@@ -9339,7 +9339,7 @@ var require_readable = __commonJS({
             } else {
               resolve(null);
             }
-          }).on("error", noop).on("data", function(chunk) {
+          }).on("error", noop6).on("data", function(chunk) {
             limit -= chunk.length;
             if (limit <= 0) {
               this.destroy();
@@ -9669,10 +9669,10 @@ var require_api_request = __commonJS({
         }
       }
     };
-    function request(opts, callback) {
+    function request7(opts, callback) {
       if (callback === void 0) {
         return new Promise((resolve, reject) => {
-          request.call(this, opts, (err, data) => {
+          request7.call(this, opts, (err, data) => {
             return err ? reject(err) : resolve(data);
           });
         });
@@ -9687,7 +9687,7 @@ var require_api_request = __commonJS({
         queueMicrotask(() => callback(err, { opaque }));
       }
     }
-    module2.exports = request;
+    module2.exports = request7;
     module2.exports.RequestHandler = RequestHandler;
   }
 });
@@ -10401,7 +10401,7 @@ var require_mock_utils = __commonJS({
       const headersMatch = matchHeaders(mockDispatch2, headers);
       return pathMatch && methodMatch && bodyMatch && headersMatch;
     }
-    function getResponseData(data) {
+    function getResponseData6(data) {
       if (Buffer.isBuffer(data)) {
         return data;
       } else if (typeof data === "object") {
@@ -10506,7 +10506,7 @@ var require_mock_utils = __commonJS({
           body.then((newData) => handleReply(mockDispatches, newData));
           return;
         }
-        const responseData = getResponseData(body);
+        const responseData = getResponseData6(body);
         const responseHeaders = generateKeyValues(headers);
         const responseTrailers = generateKeyValues(trailers);
         handler.abort = nop;
@@ -10563,7 +10563,7 @@ var require_mock_utils = __commonJS({
       }
     }
     module2.exports = {
-      getResponseData,
+      getResponseData: getResponseData6,
       getMockDispatch,
       addMockDispatch,
       deleteMockDispatch,
@@ -10585,7 +10585,7 @@ var require_mock_utils = __commonJS({
 var require_mock_interceptor = __commonJS({
   "node_modules/undici/lib/mock/mock-interceptor.js"(exports2, module2) {
     "use strict";
-    var { getResponseData, buildKey, addMockDispatch } = require_mock_utils();
+    var { getResponseData: getResponseData6, buildKey, addMockDispatch } = require_mock_utils();
     var {
       kDispatches,
       kDispatchKey,
@@ -10657,7 +10657,7 @@ var require_mock_interceptor = __commonJS({
         this[kContentLength] = false;
       }
       createMockScopeDispatchData(statusCode, data, responseOptions = {}) {
-        const responseData = getResponseData(data);
+        const responseData = getResponseData6(data);
         const contentLength = this[kContentLength] ? { "content-length": responseData.length } : {};
         const headers = { ...this[kDefaultHeaders], ...contentLength, ...responseOptions.headers };
         const trailers = { ...this[kDefaultTrailers], ...responseOptions.trailers };
@@ -12365,7 +12365,7 @@ var require_request2 = __commonJS({
             policyContainer: makePolicyContainer()
           }
         };
-        let request = null;
+        let request7 = null;
         let fallbackMode = null;
         const baseUrl = this[kRealm].settingsObject.baseUrl;
         let signal = null;
@@ -12381,17 +12381,17 @@ var require_request2 = __commonJS({
               "Request cannot be constructed from a URL that includes credentials: " + input
             );
           }
-          request = makeRequest({ urlList: [parsedURL] });
+          request7 = makeRequest({ urlList: [parsedURL] });
           fallbackMode = "cors";
         } else {
           assert(input instanceof _Request);
-          request = input[kState];
+          request7 = input[kState];
           signal = input[kSignal];
         }
         const origin = this[kRealm].settingsObject.origin;
         let window = "client";
-        if (request.window?.constructor?.name === "EnvironmentSettingsObject" && sameOrigin(request.window, origin)) {
-          window = request.window;
+        if (request7.window?.constructor?.name === "EnvironmentSettingsObject" && sameOrigin(request7.window, origin)) {
+          window = request7.window;
         }
         if (init.window != null) {
           throw new TypeError(`'window' option '${window}' must be null`);
@@ -12399,66 +12399,66 @@ var require_request2 = __commonJS({
         if ("window" in init) {
           window = "no-window";
         }
-        request = makeRequest({
+        request7 = makeRequest({
           // URL request’s URL.
           // undici implementation note: this is set as the first item in request's urlList in makeRequest
           // method request’s method.
-          method: request.method,
+          method: request7.method,
           // header list A copy of request’s header list.
           // undici implementation note: headersList is cloned in makeRequest
-          headersList: request.headersList,
+          headersList: request7.headersList,
           // unsafe-request flag Set.
-          unsafeRequest: request.unsafeRequest,
+          unsafeRequest: request7.unsafeRequest,
           // client This’s relevant settings object.
           client: this[kRealm].settingsObject,
           // window window.
           window,
           // priority request’s priority.
-          priority: request.priority,
+          priority: request7.priority,
           // origin request’s origin. The propagation of the origin is only significant for navigation requests
           // being handled by a service worker. In this scenario a request can have an origin that is different
           // from the current client.
-          origin: request.origin,
+          origin: request7.origin,
           // referrer request’s referrer.
-          referrer: request.referrer,
+          referrer: request7.referrer,
           // referrer policy request’s referrer policy.
-          referrerPolicy: request.referrerPolicy,
+          referrerPolicy: request7.referrerPolicy,
           // mode request’s mode.
-          mode: request.mode,
+          mode: request7.mode,
           // credentials mode request’s credentials mode.
-          credentials: request.credentials,
+          credentials: request7.credentials,
           // cache mode request’s cache mode.
-          cache: request.cache,
+          cache: request7.cache,
           // redirect mode request’s redirect mode.
-          redirect: request.redirect,
+          redirect: request7.redirect,
           // integrity metadata request’s integrity metadata.
-          integrity: request.integrity,
+          integrity: request7.integrity,
           // keepalive request’s keepalive.
-          keepalive: request.keepalive,
+          keepalive: request7.keepalive,
           // reload-navigation flag request’s reload-navigation flag.
-          reloadNavigation: request.reloadNavigation,
+          reloadNavigation: request7.reloadNavigation,
           // history-navigation flag request’s history-navigation flag.
-          historyNavigation: request.historyNavigation,
+          historyNavigation: request7.historyNavigation,
           // URL list A clone of request’s URL list.
-          urlList: [...request.urlList]
+          urlList: [...request7.urlList]
         });
         const initHasKey = Object.keys(init).length !== 0;
         if (initHasKey) {
-          if (request.mode === "navigate") {
-            request.mode = "same-origin";
+          if (request7.mode === "navigate") {
+            request7.mode = "same-origin";
           }
-          request.reloadNavigation = false;
-          request.historyNavigation = false;
-          request.origin = "client";
-          request.referrer = "client";
-          request.referrerPolicy = "";
-          request.url = request.urlList[request.urlList.length - 1];
-          request.urlList = [request.url];
+          request7.reloadNavigation = false;
+          request7.historyNavigation = false;
+          request7.origin = "client";
+          request7.referrer = "client";
+          request7.referrerPolicy = "";
+          request7.url = request7.urlList[request7.urlList.length - 1];
+          request7.urlList = [request7.url];
         }
         if (init.referrer !== void 0) {
           const referrer = init.referrer;
           if (referrer === "") {
-            request.referrer = "no-referrer";
+            request7.referrer = "no-referrer";
           } else {
             let parsedReferrer;
             try {
@@ -12467,14 +12467,14 @@ var require_request2 = __commonJS({
               throw new TypeError(`Referrer "${referrer}" is not a valid URL.`, { cause: err });
             }
             if (parsedReferrer.protocol === "about:" && parsedReferrer.hostname === "client" || origin && !sameOrigin(parsedReferrer, this[kRealm].settingsObject.baseUrl)) {
-              request.referrer = "client";
+              request7.referrer = "client";
             } else {
-              request.referrer = parsedReferrer;
+              request7.referrer = parsedReferrer;
             }
           }
         }
         if (init.referrerPolicy !== void 0) {
-          request.referrerPolicy = init.referrerPolicy;
+          request7.referrerPolicy = init.referrerPolicy;
         }
         let mode;
         if (init.mode !== void 0) {
@@ -12489,27 +12489,27 @@ var require_request2 = __commonJS({
           });
         }
         if (mode != null) {
-          request.mode = mode;
+          request7.mode = mode;
         }
         if (init.credentials !== void 0) {
-          request.credentials = init.credentials;
+          request7.credentials = init.credentials;
         }
         if (init.cache !== void 0) {
-          request.cache = init.cache;
+          request7.cache = init.cache;
         }
-        if (request.cache === "only-if-cached" && request.mode !== "same-origin") {
+        if (request7.cache === "only-if-cached" && request7.mode !== "same-origin") {
           throw new TypeError(
             "'only-if-cached' can be set only with 'same-origin' mode"
           );
         }
         if (init.redirect !== void 0) {
-          request.redirect = init.redirect;
+          request7.redirect = init.redirect;
         }
         if (init.integrity != null) {
-          request.integrity = String(init.integrity);
+          request7.integrity = String(init.integrity);
         }
         if (init.keepalive !== void 0) {
-          request.keepalive = Boolean(init.keepalive);
+          request7.keepalive = Boolean(init.keepalive);
         }
         if (init.method !== void 0) {
           let method = init.method;
@@ -12520,12 +12520,12 @@ var require_request2 = __commonJS({
             throw new TypeError(`'${method}' HTTP method is unsupported.`);
           }
           method = normalizeMethodRecord[method] ?? normalizeMethod(method);
-          request.method = method;
+          request7.method = method;
         }
         if (init.signal !== void 0) {
           signal = init.signal;
         }
-        this[kState] = request;
+        this[kState] = request7;
         const ac = new AbortController();
         this[kSignal] = ac.signal;
         this[kSignal][kRealm] = this[kRealm];
@@ -12559,13 +12559,13 @@ var require_request2 = __commonJS({
           }
         }
         this[kHeaders] = new Headers(kConstruct);
-        this[kHeaders][kHeadersList] = request.headersList;
+        this[kHeaders][kHeadersList] = request7.headersList;
         this[kHeaders][kGuard] = "request";
         this[kHeaders][kRealm] = this[kRealm];
         if (mode === "no-cors") {
-          if (!corsSafeListedMethodsSet.has(request.method)) {
+          if (!corsSafeListedMethodsSet.has(request7.method)) {
             throw new TypeError(
-              `'${request.method} is unsupported in no-cors mode.`
+              `'${request7.method} is unsupported in no-cors mode.`
             );
           }
           this[kHeaders][kGuard] = "request-no-cors";
@@ -12584,14 +12584,14 @@ var require_request2 = __commonJS({
           }
         }
         const inputBody = input instanceof _Request ? input[kState].body : null;
-        if ((init.body != null || inputBody != null) && (request.method === "GET" || request.method === "HEAD")) {
+        if ((init.body != null || inputBody != null) && (request7.method === "GET" || request7.method === "HEAD")) {
           throw new TypeError("Request with GET/HEAD method cannot have body.");
         }
         let initBody = null;
         if (init.body != null) {
           const [extractedBody, contentType] = extractBody(
             init.body,
-            request.keepalive
+            request7.keepalive
           );
           initBody = extractedBody;
           if (contentType && !this[kHeaders][kHeadersList].contains("content-type")) {
@@ -12603,12 +12603,12 @@ var require_request2 = __commonJS({
           if (initBody != null && init.duplex == null) {
             throw new TypeError("RequestInit: duplex option is required when sending a body.");
           }
-          if (request.mode !== "same-origin" && request.mode !== "cors") {
+          if (request7.mode !== "same-origin" && request7.mode !== "cors") {
             throw new TypeError(
               'If request is made from ReadableStream, mode should be "same-origin" or "cors"'
             );
           }
-          request.useCORSPreflightFlag = true;
+          request7.useCORSPreflightFlag = true;
         }
         let finalBody = inputOrInitBody;
         if (initBody == null && inputBody != null) {
@@ -12778,7 +12778,7 @@ var require_request2 = __commonJS({
     };
     mixinBody(Request);
     function makeRequest(init) {
-      const request = {
+      const request7 = {
         method: "GET",
         localURLsOnly: false,
         unsafeRequest: false,
@@ -12817,13 +12817,13 @@ var require_request2 = __commonJS({
         ...init,
         headersList: init.headersList ? new HeadersList(init.headersList) : new HeadersList()
       };
-      request.url = request.urlList[0];
-      return request;
+      request7.url = request7.urlList[0];
+      return request7;
     }
-    function cloneRequest(request) {
-      const newRequest = makeRequest({ ...request, body: null });
-      if (request.body != null) {
-        newRequest.body = cloneBody(request.body);
+    function cloneRequest(request7) {
+      const newRequest = makeRequest({ ...request7, body: null });
+      if (request7.body != null) {
+        newRequest.body = cloneBody(request7.body);
       }
       return newRequest;
     }
@@ -13056,14 +13056,14 @@ var require_fetch = __commonJS({
         p.reject(e);
         return p.promise;
       }
-      const request = requestObject[kState];
+      const request7 = requestObject[kState];
       if (requestObject.signal.aborted) {
-        abortFetch(p, request, null, requestObject.signal.reason);
+        abortFetch(p, request7, null, requestObject.signal.reason);
         return p.promise;
       }
-      const globalObject = request.client.globalObject;
+      const globalObject = request7.client.globalObject;
       if (globalObject?.constructor?.name === "ServiceWorkerGlobalScope") {
-        request.serviceWorkers = "none";
+        request7.serviceWorkers = "none";
       }
       let responseObject = null;
       const relevantRealm = null;
@@ -13075,7 +13075,7 @@ var require_fetch = __commonJS({
           locallyAborted = true;
           assert(controller != null);
           controller.abort(requestObject.signal.reason);
-          abortFetch(p, request, responseObject, requestObject.signal.reason);
+          abortFetch(p, request7, responseObject, requestObject.signal.reason);
         }
       );
       const handleFetchDone = (response) => finalizeAndReportTiming(response, "fetch");
@@ -13084,7 +13084,7 @@ var require_fetch = __commonJS({
           return Promise.resolve();
         }
         if (response.aborted) {
-          abortFetch(p, request, responseObject, controller.serializedAbortReason);
+          abortFetch(p, request7, responseObject, controller.serializedAbortReason);
           return Promise.resolve();
         }
         if (response.type === "error") {
@@ -13102,7 +13102,7 @@ var require_fetch = __commonJS({
         p.resolve(responseObject);
       };
       controller = fetching({
-        request,
+        request: request7,
         processResponseEndOfBody: handleFetchDone,
         processResponse,
         dispatcher: init.dispatcher ?? getGlobalDispatcher()
@@ -13147,13 +13147,13 @@ var require_fetch = __commonJS({
         performance.markResourceTiming(timingInfo, originalURL.href, initiatorType, globalThis2, cacheState);
       }
     }
-    function abortFetch(p, request, responseObject, error2) {
+    function abortFetch(p, request7, responseObject, error2) {
       if (!error2) {
         error2 = new DOMException2("The operation was aborted.", "AbortError");
       }
       p.reject(error2);
-      if (request.body != null && isReadable(request.body?.stream)) {
-        request.body.stream.cancel(error2).catch((err) => {
+      if (request7.body != null && isReadable(request7.body?.stream)) {
+        request7.body.stream.cancel(error2).catch((err) => {
           if (err.code === "ERR_INVALID_STATE") {
             return;
           }
@@ -13174,7 +13174,7 @@ var require_fetch = __commonJS({
       }
     }
     function fetching({
-      request,
+      request: request7,
       processRequestBodyChunkLength,
       processRequestEndOfBody,
       processResponse,
@@ -13186,9 +13186,9 @@ var require_fetch = __commonJS({
     }) {
       let taskDestination = null;
       let crossOriginIsolatedCapability = false;
-      if (request.client != null) {
-        taskDestination = request.client.globalObject;
-        crossOriginIsolatedCapability = request.client.crossOriginIsolatedCapability;
+      if (request7.client != null) {
+        taskDestination = request7.client.globalObject;
+        crossOriginIsolatedCapability = request7.client.crossOriginIsolatedCapability;
       }
       const currenTime = coarsenedSharedCurrentTime(crossOriginIsolatedCapability);
       const timingInfo = createOpaqueTimingInfo({
@@ -13196,7 +13196,7 @@ var require_fetch = __commonJS({
       });
       const fetchParams = {
         controller: new Fetch(dispatcher),
-        request,
+        request: request7,
         timingInfo,
         processRequestBodyChunkLength,
         processRequestEndOfBody,
@@ -13206,32 +13206,32 @@ var require_fetch = __commonJS({
         taskDestination,
         crossOriginIsolatedCapability
       };
-      assert(!request.body || request.body.stream);
-      if (request.window === "client") {
-        request.window = request.client?.globalObject?.constructor?.name === "Window" ? request.client : "no-window";
+      assert(!request7.body || request7.body.stream);
+      if (request7.window === "client") {
+        request7.window = request7.client?.globalObject?.constructor?.name === "Window" ? request7.client : "no-window";
       }
-      if (request.origin === "client") {
-        request.origin = request.client?.origin;
+      if (request7.origin === "client") {
+        request7.origin = request7.client?.origin;
       }
-      if (request.policyContainer === "client") {
-        if (request.client != null) {
-          request.policyContainer = clonePolicyContainer(
-            request.client.policyContainer
+      if (request7.policyContainer === "client") {
+        if (request7.client != null) {
+          request7.policyContainer = clonePolicyContainer(
+            request7.client.policyContainer
           );
         } else {
-          request.policyContainer = makePolicyContainer();
+          request7.policyContainer = makePolicyContainer();
         }
       }
-      if (!request.headersList.contains("accept")) {
+      if (!request7.headersList.contains("accept")) {
         const value = "*/*";
-        request.headersList.append("accept", value);
+        request7.headersList.append("accept", value);
       }
-      if (!request.headersList.contains("accept-language")) {
-        request.headersList.append("accept-language", "*");
+      if (!request7.headersList.contains("accept-language")) {
+        request7.headersList.append("accept-language", "*");
       }
-      if (request.priority === null) {
+      if (request7.priority === null) {
       }
-      if (subresourceSet.has(request.destination)) {
+      if (subresourceSet.has(request7.destination)) {
       }
       mainFetch(fetchParams).catch((err) => {
         fetchParams.controller.terminate(err);
@@ -13239,50 +13239,50 @@ var require_fetch = __commonJS({
       return fetchParams.controller;
     }
     async function mainFetch(fetchParams, recursive = false) {
-      const request = fetchParams.request;
+      const request7 = fetchParams.request;
       let response = null;
-      if (request.localURLsOnly && !urlIsLocal(requestCurrentURL(request))) {
+      if (request7.localURLsOnly && !urlIsLocal(requestCurrentURL(request7))) {
         response = makeNetworkError("local URLs only");
       }
-      tryUpgradeRequestToAPotentiallyTrustworthyURL(request);
-      if (requestBadPort(request) === "blocked") {
+      tryUpgradeRequestToAPotentiallyTrustworthyURL(request7);
+      if (requestBadPort(request7) === "blocked") {
         response = makeNetworkError("bad port");
       }
-      if (request.referrerPolicy === "") {
-        request.referrerPolicy = request.policyContainer.referrerPolicy;
+      if (request7.referrerPolicy === "") {
+        request7.referrerPolicy = request7.policyContainer.referrerPolicy;
       }
-      if (request.referrer !== "no-referrer") {
-        request.referrer = determineRequestsReferrer(request);
+      if (request7.referrer !== "no-referrer") {
+        request7.referrer = determineRequestsReferrer(request7);
       }
       if (response === null) {
         response = await (async () => {
-          const currentURL = requestCurrentURL(request);
+          const currentURL = requestCurrentURL(request7);
           if (
             // - request’s current URL’s origin is same origin with request’s origin,
             //   and request’s response tainting is "basic"
-            sameOrigin(currentURL, request.url) && request.responseTainting === "basic" || // request’s current URL’s scheme is "data"
+            sameOrigin(currentURL, request7.url) && request7.responseTainting === "basic" || // request’s current URL’s scheme is "data"
             currentURL.protocol === "data:" || // - request’s mode is "navigate" or "websocket"
-            (request.mode === "navigate" || request.mode === "websocket")
+            (request7.mode === "navigate" || request7.mode === "websocket")
           ) {
-            request.responseTainting = "basic";
+            request7.responseTainting = "basic";
             return await schemeFetch(fetchParams);
           }
-          if (request.mode === "same-origin") {
+          if (request7.mode === "same-origin") {
             return makeNetworkError('request mode cannot be "same-origin"');
           }
-          if (request.mode === "no-cors") {
-            if (request.redirect !== "follow") {
+          if (request7.mode === "no-cors") {
+            if (request7.redirect !== "follow") {
               return makeNetworkError(
                 'redirect mode cannot be "follow" for "no-cors" request'
               );
             }
-            request.responseTainting = "opaque";
+            request7.responseTainting = "opaque";
             return await schemeFetch(fetchParams);
           }
-          if (!urlIsHttpHttpsScheme(requestCurrentURL(request))) {
+          if (!urlIsHttpHttpsScheme(requestCurrentURL(request7))) {
             return makeNetworkError("URL scheme must be a HTTP(S) scheme");
           }
-          request.responseTainting = "cors";
+          request7.responseTainting = "cors";
           return await httpFetch(fetchParams);
         })();
       }
@@ -13290,13 +13290,13 @@ var require_fetch = __commonJS({
         return response;
       }
       if (response.status !== 0 && !response.internalResponse) {
-        if (request.responseTainting === "cors") {
+        if (request7.responseTainting === "cors") {
         }
-        if (request.responseTainting === "basic") {
+        if (request7.responseTainting === "basic") {
           response = filterResponse(response, "basic");
-        } else if (request.responseTainting === "cors") {
+        } else if (request7.responseTainting === "cors") {
           response = filterResponse(response, "cors");
-        } else if (request.responseTainting === "opaque") {
+        } else if (request7.responseTainting === "opaque") {
           response = filterResponse(response, "opaque");
         } else {
           assert(false);
@@ -13304,26 +13304,26 @@ var require_fetch = __commonJS({
       }
       let internalResponse = response.status === 0 ? response : response.internalResponse;
       if (internalResponse.urlList.length === 0) {
-        internalResponse.urlList.push(...request.urlList);
+        internalResponse.urlList.push(...request7.urlList);
       }
-      if (!request.timingAllowFailed) {
+      if (!request7.timingAllowFailed) {
         response.timingAllowPassed = true;
       }
-      if (response.type === "opaque" && internalResponse.status === 206 && internalResponse.rangeRequested && !request.headers.contains("range")) {
+      if (response.type === "opaque" && internalResponse.status === 206 && internalResponse.rangeRequested && !request7.headers.contains("range")) {
         response = internalResponse = makeNetworkError();
       }
-      if (response.status !== 0 && (request.method === "HEAD" || request.method === "CONNECT" || nullBodyStatus.includes(internalResponse.status))) {
+      if (response.status !== 0 && (request7.method === "HEAD" || request7.method === "CONNECT" || nullBodyStatus.includes(internalResponse.status))) {
         internalResponse.body = null;
         fetchParams.controller.dump = true;
       }
-      if (request.integrity) {
+      if (request7.integrity) {
         const processBodyError = (reason) => fetchFinale(fetchParams, makeNetworkError(reason));
-        if (request.responseTainting === "opaque" || response.body == null) {
+        if (request7.responseTainting === "opaque" || response.body == null) {
           processBodyError(response.error);
           return;
         }
         const processBody = (bytes) => {
-          if (!bytesMatch(bytes, request.integrity)) {
+          if (!bytesMatch(bytes, request7.integrity)) {
             processBodyError("integrity mismatch");
             return;
           }
@@ -13339,8 +13339,8 @@ var require_fetch = __commonJS({
       if (isCancelled(fetchParams) && fetchParams.request.redirectCount === 0) {
         return Promise.resolve(makeAppropriateNetworkError(fetchParams));
       }
-      const { request } = fetchParams;
-      const { protocol: scheme } = requestCurrentURL(request);
+      const { request: request7 } = fetchParams;
+      const { protocol: scheme } = requestCurrentURL(request7);
       switch (scheme) {
         case "about:": {
           return Promise.resolve(makeNetworkError("about scheme is not supported"));
@@ -13349,12 +13349,12 @@ var require_fetch = __commonJS({
           if (!resolveObjectURL) {
             resolveObjectURL = require("buffer").resolveObjectURL;
           }
-          const blobURLEntry = requestCurrentURL(request);
+          const blobURLEntry = requestCurrentURL(request7);
           if (blobURLEntry.search.length !== 0) {
             return Promise.resolve(makeNetworkError("NetworkError when attempting to fetch resource."));
           }
           const blobURLEntryObject = resolveObjectURL(blobURLEntry.toString());
-          if (request.method !== "GET" || !isBlobLike(blobURLEntryObject)) {
+          if (request7.method !== "GET" || !isBlobLike(blobURLEntryObject)) {
             return Promise.resolve(makeNetworkError("invalid method"));
           }
           const bodyWithType = safelyExtractBody(blobURLEntryObject);
@@ -13372,7 +13372,7 @@ var require_fetch = __commonJS({
           return Promise.resolve(response);
         }
         case "data:": {
-          const currentURL = requestCurrentURL(request);
+          const currentURL = requestCurrentURL(request7);
           const dataURLStruct = dataURLProcessor(currentURL);
           if (dataURLStruct === "failure") {
             return Promise.resolve(makeNetworkError("failed to fetch the data URL"));
@@ -13454,41 +13454,41 @@ var require_fetch = __commonJS({
       }
     }
     async function httpFetch(fetchParams) {
-      const request = fetchParams.request;
+      const request7 = fetchParams.request;
       let response = null;
       let actualResponse = null;
       const timingInfo = fetchParams.timingInfo;
-      if (request.serviceWorkers === "all") {
+      if (request7.serviceWorkers === "all") {
       }
       if (response === null) {
-        if (request.redirect === "follow") {
-          request.serviceWorkers = "none";
+        if (request7.redirect === "follow") {
+          request7.serviceWorkers = "none";
         }
         actualResponse = response = await httpNetworkOrCacheFetch(fetchParams);
-        if (request.responseTainting === "cors" && corsCheck(request, response) === "failure") {
+        if (request7.responseTainting === "cors" && corsCheck(request7, response) === "failure") {
           return makeNetworkError("cors failure");
         }
-        if (TAOCheck(request, response) === "failure") {
-          request.timingAllowFailed = true;
+        if (TAOCheck(request7, response) === "failure") {
+          request7.timingAllowFailed = true;
         }
       }
-      if ((request.responseTainting === "opaque" || response.type === "opaque") && crossOriginResourcePolicyCheck(
-        request.origin,
-        request.client,
-        request.destination,
+      if ((request7.responseTainting === "opaque" || response.type === "opaque") && crossOriginResourcePolicyCheck(
+        request7.origin,
+        request7.client,
+        request7.destination,
         actualResponse
       ) === "blocked") {
         return makeNetworkError("blocked");
       }
       if (redirectStatusSet.has(actualResponse.status)) {
-        if (request.redirect !== "manual") {
+        if (request7.redirect !== "manual") {
           fetchParams.controller.connection.destroy();
         }
-        if (request.redirect === "error") {
+        if (request7.redirect === "error") {
           response = makeNetworkError("unexpected redirect");
-        } else if (request.redirect === "manual") {
+        } else if (request7.redirect === "manual") {
           response = actualResponse;
-        } else if (request.redirect === "follow") {
+        } else if (request7.redirect === "follow") {
           response = await httpRedirectFetch(fetchParams, response);
         } else {
           assert(false);
@@ -13498,13 +13498,13 @@ var require_fetch = __commonJS({
       return response;
     }
     function httpRedirectFetch(fetchParams, response) {
-      const request = fetchParams.request;
+      const request7 = fetchParams.request;
       const actualResponse = response.internalResponse ? response.internalResponse : response;
       let locationURL;
       try {
         locationURL = responseLocationURL(
           actualResponse,
-          requestCurrentURL(request).hash
+          requestCurrentURL(request7).hash
         );
         if (locationURL == null) {
           return response;
@@ -13515,63 +13515,63 @@ var require_fetch = __commonJS({
       if (!urlIsHttpHttpsScheme(locationURL)) {
         return Promise.resolve(makeNetworkError("URL scheme must be a HTTP(S) scheme"));
       }
-      if (request.redirectCount === 20) {
+      if (request7.redirectCount === 20) {
         return Promise.resolve(makeNetworkError("redirect count exceeded"));
       }
-      request.redirectCount += 1;
-      if (request.mode === "cors" && (locationURL.username || locationURL.password) && !sameOrigin(request, locationURL)) {
+      request7.redirectCount += 1;
+      if (request7.mode === "cors" && (locationURL.username || locationURL.password) && !sameOrigin(request7, locationURL)) {
         return Promise.resolve(makeNetworkError('cross origin not allowed for request mode "cors"'));
       }
-      if (request.responseTainting === "cors" && (locationURL.username || locationURL.password)) {
+      if (request7.responseTainting === "cors" && (locationURL.username || locationURL.password)) {
         return Promise.resolve(makeNetworkError(
           'URL cannot contain credentials for request mode "cors"'
         ));
       }
-      if (actualResponse.status !== 303 && request.body != null && request.body.source == null) {
+      if (actualResponse.status !== 303 && request7.body != null && request7.body.source == null) {
         return Promise.resolve(makeNetworkError());
       }
-      if ([301, 302].includes(actualResponse.status) && request.method === "POST" || actualResponse.status === 303 && !GET_OR_HEAD.includes(request.method)) {
-        request.method = "GET";
-        request.body = null;
+      if ([301, 302].includes(actualResponse.status) && request7.method === "POST" || actualResponse.status === 303 && !GET_OR_HEAD.includes(request7.method)) {
+        request7.method = "GET";
+        request7.body = null;
         for (const headerName of requestBodyHeader) {
-          request.headersList.delete(headerName);
+          request7.headersList.delete(headerName);
         }
       }
-      if (!sameOrigin(requestCurrentURL(request), locationURL)) {
-        request.headersList.delete("authorization");
-        request.headersList.delete("proxy-authorization", true);
-        request.headersList.delete("cookie");
-        request.headersList.delete("host");
+      if (!sameOrigin(requestCurrentURL(request7), locationURL)) {
+        request7.headersList.delete("authorization");
+        request7.headersList.delete("proxy-authorization", true);
+        request7.headersList.delete("cookie");
+        request7.headersList.delete("host");
       }
-      if (request.body != null) {
-        assert(request.body.source != null);
-        request.body = safelyExtractBody(request.body.source)[0];
+      if (request7.body != null) {
+        assert(request7.body.source != null);
+        request7.body = safelyExtractBody(request7.body.source)[0];
       }
       const timingInfo = fetchParams.timingInfo;
       timingInfo.redirectEndTime = timingInfo.postRedirectStartTime = coarsenedSharedCurrentTime(fetchParams.crossOriginIsolatedCapability);
       if (timingInfo.redirectStartTime === 0) {
         timingInfo.redirectStartTime = timingInfo.startTime;
       }
-      request.urlList.push(locationURL);
-      setRequestReferrerPolicyOnRedirect(request, actualResponse);
+      request7.urlList.push(locationURL);
+      setRequestReferrerPolicyOnRedirect(request7, actualResponse);
       return mainFetch(fetchParams, true);
     }
     async function httpNetworkOrCacheFetch(fetchParams, isAuthenticationFetch = false, isNewConnectionFetch = false) {
-      const request = fetchParams.request;
+      const request7 = fetchParams.request;
       let httpFetchParams = null;
       let httpRequest = null;
       let response = null;
       const httpCache = null;
       const revalidatingFlag = false;
-      if (request.window === "no-window" && request.redirect === "error") {
+      if (request7.window === "no-window" && request7.redirect === "error") {
         httpFetchParams = fetchParams;
-        httpRequest = request;
+        httpRequest = request7;
       } else {
-        httpRequest = makeRequest(request);
+        httpRequest = makeRequest(request7);
         httpFetchParams = { ...fetchParams };
         httpFetchParams.request = httpRequest;
       }
-      const includeCredentials = request.credentials === "include" || request.credentials === "same-origin" && request.responseTainting === "basic";
+      const includeCredentials = request7.credentials === "include" || request7.credentials === "same-origin" && request7.responseTainting === "basic";
       const contentLength = httpRequest.body ? httpRequest.body.length : null;
       let contentLengthHeaderValue = null;
       if (httpRequest.body == null && ["POST", "PUT"].includes(httpRequest.method)) {
@@ -13648,7 +13648,7 @@ var require_fetch = __commonJS({
       }
       response.requestIncludesCredentials = includeCredentials;
       if (response.status === 407) {
-        if (request.window === "no-window") {
+        if (request7.window === "no-window") {
           return makeNetworkError();
         }
         if (isCancelled(fetchParams)) {
@@ -13660,7 +13660,7 @@ var require_fetch = __commonJS({
         // response’s status is 421
         response.status === 421 && // isNewConnectionFetch is false
         !isNewConnectionFetch && // request’s body is null, or request’s body is non-null and request’s body’s source is non-null
-        (request.body == null || request.body.source != null)
+        (request7.body == null || request7.body.source != null)
       ) {
         if (isCancelled(fetchParams)) {
           return makeAppropriateNetworkError(fetchParams);
@@ -13688,21 +13688,21 @@ var require_fetch = __commonJS({
           }
         }
       };
-      const request = fetchParams.request;
+      const request7 = fetchParams.request;
       let response = null;
       const timingInfo = fetchParams.timingInfo;
       const httpCache = null;
       if (httpCache == null) {
-        request.cache = "no-store";
+        request7.cache = "no-store";
       }
       const newConnection = forceNewConnection ? "yes" : "no";
-      if (request.mode === "websocket") {
+      if (request7.mode === "websocket") {
       } else {
       }
       let requestBody = null;
-      if (request.body == null && fetchParams.processRequestEndOfBody) {
+      if (request7.body == null && fetchParams.processRequestEndOfBody) {
         queueMicrotask(() => fetchParams.processRequestEndOfBody());
-      } else if (request.body != null) {
+      } else if (request7.body != null) {
         const processBodyChunk = async function* (bytes) {
           if (isCancelled(fetchParams)) {
             return;
@@ -13730,7 +13730,7 @@ var require_fetch = __commonJS({
         };
         requestBody = (async function* () {
           try {
-            for await (const bytes of request.body.stream) {
+            for await (const bytes of request7.body.stream) {
               yield* processBodyChunk(bytes);
             }
             processEndOfBody();
@@ -13842,17 +13842,17 @@ var require_fetch = __commonJS({
       }
       return response;
       async function dispatch({ body }) {
-        const url = requestCurrentURL(request);
+        const url = requestCurrentURL(request7);
         const agent = fetchParams.controller.dispatcher;
         return new Promise((resolve, reject) => agent.dispatch(
           {
             path: url.pathname + url.search,
             origin: url.origin,
-            method: request.method,
-            body: fetchParams.controller.dispatcher.isMockActive ? request.body && (request.body.source || request.body.stream) : body,
-            headers: request.headersList.entries,
+            method: request7.method,
+            body: fetchParams.controller.dispatcher.isMockActive ? request7.body && (request7.body.source || request7.body.stream) : body,
+            headers: request7.headersList.entries,
             maxRedirections: 0,
-            upgrade: request.mode === "websocket" ? "websocket" : void 0
+            upgrade: request7.mode === "websocket" ? "websocket" : void 0
           },
           {
             body: null,
@@ -13898,8 +13898,8 @@ var require_fetch = __commonJS({
               }
               this.body = new Readable({ read: resume });
               const decoders = [];
-              const willFollow = request.redirect === "follow" && location && redirectStatusSet.has(status);
-              if (request.method !== "HEAD" && request.method !== "CONNECT" && !nullBodyStatus.includes(status) && !willFollow) {
+              const willFollow = request7.redirect === "follow" && location && redirectStatusSet.has(status);
+              if (request7.method !== "HEAD" && request7.method !== "CONNECT" && !nullBodyStatus.includes(status) && !willFollow) {
                 for (const coding of codings) {
                   if (coding === "x-gzip" || coding === "gzip") {
                     decoders.push(zlib.createGunzip({
@@ -14370,7 +14370,7 @@ var require_util4 = __commonJS({
     var { serializeAMimeType, parseMIMEType } = require_dataURL();
     var { types: types2 } = require("util");
     var { StringDecoder } = require("string_decoder");
-    var { btoa } = require("buffer");
+    var { btoa: btoa2 } = require("buffer");
     var staticPropertyDescriptors = {
       enumerable: true,
       writable: false,
@@ -14462,9 +14462,9 @@ var require_util4 = __commonJS({
           dataURL += ";base64,";
           const decoder = new StringDecoder("latin1");
           for (const chunk of bytes) {
-            dataURL += btoa(decoder.write(chunk));
+            dataURL += btoa2(decoder.write(chunk));
           }
-          dataURL += btoa(decoder.end());
+          dataURL += btoa2(decoder.end());
           return dataURL;
         }
         case "Text": {
@@ -14869,34 +14869,34 @@ var require_cache = __commonJS({
         }
         this.#relevantRequestResponseList = arguments[1];
       }
-      async match(request, options = {}) {
+      async match(request7, options = {}) {
         webidl.brandCheck(this, _Cache);
         webidl.argumentLengthCheck(arguments, 1, { header: "Cache.match" });
-        request = webidl.converters.RequestInfo(request);
+        request7 = webidl.converters.RequestInfo(request7);
         options = webidl.converters.CacheQueryOptions(options);
-        const p = await this.matchAll(request, options);
+        const p = await this.matchAll(request7, options);
         if (p.length === 0) {
           return;
         }
         return p[0];
       }
-      async matchAll(request = void 0, options = {}) {
+      async matchAll(request7 = void 0, options = {}) {
         webidl.brandCheck(this, _Cache);
-        if (request !== void 0) request = webidl.converters.RequestInfo(request);
+        if (request7 !== void 0) request7 = webidl.converters.RequestInfo(request7);
         options = webidl.converters.CacheQueryOptions(options);
         let r = null;
-        if (request !== void 0) {
-          if (request instanceof Request) {
-            r = request[kState];
+        if (request7 !== void 0) {
+          if (request7 instanceof Request) {
+            r = request7[kState];
             if (r.method !== "GET" && !options.ignoreMethod) {
               return [];
             }
-          } else if (typeof request === "string") {
-            r = new Request(request)[kState];
+          } else if (typeof request7 === "string") {
+            r = new Request(request7)[kState];
           }
         }
         const responses = [];
-        if (request === void 0) {
+        if (request7 === void 0) {
           for (const requestResponse of this.#relevantRequestResponseList) {
             responses.push(requestResponse[1]);
           }
@@ -14918,11 +14918,11 @@ var require_cache = __commonJS({
         }
         return Object.freeze(responseList);
       }
-      async add(request) {
+      async add(request7) {
         webidl.brandCheck(this, _Cache);
         webidl.argumentLengthCheck(arguments, 1, { header: "Cache.add" });
-        request = webidl.converters.RequestInfo(request);
-        const requests = [request];
+        request7 = webidl.converters.RequestInfo(request7);
+        const requests = [request7];
         const responseArrayPromise = this.addAll(requests);
         return await responseArrayPromise;
       }
@@ -14932,11 +14932,11 @@ var require_cache = __commonJS({
         requests = webidl.converters["sequence<RequestInfo>"](requests);
         const responsePromises = [];
         const requestList = [];
-        for (const request of requests) {
-          if (typeof request === "string") {
+        for (const request7 of requests) {
+          if (typeof request7 === "string") {
             continue;
           }
-          const r = request[kState];
+          const r = request7[kState];
           if (!urlIsHttpHttpsScheme(r.url) || r.method !== "GET") {
             throw webidl.errors.exception({
               header: "Cache.addAll",
@@ -14945,8 +14945,8 @@ var require_cache = __commonJS({
           }
         }
         const fetchControllers = [];
-        for (const request of requests) {
-          const r = new Request(request)[kState];
+        for (const request7 of requests) {
+          const r = new Request(request7)[kState];
           if (!urlIsHttpHttpsScheme(r.url)) {
             throw webidl.errors.exception({
               header: "Cache.addAll",
@@ -15024,16 +15024,16 @@ var require_cache = __commonJS({
         });
         return cacheJobPromise.promise;
       }
-      async put(request, response) {
+      async put(request7, response) {
         webidl.brandCheck(this, _Cache);
         webidl.argumentLengthCheck(arguments, 2, { header: "Cache.put" });
-        request = webidl.converters.RequestInfo(request);
+        request7 = webidl.converters.RequestInfo(request7);
         response = webidl.converters.Response(response);
         let innerRequest = null;
-        if (request instanceof Request) {
-          innerRequest = request[kState];
+        if (request7 instanceof Request) {
+          innerRequest = request7[kState];
         } else {
-          innerRequest = new Request(request)[kState];
+          innerRequest = new Request(request7)[kState];
         }
         if (!urlIsHttpHttpsScheme(innerRequest.url) || innerRequest.method !== "GET") {
           throw webidl.errors.exception({
@@ -15104,20 +15104,20 @@ var require_cache = __commonJS({
         });
         return cacheJobPromise.promise;
       }
-      async delete(request, options = {}) {
+      async delete(request7, options = {}) {
         webidl.brandCheck(this, _Cache);
         webidl.argumentLengthCheck(arguments, 1, { header: "Cache.delete" });
-        request = webidl.converters.RequestInfo(request);
+        request7 = webidl.converters.RequestInfo(request7);
         options = webidl.converters.CacheQueryOptions(options);
         let r = null;
-        if (request instanceof Request) {
-          r = request[kState];
+        if (request7 instanceof Request) {
+          r = request7[kState];
           if (r.method !== "GET" && !options.ignoreMethod) {
             return false;
           }
         } else {
-          assert(typeof request === "string");
-          r = new Request(request)[kState];
+          assert(typeof request7 === "string");
+          r = new Request(request7)[kState];
         }
         const operations = [];
         const operation = {
@@ -15149,24 +15149,24 @@ var require_cache = __commonJS({
        * @param {import('../../types/cache').CacheQueryOptions} options
        * @returns {readonly Request[]}
        */
-      async keys(request = void 0, options = {}) {
+      async keys(request7 = void 0, options = {}) {
         webidl.brandCheck(this, _Cache);
-        if (request !== void 0) request = webidl.converters.RequestInfo(request);
+        if (request7 !== void 0) request7 = webidl.converters.RequestInfo(request7);
         options = webidl.converters.CacheQueryOptions(options);
         let r = null;
-        if (request !== void 0) {
-          if (request instanceof Request) {
-            r = request[kState];
+        if (request7 !== void 0) {
+          if (request7 instanceof Request) {
+            r = request7[kState];
             if (r.method !== "GET" && !options.ignoreMethod) {
               return [];
             }
-          } else if (typeof request === "string") {
-            r = new Request(request)[kState];
+          } else if (typeof request7 === "string") {
+            r = new Request(request7)[kState];
           }
         }
         const promise = createDeferredPromise();
         const requests = [];
-        if (request === void 0) {
+        if (request7 === void 0) {
           for (const requestResponse of this.#relevantRequestResponseList) {
             requests.push(requestResponse[0]);
           }
@@ -15178,12 +15178,12 @@ var require_cache = __commonJS({
         }
         queueMicrotask(() => {
           const requestList = [];
-          for (const request2 of requests) {
+          for (const request8 of requests) {
             const requestObject = new Request("https://a");
-            requestObject[kState] = request2;
-            requestObject[kHeaders][kHeadersList] = request2.headersList;
+            requestObject[kState] = request8;
+            requestObject[kHeaders][kHeadersList] = request8.headersList;
             requestObject[kHeaders][kGuard] = "immutable";
-            requestObject[kRealm] = request2.client;
+            requestObject[kRealm] = request8.client;
             requestList.push(requestObject);
           }
           promise.resolve(Object.freeze(requestList));
@@ -15298,9 +15298,9 @@ var require_cache = __commonJS({
        * @param {import('../../types/cache').CacheQueryOptions | undefined} options
        * @returns {boolean}
        */
-      #requestMatchesCachedItem(requestQuery, request, response = null, options) {
+      #requestMatchesCachedItem(requestQuery, request7, response = null, options) {
         const queryURL = new URL(requestQuery.url);
-        const cachedURL = new URL(request.url);
+        const cachedURL = new URL(request7.url);
         if (options?.ignoreSearch) {
           cachedURL.search = "";
           queryURL.search = "";
@@ -15316,7 +15316,7 @@ var require_cache = __commonJS({
           if (fieldValue === "*") {
             return false;
           }
-          const requestValue = request.headersList.get(fieldValue);
+          const requestValue = request7.headersList.get(fieldValue);
           const queryValue = requestQuery.headersList.get(fieldValue);
           if (requestValue !== queryValue) {
             return false;
@@ -15392,21 +15392,21 @@ var require_cachestorage = __commonJS({
           webidl.illegalConstructor();
         }
       }
-      async match(request, options = {}) {
+      async match(request7, options = {}) {
         webidl.brandCheck(this, _CacheStorage);
         webidl.argumentLengthCheck(arguments, 1, { header: "CacheStorage.match" });
-        request = webidl.converters.RequestInfo(request);
+        request7 = webidl.converters.RequestInfo(request7);
         options = webidl.converters.MultiCacheQueryOptions(options);
         if (options.cacheName != null) {
           if (this.#caches.has(options.cacheName)) {
             const cacheList = this.#caches.get(options.cacheName);
             const cache = new Cache(kConstruct, cacheList);
-            return await cache.match(request, options);
+            return await cache.match(request7, options);
           }
         } else {
           for (const cacheList of this.#caches.values()) {
             const cache = new Cache(kConstruct, cacheList);
-            const response = await cache.match(request, options);
+            const response = await cache.match(request7, options);
             if (response !== void 0) {
               return response;
             }
@@ -16330,7 +16330,7 @@ var require_connection = __commonJS({
     function establishWebSocketConnection(url, protocols, ws, onEstablish, options) {
       const requestURL = url;
       requestURL.protocol = url.protocol === "ws:" ? "http:" : "https:";
-      const request = makeRequest({
+      const request7 = makeRequest({
         urlList: [requestURL],
         serviceWorkers: "none",
         referrer: "no-referrer",
@@ -16341,17 +16341,17 @@ var require_connection = __commonJS({
       });
       if (options.headers) {
         const headersList = new Headers(options.headers)[kHeadersList];
-        request.headersList = headersList;
+        request7.headersList = headersList;
       }
       const keyValue = crypto.randomBytes(16).toString("base64");
-      request.headersList.append("sec-websocket-key", keyValue);
-      request.headersList.append("sec-websocket-version", "13");
+      request7.headersList.append("sec-websocket-key", keyValue);
+      request7.headersList.append("sec-websocket-version", "13");
       for (const protocol of protocols) {
-        request.headersList.append("sec-websocket-protocol", protocol);
+        request7.headersList.append("sec-websocket-protocol", protocol);
       }
       const permessageDeflate = "";
       const controller = fetching({
-        request,
+        request: request7,
         useParallelQueue: true,
         dispatcher: options.dispatcher ?? getGlobalDispatcher(),
         processResponse(response) {
@@ -16383,7 +16383,7 @@ var require_connection = __commonJS({
             return;
           }
           const secProtocol = response.headersList.get("Sec-WebSocket-Protocol");
-          if (secProtocol !== null && secProtocol !== request.headersList.get("Sec-WebSocket-Protocol")) {
+          if (secProtocol !== null && secProtocol !== request7.headersList.get("Sec-WebSocket-Protocol")) {
             failWebsocketConnection(ws, "Protocol was not set in the opening handshake.");
             return;
           }
@@ -17455,7 +17455,7 @@ var require_lib = __commonJS({
     }
     exports2.isHttps = isHttps;
     var HttpClient = class {
-      constructor(userAgent, handlers, requestOptions) {
+      constructor(userAgent6, handlers, requestOptions) {
         this._ignoreSslError = false;
         this._allowRedirects = true;
         this._allowRedirectDowngrade = false;
@@ -17464,7 +17464,7 @@ var require_lib = __commonJS({
         this._maxRetries = 1;
         this._keepAlive = false;
         this._disposed = false;
-        this.userAgent = userAgent;
+        this.userAgent = userAgent6;
         this.handlers = handlers || [];
         this.requestOptions = requestOptions;
         if (requestOptions) {
@@ -17757,14 +17757,14 @@ var require_lib = __commonJS({
       }
       _mergeHeaders(headers) {
         if (this.requestOptions && this.requestOptions.headers) {
-          return Object.assign({}, lowercaseKeys(this.requestOptions.headers), lowercaseKeys(headers || {}));
+          return Object.assign({}, lowercaseKeys6(this.requestOptions.headers), lowercaseKeys6(headers || {}));
         }
-        return lowercaseKeys(headers || {});
+        return lowercaseKeys6(headers || {});
       }
       _getExistingOrDefaultHeader(additionalHeaders, header, _default2) {
         let clientHeader;
         if (this.requestOptions && this.requestOptions.headers) {
-          clientHeader = lowercaseKeys(this.requestOptions.headers)[header];
+          clientHeader = lowercaseKeys6(this.requestOptions.headers)[header];
         }
         return additionalHeaders[header] || clientHeader || _default2;
       }
@@ -17899,7 +17899,7 @@ var require_lib = __commonJS({
       }
     };
     exports2.HttpClient = HttpClient;
-    var lowercaseKeys = (obj) => Object.keys(obj).reduce((c, k) => (c[k.toLowerCase()] = obj[k], c), {});
+    var lowercaseKeys6 = (obj) => Object.keys(obj).reduce((c, k) => (c[k.toLowerCase()] = obj[k], c), {});
   }
 });
 
@@ -19660,10 +19660,10 @@ var require_core = __commonJS({
       (0, command_1.issueCommand)("set-env", { name }, convertedVal);
     }
     exports2.exportVariable = exportVariable;
-    function setSecret(secret) {
+    function setSecret2(secret) {
       (0, command_1.issueCommand)("add-mask", {}, secret);
     }
-    exports2.setSecret = setSecret;
+    exports2.setSecret = setSecret2;
     function addPath(inputPath) {
       const filePath = process.env["GITHUB_PATH"] || "";
       if (filePath) {
@@ -19968,7 +19968,7 @@ var require_dist_node = __commonJS({
   "node_modules/universal-user-agent/dist-node/index.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
-    function getUserAgent() {
+    function getUserAgent6() {
       if (typeof navigator === "object" && "userAgent" in navigator) {
         return navigator.userAgent;
       }
@@ -19977,7 +19977,7 @@ var require_dist_node = __commonJS({
       }
       return "<environment undetectable>";
     }
-    exports2.getUserAgent = getUserAgent;
+    exports2.getUserAgent = getUserAgent6;
   }
 });
 
@@ -20013,18 +20013,18 @@ var require_register = __commonJS({
 var require_add = __commonJS({
   "node_modules/before-after-hook/lib/add.js"(exports2, module2) {
     module2.exports = addHook;
-    function addHook(state, kind, name, hook) {
-      var orig = hook;
+    function addHook(state, kind, name, hook5) {
+      var orig = hook5;
       if (!state.registry[name]) {
         state.registry[name] = [];
       }
       if (kind === "before") {
-        hook = function(method, options) {
+        hook5 = function(method, options) {
           return Promise.resolve().then(orig.bind(null, options)).then(method.bind(null, options));
         };
       }
       if (kind === "after") {
-        hook = function(method, options) {
+        hook5 = function(method, options) {
           var result;
           return Promise.resolve().then(method.bind(null, options)).then(function(result_) {
             result = result_;
@@ -20035,14 +20035,14 @@ var require_add = __commonJS({
         };
       }
       if (kind === "error") {
-        hook = function(method, options) {
+        hook5 = function(method, options) {
           return Promise.resolve().then(method.bind(null, options)).catch(function(error2) {
             return orig(error2, options);
           });
         };
       }
       state.registry[name].push({
-        hook,
+        hook: hook5,
         orig
       });
     }
@@ -20076,16 +20076,16 @@ var require_before_after_hook = __commonJS({
     var removeHook = require_remove();
     var bind = Function.bind;
     var bindable = bind.bind(bind);
-    function bindApi(hook, state, name) {
+    function bindApi(hook5, state, name) {
       var removeHookRef = bindable(removeHook, null).apply(
         null,
         name ? [state, name] : [state]
       );
-      hook.api = { remove: removeHookRef };
-      hook.remove = removeHookRef;
+      hook5.api = { remove: removeHookRef };
+      hook5.remove = removeHookRef;
       ["before", "error", "after", "wrap"].forEach(function(kind) {
         var args = name ? [state, kind, name] : [state, kind];
-        hook[kind] = hook.api[kind] = bindable(addHook, null).apply(null, args);
+        hook5[kind] = hook5.api[kind] = bindable(addHook, null).apply(null, args);
       });
     }
     function HookSingular() {
@@ -20101,9 +20101,9 @@ var require_before_after_hook = __commonJS({
       var state = {
         registry: {}
       };
-      var hook = register.bind(null, state);
-      bindApi(hook, state);
-      return hook;
+      var hook5 = register.bind(null, state);
+      bindApi(hook5, state);
+      return hook5;
     }
     var collectionHookDeprecationMessageDisplayed = false;
     function Hook() {
@@ -20147,24 +20147,24 @@ var require_dist_node2 = __commonJS({
     var __toCommonJS = (mod) => __copyProps2(__defProp2({}, "__esModule", { value: true }), mod);
     var dist_src_exports = {};
     __export(dist_src_exports, {
-      endpoint: () => endpoint
+      endpoint: () => endpoint6
     });
     module2.exports = __toCommonJS(dist_src_exports);
-    var import_universal_user_agent = require_dist_node();
-    var VERSION = "9.0.6";
-    var userAgent = `octokit-endpoint.js/${VERSION} ${(0, import_universal_user_agent.getUserAgent)()}`;
-    var DEFAULTS = {
+    var import_universal_user_agent15 = require_dist_node();
+    var VERSION15 = "9.0.6";
+    var userAgent6 = `octokit-endpoint.js/${VERSION15} ${(0, import_universal_user_agent15.getUserAgent)()}`;
+    var DEFAULTS6 = {
       method: "GET",
       baseUrl: "https://api.github.com",
       headers: {
         accept: "application/vnd.github.v3+json",
-        "user-agent": userAgent
+        "user-agent": userAgent6
       },
       mediaType: {
         format: ""
       }
     };
-    function lowercaseKeys(object) {
+    function lowercaseKeys6(object) {
       if (!object) {
         return {};
       }
@@ -20173,7 +20173,7 @@ var require_dist_node2 = __commonJS({
         return newObj;
       }, {});
     }
-    function isPlainObject(value) {
+    function isPlainObject11(value) {
       if (typeof value !== "object" || value === null)
         return false;
       if (Object.prototype.toString.call(value) !== "[object Object]")
@@ -20184,21 +20184,21 @@ var require_dist_node2 = __commonJS({
       const Ctor = Object.prototype.hasOwnProperty.call(proto, "constructor") && proto.constructor;
       return typeof Ctor === "function" && Ctor instanceof Ctor && Function.prototype.call(Ctor) === Function.prototype.call(value);
     }
-    function mergeDeep(defaults, options) {
+    function mergeDeep6(defaults, options) {
       const result = Object.assign({}, defaults);
       Object.keys(options).forEach((key) => {
-        if (isPlainObject(options[key])) {
+        if (isPlainObject11(options[key])) {
           if (!(key in defaults))
             Object.assign(result, { [key]: options[key] });
           else
-            result[key] = mergeDeep(defaults[key], options[key]);
+            result[key] = mergeDeep6(defaults[key], options[key]);
         } else {
           Object.assign(result, { [key]: options[key] });
         }
       });
       return result;
     }
-    function removeUndefinedProperties(obj) {
+    function removeUndefinedProperties6(obj) {
       for (const key in obj) {
         if (obj[key] === void 0) {
           delete obj[key];
@@ -20206,17 +20206,17 @@ var require_dist_node2 = __commonJS({
       }
       return obj;
     }
-    function merge2(defaults, route, options) {
+    function merge7(defaults, route, options) {
       if (typeof route === "string") {
         let [method, url] = route.split(" ");
         options = Object.assign(url ? { method, url } : { url: method }, options);
       } else {
         options = Object.assign({}, route);
       }
-      options.headers = lowercaseKeys(options.headers);
-      removeUndefinedProperties(options);
-      removeUndefinedProperties(options.headers);
-      const mergedOptions = mergeDeep(defaults || {}, options);
+      options.headers = lowercaseKeys6(options.headers);
+      removeUndefinedProperties6(options);
+      removeUndefinedProperties6(options.headers);
+      const mergedOptions = mergeDeep6(defaults || {}, options);
       if (options.url === "/graphql") {
         if (defaults && defaults.mediaType.previews?.length) {
           mergedOptions.mediaType.previews = defaults.mediaType.previews.filter(
@@ -20227,7 +20227,7 @@ var require_dist_node2 = __commonJS({
       }
       return mergedOptions;
     }
-    function addQueryParameters(url, parameters) {
+    function addQueryParameters6(url, parameters) {
       const separator = /\?/.test(url) ? "&" : "?";
       const names = Object.keys(parameters);
       if (names.length === 0) {
@@ -20240,18 +20240,18 @@ var require_dist_node2 = __commonJS({
         return `${name}=${encodeURIComponent(parameters[name])}`;
       }).join("&");
     }
-    var urlVariableRegex = /\{[^{}}]+\}/g;
-    function removeNonChars(variableName) {
+    var urlVariableRegex6 = /\{[^{}}]+\}/g;
+    function removeNonChars6(variableName) {
       return variableName.replace(/(?:^\W+)|(?:(?<!\W)\W+$)/g, "").split(/,/);
     }
-    function extractUrlVariableNames(url) {
-      const matches = url.match(urlVariableRegex);
+    function extractUrlVariableNames6(url) {
+      const matches = url.match(urlVariableRegex6);
       if (!matches) {
         return [];
       }
-      return matches.map(removeNonChars).reduce((a, b) => a.concat(b), []);
+      return matches.map(removeNonChars6).reduce((a, b) => a.concat(b), []);
     }
-    function omit(object, keysToOmit) {
+    function omit6(object, keysToOmit) {
       const result = { __proto__: null };
       for (const key of Object.keys(object)) {
         if (keysToOmit.indexOf(key) === -1) {
@@ -20260,7 +20260,7 @@ var require_dist_node2 = __commonJS({
       }
       return result;
     }
-    function encodeReserved(str2) {
+    function encodeReserved6(str2) {
       return str2.split(/(%[0-9A-Fa-f]{2})/g).map(function(part) {
         if (!/%[0-9A-Fa-f]/.test(part)) {
           part = encodeURI(part).replace(/%5B/g, "[").replace(/%5D/g, "]");
@@ -20268,67 +20268,67 @@ var require_dist_node2 = __commonJS({
         return part;
       }).join("");
     }
-    function encodeUnreserved(str2) {
+    function encodeUnreserved6(str2) {
       return encodeURIComponent(str2).replace(/[!'()*]/g, function(c) {
         return "%" + c.charCodeAt(0).toString(16).toUpperCase();
       });
     }
-    function encodeValue(operator, value, key) {
-      value = operator === "+" || operator === "#" ? encodeReserved(value) : encodeUnreserved(value);
+    function encodeValue6(operator, value, key) {
+      value = operator === "+" || operator === "#" ? encodeReserved6(value) : encodeUnreserved6(value);
       if (key) {
-        return encodeUnreserved(key) + "=" + value;
+        return encodeUnreserved6(key) + "=" + value;
       } else {
         return value;
       }
     }
-    function isDefined(value) {
+    function isDefined6(value) {
       return value !== void 0 && value !== null;
     }
-    function isKeyOperator(operator) {
+    function isKeyOperator6(operator) {
       return operator === ";" || operator === "&" || operator === "?";
     }
-    function getValues(context3, operator, key, modifier) {
+    function getValues6(context3, operator, key, modifier) {
       var value = context3[key], result = [];
-      if (isDefined(value) && value !== "") {
+      if (isDefined6(value) && value !== "") {
         if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
           value = value.toString();
           if (modifier && modifier !== "*") {
             value = value.substring(0, parseInt(modifier, 10));
           }
           result.push(
-            encodeValue(operator, value, isKeyOperator(operator) ? key : "")
+            encodeValue6(operator, value, isKeyOperator6(operator) ? key : "")
           );
         } else {
           if (modifier === "*") {
             if (Array.isArray(value)) {
-              value.filter(isDefined).forEach(function(value2) {
+              value.filter(isDefined6).forEach(function(value2) {
                 result.push(
-                  encodeValue(operator, value2, isKeyOperator(operator) ? key : "")
+                  encodeValue6(operator, value2, isKeyOperator6(operator) ? key : "")
                 );
               });
             } else {
               Object.keys(value).forEach(function(k) {
-                if (isDefined(value[k])) {
-                  result.push(encodeValue(operator, value[k], k));
+                if (isDefined6(value[k])) {
+                  result.push(encodeValue6(operator, value[k], k));
                 }
               });
             }
           } else {
             const tmp = [];
             if (Array.isArray(value)) {
-              value.filter(isDefined).forEach(function(value2) {
-                tmp.push(encodeValue(operator, value2));
+              value.filter(isDefined6).forEach(function(value2) {
+                tmp.push(encodeValue6(operator, value2));
               });
             } else {
               Object.keys(value).forEach(function(k) {
-                if (isDefined(value[k])) {
-                  tmp.push(encodeUnreserved(k));
-                  tmp.push(encodeValue(operator, value[k].toString()));
+                if (isDefined6(value[k])) {
+                  tmp.push(encodeUnreserved6(k));
+                  tmp.push(encodeValue6(operator, value[k].toString()));
                 }
               });
             }
-            if (isKeyOperator(operator)) {
-              result.push(encodeUnreserved(key) + "=" + tmp.join(","));
+            if (isKeyOperator6(operator)) {
+              result.push(encodeUnreserved6(key) + "=" + tmp.join(","));
             } else if (tmp.length !== 0) {
               result.push(tmp.join(","));
             }
@@ -20336,23 +20336,23 @@ var require_dist_node2 = __commonJS({
         }
       } else {
         if (operator === ";") {
-          if (isDefined(value)) {
-            result.push(encodeUnreserved(key));
+          if (isDefined6(value)) {
+            result.push(encodeUnreserved6(key));
           }
         } else if (value === "" && (operator === "&" || operator === "?")) {
-          result.push(encodeUnreserved(key) + "=");
+          result.push(encodeUnreserved6(key) + "=");
         } else if (value === "") {
           result.push("");
         }
       }
       return result;
     }
-    function parseUrl(template) {
+    function parseUrl6(template) {
       return {
-        expand: expand.bind(null, template)
+        expand: expand6.bind(null, template)
       };
     }
-    function expand(template, context3) {
+    function expand6(template, context3) {
       var operators = ["+", "#", ".", "/", ";", "?", "&"];
       template = template.replace(
         /\{([^\{\}]+)\}|([^\{\}]+)/g,
@@ -20366,7 +20366,7 @@ var require_dist_node2 = __commonJS({
             }
             expression.split(/,/g).forEach(function(variable) {
               var tmp = /([^:\*]*)(?::(\d+)|(\*))?/.exec(variable);
-              values.push(getValues(context3, operator, tmp[1], tmp[2] || tmp[3]));
+              values.push(getValues6(context3, operator, tmp[1], tmp[2] || tmp[3]));
             });
             if (operator && operator !== "+") {
               var separator = ",";
@@ -20380,7 +20380,7 @@ var require_dist_node2 = __commonJS({
               return values.join(",");
             }
           } else {
-            return encodeReserved(literal);
+            return encodeReserved6(literal);
           }
         }
       );
@@ -20390,12 +20390,12 @@ var require_dist_node2 = __commonJS({
         return template.replace(/\/$/, "");
       }
     }
-    function parse(options) {
+    function parse6(options) {
       let method = options.method.toUpperCase();
       let url = (options.url || "/").replace(/:([a-z]\w+)/g, "{$1}");
       let headers = Object.assign({}, options.headers);
       let body;
-      let parameters = omit(options, [
+      let parameters = omit6(options, [
         "method",
         "baseUrl",
         "url",
@@ -20403,13 +20403,13 @@ var require_dist_node2 = __commonJS({
         "request",
         "mediaType"
       ]);
-      const urlVariableNames = extractUrlVariableNames(url);
-      url = parseUrl(url).expand(parameters);
+      const urlVariableNames = extractUrlVariableNames6(url);
+      url = parseUrl6(url).expand(parameters);
       if (!/^http/.test(url)) {
         url = options.baseUrl + url;
       }
       const omittedParameters = Object.keys(options).filter((option) => urlVariableNames.includes(option)).concat("baseUrl");
-      const remainingParameters = omit(parameters, omittedParameters);
+      const remainingParameters = omit6(parameters, omittedParameters);
       const isBinaryRequest = /application\/octet-stream/i.test(headers.accept);
       if (!isBinaryRequest) {
         if (options.mediaType.format) {
@@ -20431,7 +20431,7 @@ var require_dist_node2 = __commonJS({
         }
       }
       if (["GET", "HEAD"].includes(method)) {
-        url = addQueryParameters(url, remainingParameters);
+        url = addQueryParameters6(url, remainingParameters);
       } else {
         if ("data" in remainingParameters) {
           body = remainingParameters.data;
@@ -20453,20 +20453,20 @@ var require_dist_node2 = __commonJS({
         options.request ? { request: options.request } : null
       );
     }
-    function endpointWithDefaults(defaults, route, options) {
-      return parse(merge2(defaults, route, options));
+    function endpointWithDefaults6(defaults, route, options) {
+      return parse6(merge7(defaults, route, options));
     }
-    function withDefaults(oldDefaults, newDefaults) {
-      const DEFAULTS2 = merge2(oldDefaults, newDefaults);
-      const endpoint2 = endpointWithDefaults.bind(null, DEFAULTS2);
-      return Object.assign(endpoint2, {
-        DEFAULTS: DEFAULTS2,
-        defaults: withDefaults.bind(null, DEFAULTS2),
-        merge: merge2.bind(null, DEFAULTS2),
-        parse
+    function withDefaults11(oldDefaults, newDefaults) {
+      const DEFAULTS22 = merge7(oldDefaults, newDefaults);
+      const endpoint22 = endpointWithDefaults6.bind(null, DEFAULTS22);
+      return Object.assign(endpoint22, {
+        DEFAULTS: DEFAULTS22,
+        defaults: withDefaults11.bind(null, DEFAULTS22),
+        merge: merge7.bind(null, DEFAULTS22),
+        parse: parse6
       });
     }
-    var endpoint = withDefaults(null, DEFAULTS);
+    var endpoint6 = withDefaults11(null, DEFAULTS6);
   }
 });
 
@@ -20595,14 +20595,14 @@ var require_dist_node4 = __commonJS({
     var __toCommonJS = (mod) => __copyProps2(__defProp2({}, "__esModule", { value: true }), mod);
     var dist_src_exports = {};
     __export(dist_src_exports, {
-      RequestError: () => RequestError
+      RequestError: () => RequestError6
     });
     module2.exports = __toCommonJS(dist_src_exports);
     var import_deprecation = require_dist_node3();
     var import_once = __toESM2(require_once());
     var logOnceCode = (0, import_once.default)((deprecation) => console.warn(deprecation));
     var logOnceHeaders = (0, import_once.default)((deprecation) => console.warn(deprecation));
-    var RequestError = class extends Error {
+    var RequestError6 = class extends Error {
       constructor(message, statusCode, options) {
         super(message);
         if (Error.captureStackTrace) {
@@ -20677,13 +20677,13 @@ var require_dist_node5 = __commonJS({
     var __toCommonJS = (mod) => __copyProps2(__defProp2({}, "__esModule", { value: true }), mod);
     var dist_src_exports = {};
     __export(dist_src_exports, {
-      request: () => request
+      request: () => request7
     });
     module2.exports = __toCommonJS(dist_src_exports);
-    var import_endpoint = require_dist_node2();
-    var import_universal_user_agent = require_dist_node();
-    var VERSION = "8.4.1";
-    function isPlainObject(value) {
+    var import_endpoint6 = require_dist_node2();
+    var import_universal_user_agent15 = require_dist_node();
+    var VERSION15 = "8.4.1";
+    function isPlainObject11(value) {
       if (typeof value !== "object" || value === null)
         return false;
       if (Object.prototype.toString.call(value) !== "[object Object]")
@@ -20694,15 +20694,15 @@ var require_dist_node5 = __commonJS({
       const Ctor = Object.prototype.hasOwnProperty.call(proto, "constructor") && proto.constructor;
       return typeof Ctor === "function" && Ctor instanceof Ctor && Function.prototype.call(Ctor) === Function.prototype.call(value);
     }
-    var import_request_error = require_dist_node4();
+    var import_request_error7 = require_dist_node4();
     function getBufferResponse(response) {
       return response.arrayBuffer();
     }
-    function fetchWrapper(requestOptions) {
+    function fetchWrapper6(requestOptions) {
       var _a, _b, _c, _d;
       const log = requestOptions.request && requestOptions.request.log ? requestOptions.request.log : console;
       const parseSuccessResponseBody = ((_a = requestOptions.request) == null ? void 0 : _a.parseSuccessResponseBody) !== false;
-      if (isPlainObject(requestOptions.body) || Array.isArray(requestOptions.body)) {
+      if (isPlainObject11(requestOptions.body) || Array.isArray(requestOptions.body)) {
         requestOptions.body = JSON.stringify(requestOptions.body);
       }
       let headers = {};
@@ -20746,7 +20746,7 @@ var require_dist_node5 = __commonJS({
           if (status < 400) {
             return;
           }
-          throw new import_request_error.RequestError(response.statusText, status, {
+          throw new import_request_error7.RequestError(response.statusText, status, {
             response: {
               url,
               status,
@@ -20757,19 +20757,19 @@ var require_dist_node5 = __commonJS({
           });
         }
         if (status === 304) {
-          throw new import_request_error.RequestError("Not modified", status, {
+          throw new import_request_error7.RequestError("Not modified", status, {
             response: {
               url,
               status,
               headers,
-              data: await getResponseData(response)
+              data: await getResponseData6(response)
             },
             request: requestOptions
           });
         }
         if (status >= 400) {
-          const data = await getResponseData(response);
-          const error2 = new import_request_error.RequestError(toErrorMessage(data), status, {
+          const data = await getResponseData6(response);
+          const error2 = new import_request_error7.RequestError(toErrorMessage6(data), status, {
             response: {
               url,
               status,
@@ -20780,7 +20780,7 @@ var require_dist_node5 = __commonJS({
           });
           throw error2;
         }
-        return parseSuccessResponseBody ? await getResponseData(response) : response.body;
+        return parseSuccessResponseBody ? await getResponseData6(response) : response.body;
       }).then((data) => {
         return {
           status,
@@ -20789,7 +20789,7 @@ var require_dist_node5 = __commonJS({
           data
         };
       }).catch((error2) => {
-        if (error2 instanceof import_request_error.RequestError)
+        if (error2 instanceof import_request_error7.RequestError)
           throw error2;
         else if (error2.name === "AbortError")
           throw error2;
@@ -20801,12 +20801,12 @@ var require_dist_node5 = __commonJS({
             message = error2.cause;
           }
         }
-        throw new import_request_error.RequestError(message, 500, {
+        throw new import_request_error7.RequestError(message, 500, {
           request: requestOptions
         });
       });
     }
-    async function getResponseData(response) {
+    async function getResponseData6(response) {
       const contentType = response.headers.get("content-type");
       if (/application\/json/.test(contentType)) {
         return response.json().catch(() => response.text()).catch(() => "");
@@ -20816,7 +20816,7 @@ var require_dist_node5 = __commonJS({
       }
       return getBufferResponse(response);
     }
-    function toErrorMessage(data) {
+    function toErrorMessage6(data) {
       if (typeof data === "string")
         return data;
       let suffix;
@@ -20833,32 +20833,32 @@ var require_dist_node5 = __commonJS({
       }
       return `Unknown error: ${JSON.stringify(data)}`;
     }
-    function withDefaults(oldEndpoint, newDefaults) {
-      const endpoint2 = oldEndpoint.defaults(newDefaults);
+    function withDefaults11(oldEndpoint, newDefaults) {
+      const endpoint22 = oldEndpoint.defaults(newDefaults);
       const newApi = function(route, parameters) {
-        const endpointOptions = endpoint2.merge(route, parameters);
+        const endpointOptions = endpoint22.merge(route, parameters);
         if (!endpointOptions.request || !endpointOptions.request.hook) {
-          return fetchWrapper(endpoint2.parse(endpointOptions));
+          return fetchWrapper6(endpoint22.parse(endpointOptions));
         }
-        const request2 = (route2, parameters2) => {
-          return fetchWrapper(
-            endpoint2.parse(endpoint2.merge(route2, parameters2))
+        const request22 = (route2, parameters2) => {
+          return fetchWrapper6(
+            endpoint22.parse(endpoint22.merge(route2, parameters2))
           );
         };
-        Object.assign(request2, {
-          endpoint: endpoint2,
-          defaults: withDefaults.bind(null, endpoint2)
+        Object.assign(request22, {
+          endpoint: endpoint22,
+          defaults: withDefaults11.bind(null, endpoint22)
         });
-        return endpointOptions.request.hook(request2, endpointOptions);
+        return endpointOptions.request.hook(request22, endpointOptions);
       };
       return Object.assign(newApi, {
-        endpoint: endpoint2,
-        defaults: withDefaults.bind(null, endpoint2)
+        endpoint: endpoint22,
+        defaults: withDefaults11.bind(null, endpoint22)
       });
     }
-    var request = withDefaults(import_endpoint.endpoint, {
+    var request7 = withDefaults11(import_endpoint6.endpoint, {
       headers: {
-        "user-agent": `octokit-request.js/${VERSION} ${(0, import_universal_user_agent.getUserAgent)()}`
+        "user-agent": `octokit-request.js/${VERSION15} ${(0, import_universal_user_agent15.getUserAgent)()}`
       }
     });
   }
@@ -20892,19 +20892,19 @@ var require_dist_node6 = __commonJS({
       withCustomRequest: () => withCustomRequest
     });
     module2.exports = __toCommonJS(index_exports);
-    var import_request3 = require_dist_node5();
-    var import_universal_user_agent = require_dist_node();
-    var VERSION = "7.1.1";
-    var import_request2 = require_dist_node5();
-    var import_request = require_dist_node5();
+    var import_request32 = require_dist_node5();
+    var import_universal_user_agent15 = require_dist_node();
+    var VERSION15 = "7.1.1";
+    var import_request22 = require_dist_node5();
+    var import_request14 = require_dist_node5();
     function _buildMessageForResponseErrors(data) {
       return `Request failed due to following response errors:
 ` + data.errors.map((e) => ` - ${e.message}`).join("\n");
     }
     var GraphqlResponseError = class extends Error {
-      constructor(request2, headers, response) {
+      constructor(request22, headers, response) {
         super(_buildMessageForResponseErrors(response));
-        this.request = request2;
+        this.request = request22;
         this.headers = headers;
         this.response = response;
         this.name = "GraphqlResponseError";
@@ -20926,7 +20926,7 @@ var require_dist_node6 = __commonJS({
     ];
     var FORBIDDEN_VARIABLE_OPTIONS = ["query", "method", "url"];
     var GHES_V3_SUFFIX_REGEX = /\/api\/v3\/?$/;
-    function graphql(request2, query, options) {
+    function graphql(request22, query, options) {
       if (options) {
         if (typeof query === "string" && "query" in options) {
           return Promise.reject(
@@ -20956,11 +20956,11 @@ var require_dist_node6 = __commonJS({
         result.variables[key] = parsedOptions[key];
         return result;
       }, {});
-      const baseUrl = parsedOptions.baseUrl || request2.endpoint.DEFAULTS.baseUrl;
+      const baseUrl = parsedOptions.baseUrl || request22.endpoint.DEFAULTS.baseUrl;
       if (GHES_V3_SUFFIX_REGEX.test(baseUrl)) {
         requestOptions.url = baseUrl.replace(GHES_V3_SUFFIX_REGEX, "/api/graphql");
       }
-      return request2(requestOptions).then((response) => {
+      return request22(requestOptions).then((response) => {
         if (response.data.errors) {
           const headers = {};
           for (const key of Object.keys(response.headers)) {
@@ -20975,25 +20975,25 @@ var require_dist_node6 = __commonJS({
         return response.data.data;
       });
     }
-    function withDefaults(request2, newDefaults) {
-      const newRequest = request2.defaults(newDefaults);
+    function withDefaults11(request22, newDefaults) {
+      const newRequest = request22.defaults(newDefaults);
       const newApi = (query, options) => {
         return graphql(newRequest, query, options);
       };
       return Object.assign(newApi, {
-        defaults: withDefaults.bind(null, newRequest),
+        defaults: withDefaults11.bind(null, newRequest),
         endpoint: newRequest.endpoint
       });
     }
-    var graphql2 = withDefaults(import_request3.request, {
+    var graphql2 = withDefaults11(import_request32.request, {
       headers: {
-        "user-agent": `octokit-graphql.js/${VERSION} ${(0, import_universal_user_agent.getUserAgent)()}`
+        "user-agent": `octokit-graphql.js/${VERSION15} ${(0, import_universal_user_agent15.getUserAgent)()}`
       },
       method: "POST",
       url: "/graphql"
     });
     function withCustomRequest(customRequest) {
-      return withDefaults(customRequest, {
+      return withDefaults11(customRequest, {
         method: "POST",
         url: "/graphql"
       });
@@ -21030,7 +21030,7 @@ var require_dist_node7 = __commonJS({
     var REGEX_IS_INSTALLATION_LEGACY = /^v1\./;
     var REGEX_IS_INSTALLATION = /^ghs_/;
     var REGEX_IS_USER_TO_SERVER = /^ghu_/;
-    async function auth(token) {
+    async function auth5(token) {
       const isApp = token.split(/\./).length === 3;
       const isInstallation = REGEX_IS_INSTALLATION_LEGACY.test(token) || REGEX_IS_INSTALLATION.test(token);
       const isUserToServer = REGEX_IS_USER_TO_SERVER.test(token);
@@ -21047,13 +21047,13 @@ var require_dist_node7 = __commonJS({
       }
       return `token ${token}`;
     }
-    async function hook(token, request, route, parameters) {
-      const endpoint = request.endpoint.merge(
+    async function hook5(token, request7, route, parameters) {
+      const endpoint6 = request7.endpoint.merge(
         route,
         parameters
       );
-      endpoint.headers.authorization = withAuthorizationPrefix(token);
-      return request(endpoint);
+      endpoint6.headers.authorization = withAuthorizationPrefix(token);
+      return request7(endpoint6);
     }
     var createTokenAuth = function createTokenAuth2(token) {
       if (!token) {
@@ -21065,8 +21065,8 @@ var require_dist_node7 = __commonJS({
         );
       }
       token = token.replace(/^(token|bearer) +/i, "");
-      return Object.assign(auth.bind(null, token), {
-        hook: hook.bind(null, token)
+      return Object.assign(auth5.bind(null, token), {
+        hook: hook5.bind(null, token)
       });
     };
   }
@@ -21098,22 +21098,22 @@ var require_dist_node8 = __commonJS({
       Octokit: () => Octokit
     });
     module2.exports = __toCommonJS(index_exports);
-    var import_universal_user_agent = require_dist_node();
+    var import_universal_user_agent15 = require_dist_node();
     var import_before_after_hook = require_before_after_hook();
-    var import_request = require_dist_node5();
+    var import_request14 = require_dist_node5();
     var import_graphql = require_dist_node6();
     var import_auth_token = require_dist_node7();
-    var VERSION = "5.2.2";
-    var noop = () => {
+    var VERSION15 = "5.2.2";
+    var noop6 = () => {
     };
     var consoleWarn = console.warn.bind(console);
     var consoleError = console.error.bind(console);
     function createLogger(logger = {}) {
       if (typeof logger.debug !== "function") {
-        logger.debug = noop;
+        logger.debug = noop6;
       }
       if (typeof logger.info !== "function") {
-        logger.info = noop;
+        logger.info = noop6;
       }
       if (typeof logger.warn !== "function") {
         logger.warn = consoleWarn;
@@ -21123,10 +21123,10 @@ var require_dist_node8 = __commonJS({
       }
       return logger;
     }
-    var userAgentTrail = `octokit-core.js/${VERSION} ${(0, import_universal_user_agent.getUserAgent)()}`;
+    var userAgentTrail = `octokit-core.js/${VERSION15} ${(0, import_universal_user_agent15.getUserAgent)()}`;
     var Octokit = class {
       static {
-        this.VERSION = VERSION;
+        this.VERSION = VERSION15;
       }
       static defaults(defaults) {
         const OctokitWithDefaults = class extends this {
@@ -21171,13 +21171,13 @@ var require_dist_node8 = __commonJS({
         return NewOctokit;
       }
       constructor(options = {}) {
-        const hook = new import_before_after_hook.Collection();
+        const hook5 = new import_before_after_hook.Collection();
         const requestDefaults = {
-          baseUrl: import_request.request.endpoint.DEFAULTS.baseUrl,
+          baseUrl: import_request14.request.endpoint.DEFAULTS.baseUrl,
           headers: {},
           request: Object.assign({}, options.request, {
             // @ts-ignore internal usage only, no need to type
-            hook: hook.bind(null, "request")
+            hook: hook5.bind(null, "request")
           }),
           mediaType: {
             previews: [],
@@ -21194,23 +21194,23 @@ var require_dist_node8 = __commonJS({
         if (options.timeZone) {
           requestDefaults.headers["time-zone"] = options.timeZone;
         }
-        this.request = import_request.request.defaults(requestDefaults);
+        this.request = import_request14.request.defaults(requestDefaults);
         this.graphql = (0, import_graphql.withCustomRequest)(this.request).defaults(requestDefaults);
         this.log = createLogger(options.log);
-        this.hook = hook;
+        this.hook = hook5;
         if (!options.authStrategy) {
           if (!options.auth) {
             this.auth = async () => ({
               type: "unauthenticated"
             });
           } else {
-            const auth = (0, import_auth_token.createTokenAuth)(options.auth);
-            hook.wrap("request", auth.hook);
-            this.auth = auth;
+            const auth5 = (0, import_auth_token.createTokenAuth)(options.auth);
+            hook5.wrap("request", auth5.hook);
+            this.auth = auth5;
           }
         } else {
           const { authStrategy, ...otherOptions } = options;
-          const auth = authStrategy(
+          const auth5 = authStrategy(
             Object.assign(
               {
                 request: this.request,
@@ -21226,8 +21226,8 @@ var require_dist_node8 = __commonJS({
               options.auth
             )
           );
-          hook.wrap("request", auth.hook);
-          this.auth = auth;
+          hook5.wrap("request", auth5.hook);
+          this.auth = auth5;
         }
         const classConstructor = this.constructor;
         for (let i = 0; i < classConstructor.plugins.length; ++i) {
@@ -21265,7 +21265,7 @@ var require_dist_node9 = __commonJS({
       restEndpointMethods: () => restEndpointMethods
     });
     module2.exports = __toCommonJS(dist_src_exports);
-    var VERSION = "10.4.1";
+    var VERSION15 = "10.4.1";
     var Endpoints = {
       actions: {
         addCustomLabelsToSelfHostedRunnerForOrg: [
@@ -23257,8 +23257,8 @@ var require_dist_node9 = __commonJS({
     var endpoints_default = Endpoints;
     var endpointMethodsMap = /* @__PURE__ */ new Map();
     for (const [scope, endpoints] of Object.entries(endpoints_default)) {
-      for (const [methodName, endpoint] of Object.entries(endpoints)) {
-        const [route, defaults, decorations] = endpoint;
+      for (const [methodName, endpoint6] of Object.entries(endpoints)) {
+        const [route, defaults, decorations] = endpoint6;
         const [method, url] = route.split(/ /);
         const endpointDefaults = Object.assign(
           {
@@ -23382,7 +23382,7 @@ var require_dist_node9 = __commonJS({
         rest: api
       };
     }
-    restEndpointMethods.VERSION = VERSION;
+    restEndpointMethods.VERSION = VERSION15;
     function legacyRestEndpointMethods(octokit) {
       const api = endpointsToMethods(octokit);
       return {
@@ -23390,7 +23390,7 @@ var require_dist_node9 = __commonJS({
         rest: api
       };
     }
-    legacyRestEndpointMethods.VERSION = VERSION;
+    legacyRestEndpointMethods.VERSION = VERSION15;
   }
 });
 
@@ -23423,7 +23423,7 @@ var require_dist_node10 = __commonJS({
       paginatingEndpoints: () => paginatingEndpoints
     });
     module2.exports = __toCommonJS(dist_src_exports);
-    var VERSION = "9.2.2";
+    var VERSION15 = "9.2.2";
     function normalizePaginatedListResponse(response) {
       if (!response.data) {
         return {
@@ -23769,7 +23769,7 @@ var require_dist_node10 = __commonJS({
         })
       };
     }
-    paginateRest.VERSION = VERSION;
+    paginateRest.VERSION = VERSION15;
   }
 });
 
@@ -23823,9 +23823,9 @@ var require_utils4 = __commonJS({
     exports2.GitHub = core_1.Octokit.plugin(plugin_rest_endpoint_methods_1.restEndpointMethods, plugin_paginate_rest_1.paginateRest).defaults(exports2.defaults);
     function getOctokitOptions(token, options) {
       const opts = Object.assign({}, options || {});
-      const auth = Utils.getAuthString(token, opts);
-      if (auth) {
-        opts.auth = auth;
+      const auth5 = Utils.getAuthString(token, opts);
+      if (auth5) {
+        opts.auth = auth5;
       }
       return opts;
     }
@@ -23877,12 +23877,4270 @@ var require_github = __commonJS({
   }
 });
 
+// node_modules/fast-content-type-parse/index.js
+var require_fast_content_type_parse = __commonJS({
+  "node_modules/fast-content-type-parse/index.js"(exports2, module2) {
+    "use strict";
+    var NullObject = function NullObject2() {
+    };
+    NullObject.prototype = /* @__PURE__ */ Object.create(null);
+    var paramRE = /; *([!#$%&'*+.^\w`|~-]+)=("(?:[\v\u0020\u0021\u0023-\u005b\u005d-\u007e\u0080-\u00ff]|\\[\v\u0020-\u00ff])*"|[!#$%&'*+.^\w`|~-]+) */gu;
+    var quotedPairRE = /\\([\v\u0020-\u00ff])/gu;
+    var mediaTypeRE = /^[!#$%&'*+.^\w|~-]+\/[!#$%&'*+.^\w|~-]+$/u;
+    var defaultContentType = { type: "", parameters: new NullObject() };
+    Object.freeze(defaultContentType.parameters);
+    Object.freeze(defaultContentType);
+    function parse6(header) {
+      if (typeof header !== "string") {
+        throw new TypeError("argument header is required and must be a string");
+      }
+      let index = header.indexOf(";");
+      const type2 = index !== -1 ? header.slice(0, index).trim() : header.trim();
+      if (mediaTypeRE.test(type2) === false) {
+        throw new TypeError("invalid media type");
+      }
+      const result = {
+        type: type2.toLowerCase(),
+        parameters: new NullObject()
+      };
+      if (index === -1) {
+        return result;
+      }
+      let key;
+      let match;
+      let value;
+      paramRE.lastIndex = index;
+      while (match = paramRE.exec(header)) {
+        if (match.index !== index) {
+          throw new TypeError("invalid parameter format");
+        }
+        index += match[0].length;
+        key = match[1].toLowerCase();
+        value = match[2];
+        if (value[0] === '"') {
+          value = value.slice(1, value.length - 1);
+          quotedPairRE.test(value) && (value = value.replace(quotedPairRE, "$1"));
+        }
+        result.parameters[key] = value;
+      }
+      if (index !== header.length) {
+        throw new TypeError("invalid parameter format");
+      }
+      return result;
+    }
+    function safeParse6(header) {
+      if (typeof header !== "string") {
+        return defaultContentType;
+      }
+      let index = header.indexOf(";");
+      const type2 = index !== -1 ? header.slice(0, index).trim() : header.trim();
+      if (mediaTypeRE.test(type2) === false) {
+        return defaultContentType;
+      }
+      const result = {
+        type: type2.toLowerCase(),
+        parameters: new NullObject()
+      };
+      if (index === -1) {
+        return result;
+      }
+      let key;
+      let match;
+      let value;
+      paramRE.lastIndex = index;
+      while (match = paramRE.exec(header)) {
+        if (match.index !== index) {
+          return defaultContentType;
+        }
+        index += match[0].length;
+        key = match[1].toLowerCase();
+        value = match[2];
+        if (value[0] === '"') {
+          value = value.slice(1, value.length - 1);
+          quotedPairRE.test(value) && (value = value.replace(quotedPairRE, "$1"));
+        }
+        result.parameters[key] = value;
+      }
+      if (index !== header.length) {
+        return defaultContentType;
+      }
+      return result;
+    }
+    module2.exports.default = { parse: parse6, safeParse: safeParse6 };
+    module2.exports.parse = parse6;
+    module2.exports.safeParse = safeParse6;
+    module2.exports.defaultContentType = defaultContentType;
+  }
+});
+
 // src/main.ts
 var core2 = __toESM(require_core(), 1);
 var github2 = __toESM(require_github(), 1);
 var import_promises2 = require("node:fs/promises");
 var import_node_fs = require("node:fs");
 var import_node_path2 = require("node:path");
+
+// node_modules/@octokit/auth-app/node_modules/universal-user-agent/index.js
+function getUserAgent() {
+  if (typeof navigator === "object" && "userAgent" in navigator) {
+    return navigator.userAgent;
+  }
+  if (typeof process === "object" && process.version !== void 0) {
+    return `Node.js/${process.version.substr(1)} (${process.platform}; ${process.arch})`;
+  }
+  return "<environment undetectable>";
+}
+
+// node_modules/@octokit/auth-app/node_modules/@octokit/endpoint/dist-bundle/index.js
+var VERSION = "0.0.0-development";
+var userAgent = `octokit-endpoint.js/${VERSION} ${getUserAgent()}`;
+var DEFAULTS = {
+  method: "GET",
+  baseUrl: "https://api.github.com",
+  headers: {
+    accept: "application/vnd.github.v3+json",
+    "user-agent": userAgent
+  },
+  mediaType: {
+    format: ""
+  }
+};
+function lowercaseKeys(object) {
+  if (!object) {
+    return {};
+  }
+  return Object.keys(object).reduce((newObj, key) => {
+    newObj[key.toLowerCase()] = object[key];
+    return newObj;
+  }, {});
+}
+function isPlainObject(value) {
+  if (typeof value !== "object" || value === null) return false;
+  if (Object.prototype.toString.call(value) !== "[object Object]") return false;
+  const proto = Object.getPrototypeOf(value);
+  if (proto === null) return true;
+  const Ctor = Object.prototype.hasOwnProperty.call(proto, "constructor") && proto.constructor;
+  return typeof Ctor === "function" && Ctor instanceof Ctor && Function.prototype.call(Ctor) === Function.prototype.call(value);
+}
+function mergeDeep(defaults, options) {
+  const result = Object.assign({}, defaults);
+  Object.keys(options).forEach((key) => {
+    if (isPlainObject(options[key])) {
+      if (!(key in defaults)) Object.assign(result, { [key]: options[key] });
+      else result[key] = mergeDeep(defaults[key], options[key]);
+    } else {
+      Object.assign(result, { [key]: options[key] });
+    }
+  });
+  return result;
+}
+function removeUndefinedProperties(obj) {
+  for (const key in obj) {
+    if (obj[key] === void 0) {
+      delete obj[key];
+    }
+  }
+  return obj;
+}
+function merge(defaults, route, options) {
+  if (typeof route === "string") {
+    let [method, url] = route.split(" ");
+    options = Object.assign(url ? { method, url } : { url: method }, options);
+  } else {
+    options = Object.assign({}, route);
+  }
+  options.headers = lowercaseKeys(options.headers);
+  removeUndefinedProperties(options);
+  removeUndefinedProperties(options.headers);
+  const mergedOptions = mergeDeep(defaults || {}, options);
+  if (options.url === "/graphql") {
+    if (defaults && defaults.mediaType.previews?.length) {
+      mergedOptions.mediaType.previews = defaults.mediaType.previews.filter(
+        (preview) => !mergedOptions.mediaType.previews.includes(preview)
+      ).concat(mergedOptions.mediaType.previews);
+    }
+    mergedOptions.mediaType.previews = (mergedOptions.mediaType.previews || []).map((preview) => preview.replace(/-preview/, ""));
+  }
+  return mergedOptions;
+}
+function addQueryParameters(url, parameters) {
+  const separator = /\?/.test(url) ? "&" : "?";
+  const names = Object.keys(parameters);
+  if (names.length === 0) {
+    return url;
+  }
+  return url + separator + names.map((name) => {
+    if (name === "q") {
+      return "q=" + parameters.q.split("+").map(encodeURIComponent).join("+");
+    }
+    return `${name}=${encodeURIComponent(parameters[name])}`;
+  }).join("&");
+}
+var urlVariableRegex = /\{[^{}}]+\}/g;
+function removeNonChars(variableName) {
+  return variableName.replace(/(?:^\W+)|(?:(?<!\W)\W+$)/g, "").split(/,/);
+}
+function extractUrlVariableNames(url) {
+  const matches = url.match(urlVariableRegex);
+  if (!matches) {
+    return [];
+  }
+  return matches.map(removeNonChars).reduce((a, b) => a.concat(b), []);
+}
+function omit(object, keysToOmit) {
+  const result = { __proto__: null };
+  for (const key of Object.keys(object)) {
+    if (keysToOmit.indexOf(key) === -1) {
+      result[key] = object[key];
+    }
+  }
+  return result;
+}
+function encodeReserved(str2) {
+  return str2.split(/(%[0-9A-Fa-f]{2})/g).map(function(part) {
+    if (!/%[0-9A-Fa-f]/.test(part)) {
+      part = encodeURI(part).replace(/%5B/g, "[").replace(/%5D/g, "]");
+    }
+    return part;
+  }).join("");
+}
+function encodeUnreserved(str2) {
+  return encodeURIComponent(str2).replace(/[!'()*]/g, function(c) {
+    return "%" + c.charCodeAt(0).toString(16).toUpperCase();
+  });
+}
+function encodeValue(operator, value, key) {
+  value = operator === "+" || operator === "#" ? encodeReserved(value) : encodeUnreserved(value);
+  if (key) {
+    return encodeUnreserved(key) + "=" + value;
+  } else {
+    return value;
+  }
+}
+function isDefined(value) {
+  return value !== void 0 && value !== null;
+}
+function isKeyOperator(operator) {
+  return operator === ";" || operator === "&" || operator === "?";
+}
+function getValues(context3, operator, key, modifier) {
+  var value = context3[key], result = [];
+  if (isDefined(value) && value !== "") {
+    if (typeof value === "string" || typeof value === "number" || typeof value === "bigint" || typeof value === "boolean") {
+      value = value.toString();
+      if (modifier && modifier !== "*") {
+        value = value.substring(0, parseInt(modifier, 10));
+      }
+      result.push(
+        encodeValue(operator, value, isKeyOperator(operator) ? key : "")
+      );
+    } else {
+      if (modifier === "*") {
+        if (Array.isArray(value)) {
+          value.filter(isDefined).forEach(function(value2) {
+            result.push(
+              encodeValue(operator, value2, isKeyOperator(operator) ? key : "")
+            );
+          });
+        } else {
+          Object.keys(value).forEach(function(k) {
+            if (isDefined(value[k])) {
+              result.push(encodeValue(operator, value[k], k));
+            }
+          });
+        }
+      } else {
+        const tmp = [];
+        if (Array.isArray(value)) {
+          value.filter(isDefined).forEach(function(value2) {
+            tmp.push(encodeValue(operator, value2));
+          });
+        } else {
+          Object.keys(value).forEach(function(k) {
+            if (isDefined(value[k])) {
+              tmp.push(encodeUnreserved(k));
+              tmp.push(encodeValue(operator, value[k].toString()));
+            }
+          });
+        }
+        if (isKeyOperator(operator)) {
+          result.push(encodeUnreserved(key) + "=" + tmp.join(","));
+        } else if (tmp.length !== 0) {
+          result.push(tmp.join(","));
+        }
+      }
+    }
+  } else {
+    if (operator === ";") {
+      if (isDefined(value)) {
+        result.push(encodeUnreserved(key));
+      }
+    } else if (value === "" && (operator === "&" || operator === "?")) {
+      result.push(encodeUnreserved(key) + "=");
+    } else if (value === "") {
+      result.push("");
+    }
+  }
+  return result;
+}
+function parseUrl(template) {
+  return {
+    expand: expand.bind(null, template)
+  };
+}
+function expand(template, context3) {
+  var operators = ["+", "#", ".", "/", ";", "?", "&"];
+  template = template.replace(
+    /\{([^\{\}]+)\}|([^\{\}]+)/g,
+    function(_, expression, literal) {
+      if (expression) {
+        let operator = "";
+        const values = [];
+        if (operators.indexOf(expression.charAt(0)) !== -1) {
+          operator = expression.charAt(0);
+          expression = expression.substr(1);
+        }
+        expression.split(/,/g).forEach(function(variable) {
+          var tmp = /([^:\*]*)(?::(\d+)|(\*))?/.exec(variable);
+          values.push(getValues(context3, operator, tmp[1], tmp[2] || tmp[3]));
+        });
+        if (operator && operator !== "+") {
+          var separator = ",";
+          if (operator === "?") {
+            separator = "&";
+          } else if (operator !== "#") {
+            separator = operator;
+          }
+          return (values.length !== 0 ? operator : "") + values.join(separator);
+        } else {
+          return values.join(",");
+        }
+      } else {
+        return encodeReserved(literal);
+      }
+    }
+  );
+  if (template === "/") {
+    return template;
+  } else {
+    return template.replace(/\/$/, "");
+  }
+}
+function parse(options) {
+  let method = options.method.toUpperCase();
+  let url = (options.url || "/").replace(/:([a-z]\w+)/g, "{$1}");
+  let headers = Object.assign({}, options.headers);
+  let body;
+  let parameters = omit(options, [
+    "method",
+    "baseUrl",
+    "url",
+    "headers",
+    "request",
+    "mediaType"
+  ]);
+  const urlVariableNames = extractUrlVariableNames(url);
+  url = parseUrl(url).expand(parameters);
+  if (!/^http/.test(url)) {
+    url = options.baseUrl + url;
+  }
+  const omittedParameters = Object.keys(options).filter((option) => urlVariableNames.includes(option)).concat("baseUrl");
+  const remainingParameters = omit(parameters, omittedParameters);
+  const isBinaryRequest = /application\/octet-stream/i.test(headers.accept);
+  if (!isBinaryRequest) {
+    if (options.mediaType.format) {
+      headers.accept = headers.accept.split(/,/).map(
+        (format) => format.replace(
+          /application\/vnd(\.\w+)(\.v3)?(\.\w+)?(\+json)?$/,
+          `application/vnd$1$2.${options.mediaType.format}`
+        )
+      ).join(",");
+    }
+    if (url.endsWith("/graphql")) {
+      if (options.mediaType.previews?.length) {
+        const previewsFromAcceptHeader = headers.accept.match(/(?<![\w-])[\w-]+(?=-preview)/g) || [];
+        headers.accept = previewsFromAcceptHeader.concat(options.mediaType.previews).map((preview) => {
+          const format = options.mediaType.format ? `.${options.mediaType.format}` : "+json";
+          return `application/vnd.github.${preview}-preview${format}`;
+        }).join(",");
+      }
+    }
+  }
+  if (["GET", "HEAD"].includes(method)) {
+    url = addQueryParameters(url, remainingParameters);
+  } else {
+    if ("data" in remainingParameters) {
+      body = remainingParameters.data;
+    } else {
+      if (Object.keys(remainingParameters).length) {
+        body = remainingParameters;
+      }
+    }
+  }
+  if (!headers["content-type"] && typeof body !== "undefined") {
+    headers["content-type"] = "application/json; charset=utf-8";
+  }
+  if (["PATCH", "PUT"].includes(method) && typeof body === "undefined") {
+    body = "";
+  }
+  return Object.assign(
+    { method, url, headers },
+    typeof body !== "undefined" ? { body } : null,
+    options.request ? { request: options.request } : null
+  );
+}
+function endpointWithDefaults(defaults, route, options) {
+  return parse(merge(defaults, route, options));
+}
+function withDefaults(oldDefaults, newDefaults) {
+  const DEFAULTS22 = merge(oldDefaults, newDefaults);
+  const endpoint22 = endpointWithDefaults.bind(null, DEFAULTS22);
+  return Object.assign(endpoint22, {
+    DEFAULTS: DEFAULTS22,
+    defaults: withDefaults.bind(null, DEFAULTS22),
+    merge: merge.bind(null, DEFAULTS22),
+    parse
+  });
+}
+var endpoint = withDefaults(null, DEFAULTS);
+
+// node_modules/@octokit/auth-app/node_modules/@octokit/request/dist-bundle/index.js
+var import_fast_content_type_parse = __toESM(require_fast_content_type_parse(), 1);
+
+// node_modules/json-with-bigint/json-with-bigint.js
+var intRegex = /^-?\d+$/;
+var noiseValue = /^-?\d+n+$/;
+var originalStringify = JSON.stringify;
+var originalParse = JSON.parse;
+var customFormat = /^-?\d+n$/;
+var bigIntsStringify = /([\[:])?"(-?\d+)n"($|([\\n]|\s)*(\s|[\\n])*[,\}\]])/g;
+var noiseStringify = /([\[:])?("-?\d+n+)n("$|"([\\n]|\s)*(\s|[\\n])*[,\}\]])/g;
+var JSONStringify = (value, replacer, space) => {
+  if ("rawJSON" in JSON) {
+    return originalStringify(
+      value,
+      (key, value2) => {
+        if (typeof value2 === "bigint") return JSON.rawJSON(value2.toString());
+        if (typeof replacer === "function") return replacer(key, value2);
+        if (Array.isArray(replacer) && replacer.includes(key)) return value2;
+        return value2;
+      },
+      space
+    );
+  }
+  if (!value) return originalStringify(value, replacer, space);
+  const convertedToCustomJSON = originalStringify(
+    value,
+    (key, value2) => {
+      const isNoise = typeof value2 === "string" && noiseValue.test(value2);
+      if (isNoise) return value2.toString() + "n";
+      if (typeof value2 === "bigint") return value2.toString() + "n";
+      if (typeof replacer === "function") return replacer(key, value2);
+      if (Array.isArray(replacer) && replacer.includes(key)) return value2;
+      return value2;
+    },
+    space
+  );
+  const processedJSON = convertedToCustomJSON.replace(
+    bigIntsStringify,
+    "$1$2$3"
+  );
+  const denoisedJSON = processedJSON.replace(noiseStringify, "$1$2$3");
+  return denoisedJSON;
+};
+var featureCache = /* @__PURE__ */ new Map();
+var isContextSourceSupported = () => {
+  const parseFingerprint = JSON.parse.toString();
+  if (featureCache.has(parseFingerprint)) {
+    return featureCache.get(parseFingerprint);
+  }
+  try {
+    const result = JSON.parse(
+      "1",
+      (_, __, context3) => !!context3?.source && context3.source === "1"
+    );
+    featureCache.set(parseFingerprint, result);
+    return result;
+  } catch {
+    featureCache.set(parseFingerprint, false);
+    return false;
+  }
+};
+var convertMarkedBigIntsReviver = (key, value, context3, userReviver) => {
+  const isCustomFormatBigInt = typeof value === "string" && customFormat.test(value);
+  if (isCustomFormatBigInt) return BigInt(value.slice(0, -1));
+  const isNoiseValue = typeof value === "string" && noiseValue.test(value);
+  if (isNoiseValue) return value.slice(0, -1);
+  if (typeof userReviver !== "function") return value;
+  return userReviver(key, value, context3);
+};
+var JSONParseV2 = (text, reviver) => {
+  return JSON.parse(text, (key, value, context3) => {
+    const isBigNumber = typeof value === "number" && (value > Number.MAX_SAFE_INTEGER || value < Number.MIN_SAFE_INTEGER);
+    const isInt = context3 && intRegex.test(context3.source);
+    const isBigInt = isBigNumber && isInt;
+    if (isBigInt) return BigInt(context3.source);
+    if (typeof reviver !== "function") return value;
+    return reviver(key, value, context3);
+  });
+};
+var MAX_INT = Number.MAX_SAFE_INTEGER.toString();
+var MAX_DIGITS = MAX_INT.length;
+var stringsOrLargeNumbers = /"(?:\\.|[^"])*"|-?(0|[1-9][0-9]*)(\.[0-9]+)?([eE][+-]?[0-9]+)?/g;
+var noiseValueWithQuotes = /^"-?\d+n+"$/;
+var JSONParse = (text, reviver) => {
+  if (!text) return originalParse(text, reviver);
+  if (isContextSourceSupported()) return JSONParseV2(text, reviver);
+  const serializedData = text.replace(
+    stringsOrLargeNumbers,
+    (text2, digits, fractional, exponential) => {
+      const isString = text2[0] === '"';
+      const isNoise = isString && noiseValueWithQuotes.test(text2);
+      if (isNoise) return text2.substring(0, text2.length - 1) + 'n"';
+      const isFractionalOrExponential = fractional || exponential;
+      const isLessThanMaxSafeInt = digits && (digits.length < MAX_DIGITS || digits.length === MAX_DIGITS && digits <= MAX_INT);
+      if (isString || isFractionalOrExponential || isLessThanMaxSafeInt)
+        return text2;
+      return '"' + text2 + 'n"';
+    }
+  );
+  return originalParse(
+    serializedData,
+    (key, value, context3) => convertMarkedBigIntsReviver(key, value, context3, reviver)
+  );
+};
+
+// node_modules/@octokit/auth-app/node_modules/@octokit/request-error/dist-src/index.js
+var RequestError = class extends Error {
+  name;
+  /**
+   * http status code
+   */
+  status;
+  /**
+   * Request options that lead to the error.
+   */
+  request;
+  /**
+   * Response object if a response was received
+   */
+  response;
+  constructor(message, statusCode, options) {
+    super(message, { cause: options.cause });
+    this.name = "HttpError";
+    this.status = Number.parseInt(statusCode);
+    if (Number.isNaN(this.status)) {
+      this.status = 0;
+    }
+    if ("response" in options) {
+      this.response = options.response;
+    }
+    const requestCopy = Object.assign({}, options.request);
+    if (options.request.headers.authorization) {
+      requestCopy.headers = Object.assign({}, options.request.headers, {
+        authorization: options.request.headers.authorization.replace(
+          /(?<! ) .*$/,
+          " [REDACTED]"
+        )
+      });
+    }
+    requestCopy.url = requestCopy.url.replace(/\bclient_secret=\w+/g, "client_secret=[REDACTED]").replace(/\baccess_token=\w+/g, "access_token=[REDACTED]");
+    this.request = requestCopy;
+  }
+};
+
+// node_modules/@octokit/auth-app/node_modules/@octokit/request/dist-bundle/index.js
+var VERSION2 = "10.0.8";
+var defaults_default = {
+  headers: {
+    "user-agent": `octokit-request.js/${VERSION2} ${getUserAgent()}`
+  }
+};
+function isPlainObject2(value) {
+  if (typeof value !== "object" || value === null) return false;
+  if (Object.prototype.toString.call(value) !== "[object Object]") return false;
+  const proto = Object.getPrototypeOf(value);
+  if (proto === null) return true;
+  const Ctor = Object.prototype.hasOwnProperty.call(proto, "constructor") && proto.constructor;
+  return typeof Ctor === "function" && Ctor instanceof Ctor && Function.prototype.call(Ctor) === Function.prototype.call(value);
+}
+var noop = () => "";
+async function fetchWrapper(requestOptions) {
+  const fetch = requestOptions.request?.fetch || globalThis.fetch;
+  if (!fetch) {
+    throw new Error(
+      "fetch is not set. Please pass a fetch implementation as new Octokit({ request: { fetch }}). Learn more at https://github.com/octokit/octokit.js/#fetch-missing"
+    );
+  }
+  const log = requestOptions.request?.log || console;
+  const parseSuccessResponseBody = requestOptions.request?.parseSuccessResponseBody !== false;
+  const body = isPlainObject2(requestOptions.body) || Array.isArray(requestOptions.body) ? JSONStringify(requestOptions.body) : requestOptions.body;
+  const requestHeaders = Object.fromEntries(
+    Object.entries(requestOptions.headers).map(([name, value]) => [
+      name,
+      String(value)
+    ])
+  );
+  let fetchResponse;
+  try {
+    fetchResponse = await fetch(requestOptions.url, {
+      method: requestOptions.method,
+      body,
+      redirect: requestOptions.request?.redirect,
+      headers: requestHeaders,
+      signal: requestOptions.request?.signal,
+      // duplex must be set if request.body is ReadableStream or Async Iterables.
+      // See https://fetch.spec.whatwg.org/#dom-requestinit-duplex.
+      ...requestOptions.body && { duplex: "half" }
+    });
+  } catch (error2) {
+    let message = "Unknown Error";
+    if (error2 instanceof Error) {
+      if (error2.name === "AbortError") {
+        error2.status = 500;
+        throw error2;
+      }
+      message = error2.message;
+      if (error2.name === "TypeError" && "cause" in error2) {
+        if (error2.cause instanceof Error) {
+          message = error2.cause.message;
+        } else if (typeof error2.cause === "string") {
+          message = error2.cause;
+        }
+      }
+    }
+    const requestError = new RequestError(message, 500, {
+      request: requestOptions
+    });
+    requestError.cause = error2;
+    throw requestError;
+  }
+  const status = fetchResponse.status;
+  const url = fetchResponse.url;
+  const responseHeaders = {};
+  for (const [key, value] of fetchResponse.headers) {
+    responseHeaders[key] = value;
+  }
+  const octokitResponse = {
+    url,
+    status,
+    headers: responseHeaders,
+    data: ""
+  };
+  if ("deprecation" in responseHeaders) {
+    const matches = responseHeaders.link && responseHeaders.link.match(/<([^<>]+)>; rel="deprecation"/);
+    const deprecationLink = matches && matches.pop();
+    log.warn(
+      `[@octokit/request] "${requestOptions.method} ${requestOptions.url}" is deprecated. It is scheduled to be removed on ${responseHeaders.sunset}${deprecationLink ? `. See ${deprecationLink}` : ""}`
+    );
+  }
+  if (status === 204 || status === 205) {
+    return octokitResponse;
+  }
+  if (requestOptions.method === "HEAD") {
+    if (status < 400) {
+      return octokitResponse;
+    }
+    throw new RequestError(fetchResponse.statusText, status, {
+      response: octokitResponse,
+      request: requestOptions
+    });
+  }
+  if (status === 304) {
+    octokitResponse.data = await getResponseData(fetchResponse);
+    throw new RequestError("Not modified", status, {
+      response: octokitResponse,
+      request: requestOptions
+    });
+  }
+  if (status >= 400) {
+    octokitResponse.data = await getResponseData(fetchResponse);
+    throw new RequestError(toErrorMessage(octokitResponse.data), status, {
+      response: octokitResponse,
+      request: requestOptions
+    });
+  }
+  octokitResponse.data = parseSuccessResponseBody ? await getResponseData(fetchResponse) : fetchResponse.body;
+  return octokitResponse;
+}
+async function getResponseData(response) {
+  const contentType = response.headers.get("content-type");
+  if (!contentType) {
+    return response.text().catch(noop);
+  }
+  const mimetype = (0, import_fast_content_type_parse.safeParse)(contentType);
+  if (isJSONResponse(mimetype)) {
+    let text = "";
+    try {
+      text = await response.text();
+      return JSONParse(text);
+    } catch (err) {
+      return text;
+    }
+  } else if (mimetype.type.startsWith("text/") || mimetype.parameters.charset?.toLowerCase() === "utf-8") {
+    return response.text().catch(noop);
+  } else {
+    return response.arrayBuffer().catch(
+      /* v8 ignore next -- @preserve */
+      () => new ArrayBuffer(0)
+    );
+  }
+}
+function isJSONResponse(mimetype) {
+  return mimetype.type === "application/json" || mimetype.type === "application/scim+json";
+}
+function toErrorMessage(data) {
+  if (typeof data === "string") {
+    return data;
+  }
+  if (data instanceof ArrayBuffer) {
+    return "Unknown error";
+  }
+  if ("message" in data) {
+    const suffix = "documentation_url" in data ? ` - ${data.documentation_url}` : "";
+    return Array.isArray(data.errors) ? `${data.message}: ${data.errors.map((v) => JSON.stringify(v)).join(", ")}${suffix}` : `${data.message}${suffix}`;
+  }
+  return `Unknown error: ${JSON.stringify(data)}`;
+}
+function withDefaults2(oldEndpoint, newDefaults) {
+  const endpoint22 = oldEndpoint.defaults(newDefaults);
+  const newApi = function(route, parameters) {
+    const endpointOptions = endpoint22.merge(route, parameters);
+    if (!endpointOptions.request || !endpointOptions.request.hook) {
+      return fetchWrapper(endpoint22.parse(endpointOptions));
+    }
+    const request22 = (route2, parameters2) => {
+      return fetchWrapper(
+        endpoint22.parse(endpoint22.merge(route2, parameters2))
+      );
+    };
+    Object.assign(request22, {
+      endpoint: endpoint22,
+      defaults: withDefaults2.bind(null, endpoint22)
+    });
+    return endpointOptions.request.hook(request22, endpointOptions);
+  };
+  return Object.assign(newApi, {
+    endpoint: endpoint22,
+    defaults: withDefaults2.bind(null, endpoint22)
+  });
+}
+var request = withDefaults2(endpoint, defaults_default);
+
+// node_modules/@octokit/auth-oauth-app/node_modules/universal-user-agent/index.js
+function getUserAgent2() {
+  if (typeof navigator === "object" && "userAgent" in navigator) {
+    return navigator.userAgent;
+  }
+  if (typeof process === "object" && process.version !== void 0) {
+    return `Node.js/${process.version.substr(1)} (${process.platform}; ${process.arch})`;
+  }
+  return "<environment undetectable>";
+}
+
+// node_modules/@octokit/auth-oauth-app/node_modules/@octokit/endpoint/dist-bundle/index.js
+var VERSION3 = "0.0.0-development";
+var userAgent2 = `octokit-endpoint.js/${VERSION3} ${getUserAgent2()}`;
+var DEFAULTS2 = {
+  method: "GET",
+  baseUrl: "https://api.github.com",
+  headers: {
+    accept: "application/vnd.github.v3+json",
+    "user-agent": userAgent2
+  },
+  mediaType: {
+    format: ""
+  }
+};
+function lowercaseKeys2(object) {
+  if (!object) {
+    return {};
+  }
+  return Object.keys(object).reduce((newObj, key) => {
+    newObj[key.toLowerCase()] = object[key];
+    return newObj;
+  }, {});
+}
+function isPlainObject3(value) {
+  if (typeof value !== "object" || value === null) return false;
+  if (Object.prototype.toString.call(value) !== "[object Object]") return false;
+  const proto = Object.getPrototypeOf(value);
+  if (proto === null) return true;
+  const Ctor = Object.prototype.hasOwnProperty.call(proto, "constructor") && proto.constructor;
+  return typeof Ctor === "function" && Ctor instanceof Ctor && Function.prototype.call(Ctor) === Function.prototype.call(value);
+}
+function mergeDeep2(defaults, options) {
+  const result = Object.assign({}, defaults);
+  Object.keys(options).forEach((key) => {
+    if (isPlainObject3(options[key])) {
+      if (!(key in defaults)) Object.assign(result, { [key]: options[key] });
+      else result[key] = mergeDeep2(defaults[key], options[key]);
+    } else {
+      Object.assign(result, { [key]: options[key] });
+    }
+  });
+  return result;
+}
+function removeUndefinedProperties2(obj) {
+  for (const key in obj) {
+    if (obj[key] === void 0) {
+      delete obj[key];
+    }
+  }
+  return obj;
+}
+function merge2(defaults, route, options) {
+  if (typeof route === "string") {
+    let [method, url] = route.split(" ");
+    options = Object.assign(url ? { method, url } : { url: method }, options);
+  } else {
+    options = Object.assign({}, route);
+  }
+  options.headers = lowercaseKeys2(options.headers);
+  removeUndefinedProperties2(options);
+  removeUndefinedProperties2(options.headers);
+  const mergedOptions = mergeDeep2(defaults || {}, options);
+  if (options.url === "/graphql") {
+    if (defaults && defaults.mediaType.previews?.length) {
+      mergedOptions.mediaType.previews = defaults.mediaType.previews.filter(
+        (preview) => !mergedOptions.mediaType.previews.includes(preview)
+      ).concat(mergedOptions.mediaType.previews);
+    }
+    mergedOptions.mediaType.previews = (mergedOptions.mediaType.previews || []).map((preview) => preview.replace(/-preview/, ""));
+  }
+  return mergedOptions;
+}
+function addQueryParameters2(url, parameters) {
+  const separator = /\?/.test(url) ? "&" : "?";
+  const names = Object.keys(parameters);
+  if (names.length === 0) {
+    return url;
+  }
+  return url + separator + names.map((name) => {
+    if (name === "q") {
+      return "q=" + parameters.q.split("+").map(encodeURIComponent).join("+");
+    }
+    return `${name}=${encodeURIComponent(parameters[name])}`;
+  }).join("&");
+}
+var urlVariableRegex2 = /\{[^{}}]+\}/g;
+function removeNonChars2(variableName) {
+  return variableName.replace(/(?:^\W+)|(?:(?<!\W)\W+$)/g, "").split(/,/);
+}
+function extractUrlVariableNames2(url) {
+  const matches = url.match(urlVariableRegex2);
+  if (!matches) {
+    return [];
+  }
+  return matches.map(removeNonChars2).reduce((a, b) => a.concat(b), []);
+}
+function omit2(object, keysToOmit) {
+  const result = { __proto__: null };
+  for (const key of Object.keys(object)) {
+    if (keysToOmit.indexOf(key) === -1) {
+      result[key] = object[key];
+    }
+  }
+  return result;
+}
+function encodeReserved2(str2) {
+  return str2.split(/(%[0-9A-Fa-f]{2})/g).map(function(part) {
+    if (!/%[0-9A-Fa-f]/.test(part)) {
+      part = encodeURI(part).replace(/%5B/g, "[").replace(/%5D/g, "]");
+    }
+    return part;
+  }).join("");
+}
+function encodeUnreserved2(str2) {
+  return encodeURIComponent(str2).replace(/[!'()*]/g, function(c) {
+    return "%" + c.charCodeAt(0).toString(16).toUpperCase();
+  });
+}
+function encodeValue2(operator, value, key) {
+  value = operator === "+" || operator === "#" ? encodeReserved2(value) : encodeUnreserved2(value);
+  if (key) {
+    return encodeUnreserved2(key) + "=" + value;
+  } else {
+    return value;
+  }
+}
+function isDefined2(value) {
+  return value !== void 0 && value !== null;
+}
+function isKeyOperator2(operator) {
+  return operator === ";" || operator === "&" || operator === "?";
+}
+function getValues2(context3, operator, key, modifier) {
+  var value = context3[key], result = [];
+  if (isDefined2(value) && value !== "") {
+    if (typeof value === "string" || typeof value === "number" || typeof value === "bigint" || typeof value === "boolean") {
+      value = value.toString();
+      if (modifier && modifier !== "*") {
+        value = value.substring(0, parseInt(modifier, 10));
+      }
+      result.push(
+        encodeValue2(operator, value, isKeyOperator2(operator) ? key : "")
+      );
+    } else {
+      if (modifier === "*") {
+        if (Array.isArray(value)) {
+          value.filter(isDefined2).forEach(function(value2) {
+            result.push(
+              encodeValue2(operator, value2, isKeyOperator2(operator) ? key : "")
+            );
+          });
+        } else {
+          Object.keys(value).forEach(function(k) {
+            if (isDefined2(value[k])) {
+              result.push(encodeValue2(operator, value[k], k));
+            }
+          });
+        }
+      } else {
+        const tmp = [];
+        if (Array.isArray(value)) {
+          value.filter(isDefined2).forEach(function(value2) {
+            tmp.push(encodeValue2(operator, value2));
+          });
+        } else {
+          Object.keys(value).forEach(function(k) {
+            if (isDefined2(value[k])) {
+              tmp.push(encodeUnreserved2(k));
+              tmp.push(encodeValue2(operator, value[k].toString()));
+            }
+          });
+        }
+        if (isKeyOperator2(operator)) {
+          result.push(encodeUnreserved2(key) + "=" + tmp.join(","));
+        } else if (tmp.length !== 0) {
+          result.push(tmp.join(","));
+        }
+      }
+    }
+  } else {
+    if (operator === ";") {
+      if (isDefined2(value)) {
+        result.push(encodeUnreserved2(key));
+      }
+    } else if (value === "" && (operator === "&" || operator === "?")) {
+      result.push(encodeUnreserved2(key) + "=");
+    } else if (value === "") {
+      result.push("");
+    }
+  }
+  return result;
+}
+function parseUrl2(template) {
+  return {
+    expand: expand2.bind(null, template)
+  };
+}
+function expand2(template, context3) {
+  var operators = ["+", "#", ".", "/", ";", "?", "&"];
+  template = template.replace(
+    /\{([^\{\}]+)\}|([^\{\}]+)/g,
+    function(_, expression, literal) {
+      if (expression) {
+        let operator = "";
+        const values = [];
+        if (operators.indexOf(expression.charAt(0)) !== -1) {
+          operator = expression.charAt(0);
+          expression = expression.substr(1);
+        }
+        expression.split(/,/g).forEach(function(variable) {
+          var tmp = /([^:\*]*)(?::(\d+)|(\*))?/.exec(variable);
+          values.push(getValues2(context3, operator, tmp[1], tmp[2] || tmp[3]));
+        });
+        if (operator && operator !== "+") {
+          var separator = ",";
+          if (operator === "?") {
+            separator = "&";
+          } else if (operator !== "#") {
+            separator = operator;
+          }
+          return (values.length !== 0 ? operator : "") + values.join(separator);
+        } else {
+          return values.join(",");
+        }
+      } else {
+        return encodeReserved2(literal);
+      }
+    }
+  );
+  if (template === "/") {
+    return template;
+  } else {
+    return template.replace(/\/$/, "");
+  }
+}
+function parse2(options) {
+  let method = options.method.toUpperCase();
+  let url = (options.url || "/").replace(/:([a-z]\w+)/g, "{$1}");
+  let headers = Object.assign({}, options.headers);
+  let body;
+  let parameters = omit2(options, [
+    "method",
+    "baseUrl",
+    "url",
+    "headers",
+    "request",
+    "mediaType"
+  ]);
+  const urlVariableNames = extractUrlVariableNames2(url);
+  url = parseUrl2(url).expand(parameters);
+  if (!/^http/.test(url)) {
+    url = options.baseUrl + url;
+  }
+  const omittedParameters = Object.keys(options).filter((option) => urlVariableNames.includes(option)).concat("baseUrl");
+  const remainingParameters = omit2(parameters, omittedParameters);
+  const isBinaryRequest = /application\/octet-stream/i.test(headers.accept);
+  if (!isBinaryRequest) {
+    if (options.mediaType.format) {
+      headers.accept = headers.accept.split(/,/).map(
+        (format) => format.replace(
+          /application\/vnd(\.\w+)(\.v3)?(\.\w+)?(\+json)?$/,
+          `application/vnd$1$2.${options.mediaType.format}`
+        )
+      ).join(",");
+    }
+    if (url.endsWith("/graphql")) {
+      if (options.mediaType.previews?.length) {
+        const previewsFromAcceptHeader = headers.accept.match(/(?<![\w-])[\w-]+(?=-preview)/g) || [];
+        headers.accept = previewsFromAcceptHeader.concat(options.mediaType.previews).map((preview) => {
+          const format = options.mediaType.format ? `.${options.mediaType.format}` : "+json";
+          return `application/vnd.github.${preview}-preview${format}`;
+        }).join(",");
+      }
+    }
+  }
+  if (["GET", "HEAD"].includes(method)) {
+    url = addQueryParameters2(url, remainingParameters);
+  } else {
+    if ("data" in remainingParameters) {
+      body = remainingParameters.data;
+    } else {
+      if (Object.keys(remainingParameters).length) {
+        body = remainingParameters;
+      }
+    }
+  }
+  if (!headers["content-type"] && typeof body !== "undefined") {
+    headers["content-type"] = "application/json; charset=utf-8";
+  }
+  if (["PATCH", "PUT"].includes(method) && typeof body === "undefined") {
+    body = "";
+  }
+  return Object.assign(
+    { method, url, headers },
+    typeof body !== "undefined" ? { body } : null,
+    options.request ? { request: options.request } : null
+  );
+}
+function endpointWithDefaults2(defaults, route, options) {
+  return parse2(merge2(defaults, route, options));
+}
+function withDefaults3(oldDefaults, newDefaults) {
+  const DEFAULTS22 = merge2(oldDefaults, newDefaults);
+  const endpoint22 = endpointWithDefaults2.bind(null, DEFAULTS22);
+  return Object.assign(endpoint22, {
+    DEFAULTS: DEFAULTS22,
+    defaults: withDefaults3.bind(null, DEFAULTS22),
+    merge: merge2.bind(null, DEFAULTS22),
+    parse: parse2
+  });
+}
+var endpoint2 = withDefaults3(null, DEFAULTS2);
+
+// node_modules/@octokit/auth-oauth-app/node_modules/@octokit/request/dist-bundle/index.js
+var import_fast_content_type_parse2 = __toESM(require_fast_content_type_parse(), 1);
+
+// node_modules/@octokit/auth-oauth-app/node_modules/@octokit/request-error/dist-src/index.js
+var RequestError2 = class extends Error {
+  name;
+  /**
+   * http status code
+   */
+  status;
+  /**
+   * Request options that lead to the error.
+   */
+  request;
+  /**
+   * Response object if a response was received
+   */
+  response;
+  constructor(message, statusCode, options) {
+    super(message, { cause: options.cause });
+    this.name = "HttpError";
+    this.status = Number.parseInt(statusCode);
+    if (Number.isNaN(this.status)) {
+      this.status = 0;
+    }
+    if ("response" in options) {
+      this.response = options.response;
+    }
+    const requestCopy = Object.assign({}, options.request);
+    if (options.request.headers.authorization) {
+      requestCopy.headers = Object.assign({}, options.request.headers, {
+        authorization: options.request.headers.authorization.replace(
+          /(?<! ) .*$/,
+          " [REDACTED]"
+        )
+      });
+    }
+    requestCopy.url = requestCopy.url.replace(/\bclient_secret=\w+/g, "client_secret=[REDACTED]").replace(/\baccess_token=\w+/g, "access_token=[REDACTED]");
+    this.request = requestCopy;
+  }
+};
+
+// node_modules/@octokit/auth-oauth-app/node_modules/@octokit/request/dist-bundle/index.js
+var VERSION4 = "10.0.8";
+var defaults_default2 = {
+  headers: {
+    "user-agent": `octokit-request.js/${VERSION4} ${getUserAgent2()}`
+  }
+};
+function isPlainObject4(value) {
+  if (typeof value !== "object" || value === null) return false;
+  if (Object.prototype.toString.call(value) !== "[object Object]") return false;
+  const proto = Object.getPrototypeOf(value);
+  if (proto === null) return true;
+  const Ctor = Object.prototype.hasOwnProperty.call(proto, "constructor") && proto.constructor;
+  return typeof Ctor === "function" && Ctor instanceof Ctor && Function.prototype.call(Ctor) === Function.prototype.call(value);
+}
+var noop2 = () => "";
+async function fetchWrapper2(requestOptions) {
+  const fetch = requestOptions.request?.fetch || globalThis.fetch;
+  if (!fetch) {
+    throw new Error(
+      "fetch is not set. Please pass a fetch implementation as new Octokit({ request: { fetch }}). Learn more at https://github.com/octokit/octokit.js/#fetch-missing"
+    );
+  }
+  const log = requestOptions.request?.log || console;
+  const parseSuccessResponseBody = requestOptions.request?.parseSuccessResponseBody !== false;
+  const body = isPlainObject4(requestOptions.body) || Array.isArray(requestOptions.body) ? JSONStringify(requestOptions.body) : requestOptions.body;
+  const requestHeaders = Object.fromEntries(
+    Object.entries(requestOptions.headers).map(([name, value]) => [
+      name,
+      String(value)
+    ])
+  );
+  let fetchResponse;
+  try {
+    fetchResponse = await fetch(requestOptions.url, {
+      method: requestOptions.method,
+      body,
+      redirect: requestOptions.request?.redirect,
+      headers: requestHeaders,
+      signal: requestOptions.request?.signal,
+      // duplex must be set if request.body is ReadableStream or Async Iterables.
+      // See https://fetch.spec.whatwg.org/#dom-requestinit-duplex.
+      ...requestOptions.body && { duplex: "half" }
+    });
+  } catch (error2) {
+    let message = "Unknown Error";
+    if (error2 instanceof Error) {
+      if (error2.name === "AbortError") {
+        error2.status = 500;
+        throw error2;
+      }
+      message = error2.message;
+      if (error2.name === "TypeError" && "cause" in error2) {
+        if (error2.cause instanceof Error) {
+          message = error2.cause.message;
+        } else if (typeof error2.cause === "string") {
+          message = error2.cause;
+        }
+      }
+    }
+    const requestError = new RequestError2(message, 500, {
+      request: requestOptions
+    });
+    requestError.cause = error2;
+    throw requestError;
+  }
+  const status = fetchResponse.status;
+  const url = fetchResponse.url;
+  const responseHeaders = {};
+  for (const [key, value] of fetchResponse.headers) {
+    responseHeaders[key] = value;
+  }
+  const octokitResponse = {
+    url,
+    status,
+    headers: responseHeaders,
+    data: ""
+  };
+  if ("deprecation" in responseHeaders) {
+    const matches = responseHeaders.link && responseHeaders.link.match(/<([^<>]+)>; rel="deprecation"/);
+    const deprecationLink = matches && matches.pop();
+    log.warn(
+      `[@octokit/request] "${requestOptions.method} ${requestOptions.url}" is deprecated. It is scheduled to be removed on ${responseHeaders.sunset}${deprecationLink ? `. See ${deprecationLink}` : ""}`
+    );
+  }
+  if (status === 204 || status === 205) {
+    return octokitResponse;
+  }
+  if (requestOptions.method === "HEAD") {
+    if (status < 400) {
+      return octokitResponse;
+    }
+    throw new RequestError2(fetchResponse.statusText, status, {
+      response: octokitResponse,
+      request: requestOptions
+    });
+  }
+  if (status === 304) {
+    octokitResponse.data = await getResponseData2(fetchResponse);
+    throw new RequestError2("Not modified", status, {
+      response: octokitResponse,
+      request: requestOptions
+    });
+  }
+  if (status >= 400) {
+    octokitResponse.data = await getResponseData2(fetchResponse);
+    throw new RequestError2(toErrorMessage2(octokitResponse.data), status, {
+      response: octokitResponse,
+      request: requestOptions
+    });
+  }
+  octokitResponse.data = parseSuccessResponseBody ? await getResponseData2(fetchResponse) : fetchResponse.body;
+  return octokitResponse;
+}
+async function getResponseData2(response) {
+  const contentType = response.headers.get("content-type");
+  if (!contentType) {
+    return response.text().catch(noop2);
+  }
+  const mimetype = (0, import_fast_content_type_parse2.safeParse)(contentType);
+  if (isJSONResponse2(mimetype)) {
+    let text = "";
+    try {
+      text = await response.text();
+      return JSONParse(text);
+    } catch (err) {
+      return text;
+    }
+  } else if (mimetype.type.startsWith("text/") || mimetype.parameters.charset?.toLowerCase() === "utf-8") {
+    return response.text().catch(noop2);
+  } else {
+    return response.arrayBuffer().catch(
+      /* v8 ignore next -- @preserve */
+      () => new ArrayBuffer(0)
+    );
+  }
+}
+function isJSONResponse2(mimetype) {
+  return mimetype.type === "application/json" || mimetype.type === "application/scim+json";
+}
+function toErrorMessage2(data) {
+  if (typeof data === "string") {
+    return data;
+  }
+  if (data instanceof ArrayBuffer) {
+    return "Unknown error";
+  }
+  if ("message" in data) {
+    const suffix = "documentation_url" in data ? ` - ${data.documentation_url}` : "";
+    return Array.isArray(data.errors) ? `${data.message}: ${data.errors.map((v) => JSON.stringify(v)).join(", ")}${suffix}` : `${data.message}${suffix}`;
+  }
+  return `Unknown error: ${JSON.stringify(data)}`;
+}
+function withDefaults4(oldEndpoint, newDefaults) {
+  const endpoint22 = oldEndpoint.defaults(newDefaults);
+  const newApi = function(route, parameters) {
+    const endpointOptions = endpoint22.merge(route, parameters);
+    if (!endpointOptions.request || !endpointOptions.request.hook) {
+      return fetchWrapper2(endpoint22.parse(endpointOptions));
+    }
+    const request22 = (route2, parameters2) => {
+      return fetchWrapper2(
+        endpoint22.parse(endpoint22.merge(route2, parameters2))
+      );
+    };
+    Object.assign(request22, {
+      endpoint: endpoint22,
+      defaults: withDefaults4.bind(null, endpoint22)
+    });
+    return endpointOptions.request.hook(request22, endpointOptions);
+  };
+  return Object.assign(newApi, {
+    endpoint: endpoint22,
+    defaults: withDefaults4.bind(null, endpoint22)
+  });
+}
+var request2 = withDefaults4(endpoint2, defaults_default2);
+
+// node_modules/@octokit/auth-oauth-user/node_modules/universal-user-agent/index.js
+function getUserAgent3() {
+  if (typeof navigator === "object" && "userAgent" in navigator) {
+    return navigator.userAgent;
+  }
+  if (typeof process === "object" && process.version !== void 0) {
+    return `Node.js/${process.version.substr(1)} (${process.platform}; ${process.arch})`;
+  }
+  return "<environment undetectable>";
+}
+
+// node_modules/@octokit/auth-oauth-user/node_modules/@octokit/endpoint/dist-bundle/index.js
+var VERSION5 = "0.0.0-development";
+var userAgent3 = `octokit-endpoint.js/${VERSION5} ${getUserAgent3()}`;
+var DEFAULTS3 = {
+  method: "GET",
+  baseUrl: "https://api.github.com",
+  headers: {
+    accept: "application/vnd.github.v3+json",
+    "user-agent": userAgent3
+  },
+  mediaType: {
+    format: ""
+  }
+};
+function lowercaseKeys3(object) {
+  if (!object) {
+    return {};
+  }
+  return Object.keys(object).reduce((newObj, key) => {
+    newObj[key.toLowerCase()] = object[key];
+    return newObj;
+  }, {});
+}
+function isPlainObject5(value) {
+  if (typeof value !== "object" || value === null) return false;
+  if (Object.prototype.toString.call(value) !== "[object Object]") return false;
+  const proto = Object.getPrototypeOf(value);
+  if (proto === null) return true;
+  const Ctor = Object.prototype.hasOwnProperty.call(proto, "constructor") && proto.constructor;
+  return typeof Ctor === "function" && Ctor instanceof Ctor && Function.prototype.call(Ctor) === Function.prototype.call(value);
+}
+function mergeDeep3(defaults, options) {
+  const result = Object.assign({}, defaults);
+  Object.keys(options).forEach((key) => {
+    if (isPlainObject5(options[key])) {
+      if (!(key in defaults)) Object.assign(result, { [key]: options[key] });
+      else result[key] = mergeDeep3(defaults[key], options[key]);
+    } else {
+      Object.assign(result, { [key]: options[key] });
+    }
+  });
+  return result;
+}
+function removeUndefinedProperties3(obj) {
+  for (const key in obj) {
+    if (obj[key] === void 0) {
+      delete obj[key];
+    }
+  }
+  return obj;
+}
+function merge3(defaults, route, options) {
+  if (typeof route === "string") {
+    let [method, url] = route.split(" ");
+    options = Object.assign(url ? { method, url } : { url: method }, options);
+  } else {
+    options = Object.assign({}, route);
+  }
+  options.headers = lowercaseKeys3(options.headers);
+  removeUndefinedProperties3(options);
+  removeUndefinedProperties3(options.headers);
+  const mergedOptions = mergeDeep3(defaults || {}, options);
+  if (options.url === "/graphql") {
+    if (defaults && defaults.mediaType.previews?.length) {
+      mergedOptions.mediaType.previews = defaults.mediaType.previews.filter(
+        (preview) => !mergedOptions.mediaType.previews.includes(preview)
+      ).concat(mergedOptions.mediaType.previews);
+    }
+    mergedOptions.mediaType.previews = (mergedOptions.mediaType.previews || []).map((preview) => preview.replace(/-preview/, ""));
+  }
+  return mergedOptions;
+}
+function addQueryParameters3(url, parameters) {
+  const separator = /\?/.test(url) ? "&" : "?";
+  const names = Object.keys(parameters);
+  if (names.length === 0) {
+    return url;
+  }
+  return url + separator + names.map((name) => {
+    if (name === "q") {
+      return "q=" + parameters.q.split("+").map(encodeURIComponent).join("+");
+    }
+    return `${name}=${encodeURIComponent(parameters[name])}`;
+  }).join("&");
+}
+var urlVariableRegex3 = /\{[^{}}]+\}/g;
+function removeNonChars3(variableName) {
+  return variableName.replace(/(?:^\W+)|(?:(?<!\W)\W+$)/g, "").split(/,/);
+}
+function extractUrlVariableNames3(url) {
+  const matches = url.match(urlVariableRegex3);
+  if (!matches) {
+    return [];
+  }
+  return matches.map(removeNonChars3).reduce((a, b) => a.concat(b), []);
+}
+function omit3(object, keysToOmit) {
+  const result = { __proto__: null };
+  for (const key of Object.keys(object)) {
+    if (keysToOmit.indexOf(key) === -1) {
+      result[key] = object[key];
+    }
+  }
+  return result;
+}
+function encodeReserved3(str2) {
+  return str2.split(/(%[0-9A-Fa-f]{2})/g).map(function(part) {
+    if (!/%[0-9A-Fa-f]/.test(part)) {
+      part = encodeURI(part).replace(/%5B/g, "[").replace(/%5D/g, "]");
+    }
+    return part;
+  }).join("");
+}
+function encodeUnreserved3(str2) {
+  return encodeURIComponent(str2).replace(/[!'()*]/g, function(c) {
+    return "%" + c.charCodeAt(0).toString(16).toUpperCase();
+  });
+}
+function encodeValue3(operator, value, key) {
+  value = operator === "+" || operator === "#" ? encodeReserved3(value) : encodeUnreserved3(value);
+  if (key) {
+    return encodeUnreserved3(key) + "=" + value;
+  } else {
+    return value;
+  }
+}
+function isDefined3(value) {
+  return value !== void 0 && value !== null;
+}
+function isKeyOperator3(operator) {
+  return operator === ";" || operator === "&" || operator === "?";
+}
+function getValues3(context3, operator, key, modifier) {
+  var value = context3[key], result = [];
+  if (isDefined3(value) && value !== "") {
+    if (typeof value === "string" || typeof value === "number" || typeof value === "bigint" || typeof value === "boolean") {
+      value = value.toString();
+      if (modifier && modifier !== "*") {
+        value = value.substring(0, parseInt(modifier, 10));
+      }
+      result.push(
+        encodeValue3(operator, value, isKeyOperator3(operator) ? key : "")
+      );
+    } else {
+      if (modifier === "*") {
+        if (Array.isArray(value)) {
+          value.filter(isDefined3).forEach(function(value2) {
+            result.push(
+              encodeValue3(operator, value2, isKeyOperator3(operator) ? key : "")
+            );
+          });
+        } else {
+          Object.keys(value).forEach(function(k) {
+            if (isDefined3(value[k])) {
+              result.push(encodeValue3(operator, value[k], k));
+            }
+          });
+        }
+      } else {
+        const tmp = [];
+        if (Array.isArray(value)) {
+          value.filter(isDefined3).forEach(function(value2) {
+            tmp.push(encodeValue3(operator, value2));
+          });
+        } else {
+          Object.keys(value).forEach(function(k) {
+            if (isDefined3(value[k])) {
+              tmp.push(encodeUnreserved3(k));
+              tmp.push(encodeValue3(operator, value[k].toString()));
+            }
+          });
+        }
+        if (isKeyOperator3(operator)) {
+          result.push(encodeUnreserved3(key) + "=" + tmp.join(","));
+        } else if (tmp.length !== 0) {
+          result.push(tmp.join(","));
+        }
+      }
+    }
+  } else {
+    if (operator === ";") {
+      if (isDefined3(value)) {
+        result.push(encodeUnreserved3(key));
+      }
+    } else if (value === "" && (operator === "&" || operator === "?")) {
+      result.push(encodeUnreserved3(key) + "=");
+    } else if (value === "") {
+      result.push("");
+    }
+  }
+  return result;
+}
+function parseUrl3(template) {
+  return {
+    expand: expand3.bind(null, template)
+  };
+}
+function expand3(template, context3) {
+  var operators = ["+", "#", ".", "/", ";", "?", "&"];
+  template = template.replace(
+    /\{([^\{\}]+)\}|([^\{\}]+)/g,
+    function(_, expression, literal) {
+      if (expression) {
+        let operator = "";
+        const values = [];
+        if (operators.indexOf(expression.charAt(0)) !== -1) {
+          operator = expression.charAt(0);
+          expression = expression.substr(1);
+        }
+        expression.split(/,/g).forEach(function(variable) {
+          var tmp = /([^:\*]*)(?::(\d+)|(\*))?/.exec(variable);
+          values.push(getValues3(context3, operator, tmp[1], tmp[2] || tmp[3]));
+        });
+        if (operator && operator !== "+") {
+          var separator = ",";
+          if (operator === "?") {
+            separator = "&";
+          } else if (operator !== "#") {
+            separator = operator;
+          }
+          return (values.length !== 0 ? operator : "") + values.join(separator);
+        } else {
+          return values.join(",");
+        }
+      } else {
+        return encodeReserved3(literal);
+      }
+    }
+  );
+  if (template === "/") {
+    return template;
+  } else {
+    return template.replace(/\/$/, "");
+  }
+}
+function parse3(options) {
+  let method = options.method.toUpperCase();
+  let url = (options.url || "/").replace(/:([a-z]\w+)/g, "{$1}");
+  let headers = Object.assign({}, options.headers);
+  let body;
+  let parameters = omit3(options, [
+    "method",
+    "baseUrl",
+    "url",
+    "headers",
+    "request",
+    "mediaType"
+  ]);
+  const urlVariableNames = extractUrlVariableNames3(url);
+  url = parseUrl3(url).expand(parameters);
+  if (!/^http/.test(url)) {
+    url = options.baseUrl + url;
+  }
+  const omittedParameters = Object.keys(options).filter((option) => urlVariableNames.includes(option)).concat("baseUrl");
+  const remainingParameters = omit3(parameters, omittedParameters);
+  const isBinaryRequest = /application\/octet-stream/i.test(headers.accept);
+  if (!isBinaryRequest) {
+    if (options.mediaType.format) {
+      headers.accept = headers.accept.split(/,/).map(
+        (format) => format.replace(
+          /application\/vnd(\.\w+)(\.v3)?(\.\w+)?(\+json)?$/,
+          `application/vnd$1$2.${options.mediaType.format}`
+        )
+      ).join(",");
+    }
+    if (url.endsWith("/graphql")) {
+      if (options.mediaType.previews?.length) {
+        const previewsFromAcceptHeader = headers.accept.match(/(?<![\w-])[\w-]+(?=-preview)/g) || [];
+        headers.accept = previewsFromAcceptHeader.concat(options.mediaType.previews).map((preview) => {
+          const format = options.mediaType.format ? `.${options.mediaType.format}` : "+json";
+          return `application/vnd.github.${preview}-preview${format}`;
+        }).join(",");
+      }
+    }
+  }
+  if (["GET", "HEAD"].includes(method)) {
+    url = addQueryParameters3(url, remainingParameters);
+  } else {
+    if ("data" in remainingParameters) {
+      body = remainingParameters.data;
+    } else {
+      if (Object.keys(remainingParameters).length) {
+        body = remainingParameters;
+      }
+    }
+  }
+  if (!headers["content-type"] && typeof body !== "undefined") {
+    headers["content-type"] = "application/json; charset=utf-8";
+  }
+  if (["PATCH", "PUT"].includes(method) && typeof body === "undefined") {
+    body = "";
+  }
+  return Object.assign(
+    { method, url, headers },
+    typeof body !== "undefined" ? { body } : null,
+    options.request ? { request: options.request } : null
+  );
+}
+function endpointWithDefaults3(defaults, route, options) {
+  return parse3(merge3(defaults, route, options));
+}
+function withDefaults5(oldDefaults, newDefaults) {
+  const DEFAULTS22 = merge3(oldDefaults, newDefaults);
+  const endpoint22 = endpointWithDefaults3.bind(null, DEFAULTS22);
+  return Object.assign(endpoint22, {
+    DEFAULTS: DEFAULTS22,
+    defaults: withDefaults5.bind(null, DEFAULTS22),
+    merge: merge3.bind(null, DEFAULTS22),
+    parse: parse3
+  });
+}
+var endpoint3 = withDefaults5(null, DEFAULTS3);
+
+// node_modules/@octokit/auth-oauth-user/node_modules/@octokit/request/dist-bundle/index.js
+var import_fast_content_type_parse3 = __toESM(require_fast_content_type_parse(), 1);
+
+// node_modules/@octokit/auth-oauth-user/node_modules/@octokit/request-error/dist-src/index.js
+var RequestError3 = class extends Error {
+  name;
+  /**
+   * http status code
+   */
+  status;
+  /**
+   * Request options that lead to the error.
+   */
+  request;
+  /**
+   * Response object if a response was received
+   */
+  response;
+  constructor(message, statusCode, options) {
+    super(message, { cause: options.cause });
+    this.name = "HttpError";
+    this.status = Number.parseInt(statusCode);
+    if (Number.isNaN(this.status)) {
+      this.status = 0;
+    }
+    if ("response" in options) {
+      this.response = options.response;
+    }
+    const requestCopy = Object.assign({}, options.request);
+    if (options.request.headers.authorization) {
+      requestCopy.headers = Object.assign({}, options.request.headers, {
+        authorization: options.request.headers.authorization.replace(
+          /(?<! ) .*$/,
+          " [REDACTED]"
+        )
+      });
+    }
+    requestCopy.url = requestCopy.url.replace(/\bclient_secret=\w+/g, "client_secret=[REDACTED]").replace(/\baccess_token=\w+/g, "access_token=[REDACTED]");
+    this.request = requestCopy;
+  }
+};
+
+// node_modules/@octokit/auth-oauth-user/node_modules/@octokit/request/dist-bundle/index.js
+var VERSION6 = "10.0.8";
+var defaults_default3 = {
+  headers: {
+    "user-agent": `octokit-request.js/${VERSION6} ${getUserAgent3()}`
+  }
+};
+function isPlainObject6(value) {
+  if (typeof value !== "object" || value === null) return false;
+  if (Object.prototype.toString.call(value) !== "[object Object]") return false;
+  const proto = Object.getPrototypeOf(value);
+  if (proto === null) return true;
+  const Ctor = Object.prototype.hasOwnProperty.call(proto, "constructor") && proto.constructor;
+  return typeof Ctor === "function" && Ctor instanceof Ctor && Function.prototype.call(Ctor) === Function.prototype.call(value);
+}
+var noop3 = () => "";
+async function fetchWrapper3(requestOptions) {
+  const fetch = requestOptions.request?.fetch || globalThis.fetch;
+  if (!fetch) {
+    throw new Error(
+      "fetch is not set. Please pass a fetch implementation as new Octokit({ request: { fetch }}). Learn more at https://github.com/octokit/octokit.js/#fetch-missing"
+    );
+  }
+  const log = requestOptions.request?.log || console;
+  const parseSuccessResponseBody = requestOptions.request?.parseSuccessResponseBody !== false;
+  const body = isPlainObject6(requestOptions.body) || Array.isArray(requestOptions.body) ? JSONStringify(requestOptions.body) : requestOptions.body;
+  const requestHeaders = Object.fromEntries(
+    Object.entries(requestOptions.headers).map(([name, value]) => [
+      name,
+      String(value)
+    ])
+  );
+  let fetchResponse;
+  try {
+    fetchResponse = await fetch(requestOptions.url, {
+      method: requestOptions.method,
+      body,
+      redirect: requestOptions.request?.redirect,
+      headers: requestHeaders,
+      signal: requestOptions.request?.signal,
+      // duplex must be set if request.body is ReadableStream or Async Iterables.
+      // See https://fetch.spec.whatwg.org/#dom-requestinit-duplex.
+      ...requestOptions.body && { duplex: "half" }
+    });
+  } catch (error2) {
+    let message = "Unknown Error";
+    if (error2 instanceof Error) {
+      if (error2.name === "AbortError") {
+        error2.status = 500;
+        throw error2;
+      }
+      message = error2.message;
+      if (error2.name === "TypeError" && "cause" in error2) {
+        if (error2.cause instanceof Error) {
+          message = error2.cause.message;
+        } else if (typeof error2.cause === "string") {
+          message = error2.cause;
+        }
+      }
+    }
+    const requestError = new RequestError3(message, 500, {
+      request: requestOptions
+    });
+    requestError.cause = error2;
+    throw requestError;
+  }
+  const status = fetchResponse.status;
+  const url = fetchResponse.url;
+  const responseHeaders = {};
+  for (const [key, value] of fetchResponse.headers) {
+    responseHeaders[key] = value;
+  }
+  const octokitResponse = {
+    url,
+    status,
+    headers: responseHeaders,
+    data: ""
+  };
+  if ("deprecation" in responseHeaders) {
+    const matches = responseHeaders.link && responseHeaders.link.match(/<([^<>]+)>; rel="deprecation"/);
+    const deprecationLink = matches && matches.pop();
+    log.warn(
+      `[@octokit/request] "${requestOptions.method} ${requestOptions.url}" is deprecated. It is scheduled to be removed on ${responseHeaders.sunset}${deprecationLink ? `. See ${deprecationLink}` : ""}`
+    );
+  }
+  if (status === 204 || status === 205) {
+    return octokitResponse;
+  }
+  if (requestOptions.method === "HEAD") {
+    if (status < 400) {
+      return octokitResponse;
+    }
+    throw new RequestError3(fetchResponse.statusText, status, {
+      response: octokitResponse,
+      request: requestOptions
+    });
+  }
+  if (status === 304) {
+    octokitResponse.data = await getResponseData3(fetchResponse);
+    throw new RequestError3("Not modified", status, {
+      response: octokitResponse,
+      request: requestOptions
+    });
+  }
+  if (status >= 400) {
+    octokitResponse.data = await getResponseData3(fetchResponse);
+    throw new RequestError3(toErrorMessage3(octokitResponse.data), status, {
+      response: octokitResponse,
+      request: requestOptions
+    });
+  }
+  octokitResponse.data = parseSuccessResponseBody ? await getResponseData3(fetchResponse) : fetchResponse.body;
+  return octokitResponse;
+}
+async function getResponseData3(response) {
+  const contentType = response.headers.get("content-type");
+  if (!contentType) {
+    return response.text().catch(noop3);
+  }
+  const mimetype = (0, import_fast_content_type_parse3.safeParse)(contentType);
+  if (isJSONResponse3(mimetype)) {
+    let text = "";
+    try {
+      text = await response.text();
+      return JSONParse(text);
+    } catch (err) {
+      return text;
+    }
+  } else if (mimetype.type.startsWith("text/") || mimetype.parameters.charset?.toLowerCase() === "utf-8") {
+    return response.text().catch(noop3);
+  } else {
+    return response.arrayBuffer().catch(
+      /* v8 ignore next -- @preserve */
+      () => new ArrayBuffer(0)
+    );
+  }
+}
+function isJSONResponse3(mimetype) {
+  return mimetype.type === "application/json" || mimetype.type === "application/scim+json";
+}
+function toErrorMessage3(data) {
+  if (typeof data === "string") {
+    return data;
+  }
+  if (data instanceof ArrayBuffer) {
+    return "Unknown error";
+  }
+  if ("message" in data) {
+    const suffix = "documentation_url" in data ? ` - ${data.documentation_url}` : "";
+    return Array.isArray(data.errors) ? `${data.message}: ${data.errors.map((v) => JSON.stringify(v)).join(", ")}${suffix}` : `${data.message}${suffix}`;
+  }
+  return `Unknown error: ${JSON.stringify(data)}`;
+}
+function withDefaults6(oldEndpoint, newDefaults) {
+  const endpoint22 = oldEndpoint.defaults(newDefaults);
+  const newApi = function(route, parameters) {
+    const endpointOptions = endpoint22.merge(route, parameters);
+    if (!endpointOptions.request || !endpointOptions.request.hook) {
+      return fetchWrapper3(endpoint22.parse(endpointOptions));
+    }
+    const request22 = (route2, parameters2) => {
+      return fetchWrapper3(
+        endpoint22.parse(endpoint22.merge(route2, parameters2))
+      );
+    };
+    Object.assign(request22, {
+      endpoint: endpoint22,
+      defaults: withDefaults6.bind(null, endpoint22)
+    });
+    return endpointOptions.request.hook(request22, endpointOptions);
+  };
+  return Object.assign(newApi, {
+    endpoint: endpoint22,
+    defaults: withDefaults6.bind(null, endpoint22)
+  });
+}
+var request3 = withDefaults6(endpoint3, defaults_default3);
+
+// node_modules/@octokit/auth-oauth-device/node_modules/universal-user-agent/index.js
+function getUserAgent4() {
+  if (typeof navigator === "object" && "userAgent" in navigator) {
+    return navigator.userAgent;
+  }
+  if (typeof process === "object" && process.version !== void 0) {
+    return `Node.js/${process.version.substr(1)} (${process.platform}; ${process.arch})`;
+  }
+  return "<environment undetectable>";
+}
+
+// node_modules/@octokit/auth-oauth-device/node_modules/@octokit/endpoint/dist-bundle/index.js
+var VERSION7 = "0.0.0-development";
+var userAgent4 = `octokit-endpoint.js/${VERSION7} ${getUserAgent4()}`;
+var DEFAULTS4 = {
+  method: "GET",
+  baseUrl: "https://api.github.com",
+  headers: {
+    accept: "application/vnd.github.v3+json",
+    "user-agent": userAgent4
+  },
+  mediaType: {
+    format: ""
+  }
+};
+function lowercaseKeys4(object) {
+  if (!object) {
+    return {};
+  }
+  return Object.keys(object).reduce((newObj, key) => {
+    newObj[key.toLowerCase()] = object[key];
+    return newObj;
+  }, {});
+}
+function isPlainObject7(value) {
+  if (typeof value !== "object" || value === null) return false;
+  if (Object.prototype.toString.call(value) !== "[object Object]") return false;
+  const proto = Object.getPrototypeOf(value);
+  if (proto === null) return true;
+  const Ctor = Object.prototype.hasOwnProperty.call(proto, "constructor") && proto.constructor;
+  return typeof Ctor === "function" && Ctor instanceof Ctor && Function.prototype.call(Ctor) === Function.prototype.call(value);
+}
+function mergeDeep4(defaults, options) {
+  const result = Object.assign({}, defaults);
+  Object.keys(options).forEach((key) => {
+    if (isPlainObject7(options[key])) {
+      if (!(key in defaults)) Object.assign(result, { [key]: options[key] });
+      else result[key] = mergeDeep4(defaults[key], options[key]);
+    } else {
+      Object.assign(result, { [key]: options[key] });
+    }
+  });
+  return result;
+}
+function removeUndefinedProperties4(obj) {
+  for (const key in obj) {
+    if (obj[key] === void 0) {
+      delete obj[key];
+    }
+  }
+  return obj;
+}
+function merge4(defaults, route, options) {
+  if (typeof route === "string") {
+    let [method, url] = route.split(" ");
+    options = Object.assign(url ? { method, url } : { url: method }, options);
+  } else {
+    options = Object.assign({}, route);
+  }
+  options.headers = lowercaseKeys4(options.headers);
+  removeUndefinedProperties4(options);
+  removeUndefinedProperties4(options.headers);
+  const mergedOptions = mergeDeep4(defaults || {}, options);
+  if (options.url === "/graphql") {
+    if (defaults && defaults.mediaType.previews?.length) {
+      mergedOptions.mediaType.previews = defaults.mediaType.previews.filter(
+        (preview) => !mergedOptions.mediaType.previews.includes(preview)
+      ).concat(mergedOptions.mediaType.previews);
+    }
+    mergedOptions.mediaType.previews = (mergedOptions.mediaType.previews || []).map((preview) => preview.replace(/-preview/, ""));
+  }
+  return mergedOptions;
+}
+function addQueryParameters4(url, parameters) {
+  const separator = /\?/.test(url) ? "&" : "?";
+  const names = Object.keys(parameters);
+  if (names.length === 0) {
+    return url;
+  }
+  return url + separator + names.map((name) => {
+    if (name === "q") {
+      return "q=" + parameters.q.split("+").map(encodeURIComponent).join("+");
+    }
+    return `${name}=${encodeURIComponent(parameters[name])}`;
+  }).join("&");
+}
+var urlVariableRegex4 = /\{[^{}}]+\}/g;
+function removeNonChars4(variableName) {
+  return variableName.replace(/(?:^\W+)|(?:(?<!\W)\W+$)/g, "").split(/,/);
+}
+function extractUrlVariableNames4(url) {
+  const matches = url.match(urlVariableRegex4);
+  if (!matches) {
+    return [];
+  }
+  return matches.map(removeNonChars4).reduce((a, b) => a.concat(b), []);
+}
+function omit4(object, keysToOmit) {
+  const result = { __proto__: null };
+  for (const key of Object.keys(object)) {
+    if (keysToOmit.indexOf(key) === -1) {
+      result[key] = object[key];
+    }
+  }
+  return result;
+}
+function encodeReserved4(str2) {
+  return str2.split(/(%[0-9A-Fa-f]{2})/g).map(function(part) {
+    if (!/%[0-9A-Fa-f]/.test(part)) {
+      part = encodeURI(part).replace(/%5B/g, "[").replace(/%5D/g, "]");
+    }
+    return part;
+  }).join("");
+}
+function encodeUnreserved4(str2) {
+  return encodeURIComponent(str2).replace(/[!'()*]/g, function(c) {
+    return "%" + c.charCodeAt(0).toString(16).toUpperCase();
+  });
+}
+function encodeValue4(operator, value, key) {
+  value = operator === "+" || operator === "#" ? encodeReserved4(value) : encodeUnreserved4(value);
+  if (key) {
+    return encodeUnreserved4(key) + "=" + value;
+  } else {
+    return value;
+  }
+}
+function isDefined4(value) {
+  return value !== void 0 && value !== null;
+}
+function isKeyOperator4(operator) {
+  return operator === ";" || operator === "&" || operator === "?";
+}
+function getValues4(context3, operator, key, modifier) {
+  var value = context3[key], result = [];
+  if (isDefined4(value) && value !== "") {
+    if (typeof value === "string" || typeof value === "number" || typeof value === "bigint" || typeof value === "boolean") {
+      value = value.toString();
+      if (modifier && modifier !== "*") {
+        value = value.substring(0, parseInt(modifier, 10));
+      }
+      result.push(
+        encodeValue4(operator, value, isKeyOperator4(operator) ? key : "")
+      );
+    } else {
+      if (modifier === "*") {
+        if (Array.isArray(value)) {
+          value.filter(isDefined4).forEach(function(value2) {
+            result.push(
+              encodeValue4(operator, value2, isKeyOperator4(operator) ? key : "")
+            );
+          });
+        } else {
+          Object.keys(value).forEach(function(k) {
+            if (isDefined4(value[k])) {
+              result.push(encodeValue4(operator, value[k], k));
+            }
+          });
+        }
+      } else {
+        const tmp = [];
+        if (Array.isArray(value)) {
+          value.filter(isDefined4).forEach(function(value2) {
+            tmp.push(encodeValue4(operator, value2));
+          });
+        } else {
+          Object.keys(value).forEach(function(k) {
+            if (isDefined4(value[k])) {
+              tmp.push(encodeUnreserved4(k));
+              tmp.push(encodeValue4(operator, value[k].toString()));
+            }
+          });
+        }
+        if (isKeyOperator4(operator)) {
+          result.push(encodeUnreserved4(key) + "=" + tmp.join(","));
+        } else if (tmp.length !== 0) {
+          result.push(tmp.join(","));
+        }
+      }
+    }
+  } else {
+    if (operator === ";") {
+      if (isDefined4(value)) {
+        result.push(encodeUnreserved4(key));
+      }
+    } else if (value === "" && (operator === "&" || operator === "?")) {
+      result.push(encodeUnreserved4(key) + "=");
+    } else if (value === "") {
+      result.push("");
+    }
+  }
+  return result;
+}
+function parseUrl4(template) {
+  return {
+    expand: expand4.bind(null, template)
+  };
+}
+function expand4(template, context3) {
+  var operators = ["+", "#", ".", "/", ";", "?", "&"];
+  template = template.replace(
+    /\{([^\{\}]+)\}|([^\{\}]+)/g,
+    function(_, expression, literal) {
+      if (expression) {
+        let operator = "";
+        const values = [];
+        if (operators.indexOf(expression.charAt(0)) !== -1) {
+          operator = expression.charAt(0);
+          expression = expression.substr(1);
+        }
+        expression.split(/,/g).forEach(function(variable) {
+          var tmp = /([^:\*]*)(?::(\d+)|(\*))?/.exec(variable);
+          values.push(getValues4(context3, operator, tmp[1], tmp[2] || tmp[3]));
+        });
+        if (operator && operator !== "+") {
+          var separator = ",";
+          if (operator === "?") {
+            separator = "&";
+          } else if (operator !== "#") {
+            separator = operator;
+          }
+          return (values.length !== 0 ? operator : "") + values.join(separator);
+        } else {
+          return values.join(",");
+        }
+      } else {
+        return encodeReserved4(literal);
+      }
+    }
+  );
+  if (template === "/") {
+    return template;
+  } else {
+    return template.replace(/\/$/, "");
+  }
+}
+function parse4(options) {
+  let method = options.method.toUpperCase();
+  let url = (options.url || "/").replace(/:([a-z]\w+)/g, "{$1}");
+  let headers = Object.assign({}, options.headers);
+  let body;
+  let parameters = omit4(options, [
+    "method",
+    "baseUrl",
+    "url",
+    "headers",
+    "request",
+    "mediaType"
+  ]);
+  const urlVariableNames = extractUrlVariableNames4(url);
+  url = parseUrl4(url).expand(parameters);
+  if (!/^http/.test(url)) {
+    url = options.baseUrl + url;
+  }
+  const omittedParameters = Object.keys(options).filter((option) => urlVariableNames.includes(option)).concat("baseUrl");
+  const remainingParameters = omit4(parameters, omittedParameters);
+  const isBinaryRequest = /application\/octet-stream/i.test(headers.accept);
+  if (!isBinaryRequest) {
+    if (options.mediaType.format) {
+      headers.accept = headers.accept.split(/,/).map(
+        (format) => format.replace(
+          /application\/vnd(\.\w+)(\.v3)?(\.\w+)?(\+json)?$/,
+          `application/vnd$1$2.${options.mediaType.format}`
+        )
+      ).join(",");
+    }
+    if (url.endsWith("/graphql")) {
+      if (options.mediaType.previews?.length) {
+        const previewsFromAcceptHeader = headers.accept.match(/(?<![\w-])[\w-]+(?=-preview)/g) || [];
+        headers.accept = previewsFromAcceptHeader.concat(options.mediaType.previews).map((preview) => {
+          const format = options.mediaType.format ? `.${options.mediaType.format}` : "+json";
+          return `application/vnd.github.${preview}-preview${format}`;
+        }).join(",");
+      }
+    }
+  }
+  if (["GET", "HEAD"].includes(method)) {
+    url = addQueryParameters4(url, remainingParameters);
+  } else {
+    if ("data" in remainingParameters) {
+      body = remainingParameters.data;
+    } else {
+      if (Object.keys(remainingParameters).length) {
+        body = remainingParameters;
+      }
+    }
+  }
+  if (!headers["content-type"] && typeof body !== "undefined") {
+    headers["content-type"] = "application/json; charset=utf-8";
+  }
+  if (["PATCH", "PUT"].includes(method) && typeof body === "undefined") {
+    body = "";
+  }
+  return Object.assign(
+    { method, url, headers },
+    typeof body !== "undefined" ? { body } : null,
+    options.request ? { request: options.request } : null
+  );
+}
+function endpointWithDefaults4(defaults, route, options) {
+  return parse4(merge4(defaults, route, options));
+}
+function withDefaults7(oldDefaults, newDefaults) {
+  const DEFAULTS22 = merge4(oldDefaults, newDefaults);
+  const endpoint22 = endpointWithDefaults4.bind(null, DEFAULTS22);
+  return Object.assign(endpoint22, {
+    DEFAULTS: DEFAULTS22,
+    defaults: withDefaults7.bind(null, DEFAULTS22),
+    merge: merge4.bind(null, DEFAULTS22),
+    parse: parse4
+  });
+}
+var endpoint4 = withDefaults7(null, DEFAULTS4);
+
+// node_modules/@octokit/auth-oauth-device/node_modules/@octokit/request/dist-bundle/index.js
+var import_fast_content_type_parse4 = __toESM(require_fast_content_type_parse(), 1);
+
+// node_modules/@octokit/auth-oauth-device/node_modules/@octokit/request-error/dist-src/index.js
+var RequestError4 = class extends Error {
+  name;
+  /**
+   * http status code
+   */
+  status;
+  /**
+   * Request options that lead to the error.
+   */
+  request;
+  /**
+   * Response object if a response was received
+   */
+  response;
+  constructor(message, statusCode, options) {
+    super(message, { cause: options.cause });
+    this.name = "HttpError";
+    this.status = Number.parseInt(statusCode);
+    if (Number.isNaN(this.status)) {
+      this.status = 0;
+    }
+    if ("response" in options) {
+      this.response = options.response;
+    }
+    const requestCopy = Object.assign({}, options.request);
+    if (options.request.headers.authorization) {
+      requestCopy.headers = Object.assign({}, options.request.headers, {
+        authorization: options.request.headers.authorization.replace(
+          /(?<! ) .*$/,
+          " [REDACTED]"
+        )
+      });
+    }
+    requestCopy.url = requestCopy.url.replace(/\bclient_secret=\w+/g, "client_secret=[REDACTED]").replace(/\baccess_token=\w+/g, "access_token=[REDACTED]");
+    this.request = requestCopy;
+  }
+};
+
+// node_modules/@octokit/auth-oauth-device/node_modules/@octokit/request/dist-bundle/index.js
+var VERSION8 = "10.0.8";
+var defaults_default4 = {
+  headers: {
+    "user-agent": `octokit-request.js/${VERSION8} ${getUserAgent4()}`
+  }
+};
+function isPlainObject8(value) {
+  if (typeof value !== "object" || value === null) return false;
+  if (Object.prototype.toString.call(value) !== "[object Object]") return false;
+  const proto = Object.getPrototypeOf(value);
+  if (proto === null) return true;
+  const Ctor = Object.prototype.hasOwnProperty.call(proto, "constructor") && proto.constructor;
+  return typeof Ctor === "function" && Ctor instanceof Ctor && Function.prototype.call(Ctor) === Function.prototype.call(value);
+}
+var noop4 = () => "";
+async function fetchWrapper4(requestOptions) {
+  const fetch = requestOptions.request?.fetch || globalThis.fetch;
+  if (!fetch) {
+    throw new Error(
+      "fetch is not set. Please pass a fetch implementation as new Octokit({ request: { fetch }}). Learn more at https://github.com/octokit/octokit.js/#fetch-missing"
+    );
+  }
+  const log = requestOptions.request?.log || console;
+  const parseSuccessResponseBody = requestOptions.request?.parseSuccessResponseBody !== false;
+  const body = isPlainObject8(requestOptions.body) || Array.isArray(requestOptions.body) ? JSONStringify(requestOptions.body) : requestOptions.body;
+  const requestHeaders = Object.fromEntries(
+    Object.entries(requestOptions.headers).map(([name, value]) => [
+      name,
+      String(value)
+    ])
+  );
+  let fetchResponse;
+  try {
+    fetchResponse = await fetch(requestOptions.url, {
+      method: requestOptions.method,
+      body,
+      redirect: requestOptions.request?.redirect,
+      headers: requestHeaders,
+      signal: requestOptions.request?.signal,
+      // duplex must be set if request.body is ReadableStream or Async Iterables.
+      // See https://fetch.spec.whatwg.org/#dom-requestinit-duplex.
+      ...requestOptions.body && { duplex: "half" }
+    });
+  } catch (error2) {
+    let message = "Unknown Error";
+    if (error2 instanceof Error) {
+      if (error2.name === "AbortError") {
+        error2.status = 500;
+        throw error2;
+      }
+      message = error2.message;
+      if (error2.name === "TypeError" && "cause" in error2) {
+        if (error2.cause instanceof Error) {
+          message = error2.cause.message;
+        } else if (typeof error2.cause === "string") {
+          message = error2.cause;
+        }
+      }
+    }
+    const requestError = new RequestError4(message, 500, {
+      request: requestOptions
+    });
+    requestError.cause = error2;
+    throw requestError;
+  }
+  const status = fetchResponse.status;
+  const url = fetchResponse.url;
+  const responseHeaders = {};
+  for (const [key, value] of fetchResponse.headers) {
+    responseHeaders[key] = value;
+  }
+  const octokitResponse = {
+    url,
+    status,
+    headers: responseHeaders,
+    data: ""
+  };
+  if ("deprecation" in responseHeaders) {
+    const matches = responseHeaders.link && responseHeaders.link.match(/<([^<>]+)>; rel="deprecation"/);
+    const deprecationLink = matches && matches.pop();
+    log.warn(
+      `[@octokit/request] "${requestOptions.method} ${requestOptions.url}" is deprecated. It is scheduled to be removed on ${responseHeaders.sunset}${deprecationLink ? `. See ${deprecationLink}` : ""}`
+    );
+  }
+  if (status === 204 || status === 205) {
+    return octokitResponse;
+  }
+  if (requestOptions.method === "HEAD") {
+    if (status < 400) {
+      return octokitResponse;
+    }
+    throw new RequestError4(fetchResponse.statusText, status, {
+      response: octokitResponse,
+      request: requestOptions
+    });
+  }
+  if (status === 304) {
+    octokitResponse.data = await getResponseData4(fetchResponse);
+    throw new RequestError4("Not modified", status, {
+      response: octokitResponse,
+      request: requestOptions
+    });
+  }
+  if (status >= 400) {
+    octokitResponse.data = await getResponseData4(fetchResponse);
+    throw new RequestError4(toErrorMessage4(octokitResponse.data), status, {
+      response: octokitResponse,
+      request: requestOptions
+    });
+  }
+  octokitResponse.data = parseSuccessResponseBody ? await getResponseData4(fetchResponse) : fetchResponse.body;
+  return octokitResponse;
+}
+async function getResponseData4(response) {
+  const contentType = response.headers.get("content-type");
+  if (!contentType) {
+    return response.text().catch(noop4);
+  }
+  const mimetype = (0, import_fast_content_type_parse4.safeParse)(contentType);
+  if (isJSONResponse4(mimetype)) {
+    let text = "";
+    try {
+      text = await response.text();
+      return JSONParse(text);
+    } catch (err) {
+      return text;
+    }
+  } else if (mimetype.type.startsWith("text/") || mimetype.parameters.charset?.toLowerCase() === "utf-8") {
+    return response.text().catch(noop4);
+  } else {
+    return response.arrayBuffer().catch(
+      /* v8 ignore next -- @preserve */
+      () => new ArrayBuffer(0)
+    );
+  }
+}
+function isJSONResponse4(mimetype) {
+  return mimetype.type === "application/json" || mimetype.type === "application/scim+json";
+}
+function toErrorMessage4(data) {
+  if (typeof data === "string") {
+    return data;
+  }
+  if (data instanceof ArrayBuffer) {
+    return "Unknown error";
+  }
+  if ("message" in data) {
+    const suffix = "documentation_url" in data ? ` - ${data.documentation_url}` : "";
+    return Array.isArray(data.errors) ? `${data.message}: ${data.errors.map((v) => JSON.stringify(v)).join(", ")}${suffix}` : `${data.message}${suffix}`;
+  }
+  return `Unknown error: ${JSON.stringify(data)}`;
+}
+function withDefaults8(oldEndpoint, newDefaults) {
+  const endpoint22 = oldEndpoint.defaults(newDefaults);
+  const newApi = function(route, parameters) {
+    const endpointOptions = endpoint22.merge(route, parameters);
+    if (!endpointOptions.request || !endpointOptions.request.hook) {
+      return fetchWrapper4(endpoint22.parse(endpointOptions));
+    }
+    const request22 = (route2, parameters2) => {
+      return fetchWrapper4(
+        endpoint22.parse(endpoint22.merge(route2, parameters2))
+      );
+    };
+    Object.assign(request22, {
+      endpoint: endpoint22,
+      defaults: withDefaults8.bind(null, endpoint22)
+    });
+    return endpointOptions.request.hook(request22, endpointOptions);
+  };
+  return Object.assign(newApi, {
+    endpoint: endpoint22,
+    defaults: withDefaults8.bind(null, endpoint22)
+  });
+}
+var request4 = withDefaults8(endpoint4, defaults_default4);
+
+// node_modules/@octokit/oauth-methods/node_modules/universal-user-agent/index.js
+function getUserAgent5() {
+  if (typeof navigator === "object" && "userAgent" in navigator) {
+    return navigator.userAgent;
+  }
+  if (typeof process === "object" && process.version !== void 0) {
+    return `Node.js/${process.version.substr(1)} (${process.platform}; ${process.arch})`;
+  }
+  return "<environment undetectable>";
+}
+
+// node_modules/@octokit/oauth-methods/node_modules/@octokit/endpoint/dist-bundle/index.js
+var VERSION9 = "0.0.0-development";
+var userAgent5 = `octokit-endpoint.js/${VERSION9} ${getUserAgent5()}`;
+var DEFAULTS5 = {
+  method: "GET",
+  baseUrl: "https://api.github.com",
+  headers: {
+    accept: "application/vnd.github.v3+json",
+    "user-agent": userAgent5
+  },
+  mediaType: {
+    format: ""
+  }
+};
+function lowercaseKeys5(object) {
+  if (!object) {
+    return {};
+  }
+  return Object.keys(object).reduce((newObj, key) => {
+    newObj[key.toLowerCase()] = object[key];
+    return newObj;
+  }, {});
+}
+function isPlainObject9(value) {
+  if (typeof value !== "object" || value === null) return false;
+  if (Object.prototype.toString.call(value) !== "[object Object]") return false;
+  const proto = Object.getPrototypeOf(value);
+  if (proto === null) return true;
+  const Ctor = Object.prototype.hasOwnProperty.call(proto, "constructor") && proto.constructor;
+  return typeof Ctor === "function" && Ctor instanceof Ctor && Function.prototype.call(Ctor) === Function.prototype.call(value);
+}
+function mergeDeep5(defaults, options) {
+  const result = Object.assign({}, defaults);
+  Object.keys(options).forEach((key) => {
+    if (isPlainObject9(options[key])) {
+      if (!(key in defaults)) Object.assign(result, { [key]: options[key] });
+      else result[key] = mergeDeep5(defaults[key], options[key]);
+    } else {
+      Object.assign(result, { [key]: options[key] });
+    }
+  });
+  return result;
+}
+function removeUndefinedProperties5(obj) {
+  for (const key in obj) {
+    if (obj[key] === void 0) {
+      delete obj[key];
+    }
+  }
+  return obj;
+}
+function merge5(defaults, route, options) {
+  if (typeof route === "string") {
+    let [method, url] = route.split(" ");
+    options = Object.assign(url ? { method, url } : { url: method }, options);
+  } else {
+    options = Object.assign({}, route);
+  }
+  options.headers = lowercaseKeys5(options.headers);
+  removeUndefinedProperties5(options);
+  removeUndefinedProperties5(options.headers);
+  const mergedOptions = mergeDeep5(defaults || {}, options);
+  if (options.url === "/graphql") {
+    if (defaults && defaults.mediaType.previews?.length) {
+      mergedOptions.mediaType.previews = defaults.mediaType.previews.filter(
+        (preview) => !mergedOptions.mediaType.previews.includes(preview)
+      ).concat(mergedOptions.mediaType.previews);
+    }
+    mergedOptions.mediaType.previews = (mergedOptions.mediaType.previews || []).map((preview) => preview.replace(/-preview/, ""));
+  }
+  return mergedOptions;
+}
+function addQueryParameters5(url, parameters) {
+  const separator = /\?/.test(url) ? "&" : "?";
+  const names = Object.keys(parameters);
+  if (names.length === 0) {
+    return url;
+  }
+  return url + separator + names.map((name) => {
+    if (name === "q") {
+      return "q=" + parameters.q.split("+").map(encodeURIComponent).join("+");
+    }
+    return `${name}=${encodeURIComponent(parameters[name])}`;
+  }).join("&");
+}
+var urlVariableRegex5 = /\{[^{}}]+\}/g;
+function removeNonChars5(variableName) {
+  return variableName.replace(/(?:^\W+)|(?:(?<!\W)\W+$)/g, "").split(/,/);
+}
+function extractUrlVariableNames5(url) {
+  const matches = url.match(urlVariableRegex5);
+  if (!matches) {
+    return [];
+  }
+  return matches.map(removeNonChars5).reduce((a, b) => a.concat(b), []);
+}
+function omit5(object, keysToOmit) {
+  const result = { __proto__: null };
+  for (const key of Object.keys(object)) {
+    if (keysToOmit.indexOf(key) === -1) {
+      result[key] = object[key];
+    }
+  }
+  return result;
+}
+function encodeReserved5(str2) {
+  return str2.split(/(%[0-9A-Fa-f]{2})/g).map(function(part) {
+    if (!/%[0-9A-Fa-f]/.test(part)) {
+      part = encodeURI(part).replace(/%5B/g, "[").replace(/%5D/g, "]");
+    }
+    return part;
+  }).join("");
+}
+function encodeUnreserved5(str2) {
+  return encodeURIComponent(str2).replace(/[!'()*]/g, function(c) {
+    return "%" + c.charCodeAt(0).toString(16).toUpperCase();
+  });
+}
+function encodeValue5(operator, value, key) {
+  value = operator === "+" || operator === "#" ? encodeReserved5(value) : encodeUnreserved5(value);
+  if (key) {
+    return encodeUnreserved5(key) + "=" + value;
+  } else {
+    return value;
+  }
+}
+function isDefined5(value) {
+  return value !== void 0 && value !== null;
+}
+function isKeyOperator5(operator) {
+  return operator === ";" || operator === "&" || operator === "?";
+}
+function getValues5(context3, operator, key, modifier) {
+  var value = context3[key], result = [];
+  if (isDefined5(value) && value !== "") {
+    if (typeof value === "string" || typeof value === "number" || typeof value === "bigint" || typeof value === "boolean") {
+      value = value.toString();
+      if (modifier && modifier !== "*") {
+        value = value.substring(0, parseInt(modifier, 10));
+      }
+      result.push(
+        encodeValue5(operator, value, isKeyOperator5(operator) ? key : "")
+      );
+    } else {
+      if (modifier === "*") {
+        if (Array.isArray(value)) {
+          value.filter(isDefined5).forEach(function(value2) {
+            result.push(
+              encodeValue5(operator, value2, isKeyOperator5(operator) ? key : "")
+            );
+          });
+        } else {
+          Object.keys(value).forEach(function(k) {
+            if (isDefined5(value[k])) {
+              result.push(encodeValue5(operator, value[k], k));
+            }
+          });
+        }
+      } else {
+        const tmp = [];
+        if (Array.isArray(value)) {
+          value.filter(isDefined5).forEach(function(value2) {
+            tmp.push(encodeValue5(operator, value2));
+          });
+        } else {
+          Object.keys(value).forEach(function(k) {
+            if (isDefined5(value[k])) {
+              tmp.push(encodeUnreserved5(k));
+              tmp.push(encodeValue5(operator, value[k].toString()));
+            }
+          });
+        }
+        if (isKeyOperator5(operator)) {
+          result.push(encodeUnreserved5(key) + "=" + tmp.join(","));
+        } else if (tmp.length !== 0) {
+          result.push(tmp.join(","));
+        }
+      }
+    }
+  } else {
+    if (operator === ";") {
+      if (isDefined5(value)) {
+        result.push(encodeUnreserved5(key));
+      }
+    } else if (value === "" && (operator === "&" || operator === "?")) {
+      result.push(encodeUnreserved5(key) + "=");
+    } else if (value === "") {
+      result.push("");
+    }
+  }
+  return result;
+}
+function parseUrl5(template) {
+  return {
+    expand: expand5.bind(null, template)
+  };
+}
+function expand5(template, context3) {
+  var operators = ["+", "#", ".", "/", ";", "?", "&"];
+  template = template.replace(
+    /\{([^\{\}]+)\}|([^\{\}]+)/g,
+    function(_, expression, literal) {
+      if (expression) {
+        let operator = "";
+        const values = [];
+        if (operators.indexOf(expression.charAt(0)) !== -1) {
+          operator = expression.charAt(0);
+          expression = expression.substr(1);
+        }
+        expression.split(/,/g).forEach(function(variable) {
+          var tmp = /([^:\*]*)(?::(\d+)|(\*))?/.exec(variable);
+          values.push(getValues5(context3, operator, tmp[1], tmp[2] || tmp[3]));
+        });
+        if (operator && operator !== "+") {
+          var separator = ",";
+          if (operator === "?") {
+            separator = "&";
+          } else if (operator !== "#") {
+            separator = operator;
+          }
+          return (values.length !== 0 ? operator : "") + values.join(separator);
+        } else {
+          return values.join(",");
+        }
+      } else {
+        return encodeReserved5(literal);
+      }
+    }
+  );
+  if (template === "/") {
+    return template;
+  } else {
+    return template.replace(/\/$/, "");
+  }
+}
+function parse5(options) {
+  let method = options.method.toUpperCase();
+  let url = (options.url || "/").replace(/:([a-z]\w+)/g, "{$1}");
+  let headers = Object.assign({}, options.headers);
+  let body;
+  let parameters = omit5(options, [
+    "method",
+    "baseUrl",
+    "url",
+    "headers",
+    "request",
+    "mediaType"
+  ]);
+  const urlVariableNames = extractUrlVariableNames5(url);
+  url = parseUrl5(url).expand(parameters);
+  if (!/^http/.test(url)) {
+    url = options.baseUrl + url;
+  }
+  const omittedParameters = Object.keys(options).filter((option) => urlVariableNames.includes(option)).concat("baseUrl");
+  const remainingParameters = omit5(parameters, omittedParameters);
+  const isBinaryRequest = /application\/octet-stream/i.test(headers.accept);
+  if (!isBinaryRequest) {
+    if (options.mediaType.format) {
+      headers.accept = headers.accept.split(/,/).map(
+        (format) => format.replace(
+          /application\/vnd(\.\w+)(\.v3)?(\.\w+)?(\+json)?$/,
+          `application/vnd$1$2.${options.mediaType.format}`
+        )
+      ).join(",");
+    }
+    if (url.endsWith("/graphql")) {
+      if (options.mediaType.previews?.length) {
+        const previewsFromAcceptHeader = headers.accept.match(/(?<![\w-])[\w-]+(?=-preview)/g) || [];
+        headers.accept = previewsFromAcceptHeader.concat(options.mediaType.previews).map((preview) => {
+          const format = options.mediaType.format ? `.${options.mediaType.format}` : "+json";
+          return `application/vnd.github.${preview}-preview${format}`;
+        }).join(",");
+      }
+    }
+  }
+  if (["GET", "HEAD"].includes(method)) {
+    url = addQueryParameters5(url, remainingParameters);
+  } else {
+    if ("data" in remainingParameters) {
+      body = remainingParameters.data;
+    } else {
+      if (Object.keys(remainingParameters).length) {
+        body = remainingParameters;
+      }
+    }
+  }
+  if (!headers["content-type"] && typeof body !== "undefined") {
+    headers["content-type"] = "application/json; charset=utf-8";
+  }
+  if (["PATCH", "PUT"].includes(method) && typeof body === "undefined") {
+    body = "";
+  }
+  return Object.assign(
+    { method, url, headers },
+    typeof body !== "undefined" ? { body } : null,
+    options.request ? { request: options.request } : null
+  );
+}
+function endpointWithDefaults5(defaults, route, options) {
+  return parse5(merge5(defaults, route, options));
+}
+function withDefaults9(oldDefaults, newDefaults) {
+  const DEFAULTS22 = merge5(oldDefaults, newDefaults);
+  const endpoint22 = endpointWithDefaults5.bind(null, DEFAULTS22);
+  return Object.assign(endpoint22, {
+    DEFAULTS: DEFAULTS22,
+    defaults: withDefaults9.bind(null, DEFAULTS22),
+    merge: merge5.bind(null, DEFAULTS22),
+    parse: parse5
+  });
+}
+var endpoint5 = withDefaults9(null, DEFAULTS5);
+
+// node_modules/@octokit/oauth-methods/node_modules/@octokit/request/dist-bundle/index.js
+var import_fast_content_type_parse5 = __toESM(require_fast_content_type_parse(), 1);
+
+// node_modules/@octokit/oauth-methods/node_modules/@octokit/request-error/dist-src/index.js
+var RequestError5 = class extends Error {
+  name;
+  /**
+   * http status code
+   */
+  status;
+  /**
+   * Request options that lead to the error.
+   */
+  request;
+  /**
+   * Response object if a response was received
+   */
+  response;
+  constructor(message, statusCode, options) {
+    super(message, { cause: options.cause });
+    this.name = "HttpError";
+    this.status = Number.parseInt(statusCode);
+    if (Number.isNaN(this.status)) {
+      this.status = 0;
+    }
+    if ("response" in options) {
+      this.response = options.response;
+    }
+    const requestCopy = Object.assign({}, options.request);
+    if (options.request.headers.authorization) {
+      requestCopy.headers = Object.assign({}, options.request.headers, {
+        authorization: options.request.headers.authorization.replace(
+          /(?<! ) .*$/,
+          " [REDACTED]"
+        )
+      });
+    }
+    requestCopy.url = requestCopy.url.replace(/\bclient_secret=\w+/g, "client_secret=[REDACTED]").replace(/\baccess_token=\w+/g, "access_token=[REDACTED]");
+    this.request = requestCopy;
+  }
+};
+
+// node_modules/@octokit/oauth-methods/node_modules/@octokit/request/dist-bundle/index.js
+var VERSION10 = "10.0.8";
+var defaults_default5 = {
+  headers: {
+    "user-agent": `octokit-request.js/${VERSION10} ${getUserAgent5()}`
+  }
+};
+function isPlainObject10(value) {
+  if (typeof value !== "object" || value === null) return false;
+  if (Object.prototype.toString.call(value) !== "[object Object]") return false;
+  const proto = Object.getPrototypeOf(value);
+  if (proto === null) return true;
+  const Ctor = Object.prototype.hasOwnProperty.call(proto, "constructor") && proto.constructor;
+  return typeof Ctor === "function" && Ctor instanceof Ctor && Function.prototype.call(Ctor) === Function.prototype.call(value);
+}
+var noop5 = () => "";
+async function fetchWrapper5(requestOptions) {
+  const fetch = requestOptions.request?.fetch || globalThis.fetch;
+  if (!fetch) {
+    throw new Error(
+      "fetch is not set. Please pass a fetch implementation as new Octokit({ request: { fetch }}). Learn more at https://github.com/octokit/octokit.js/#fetch-missing"
+    );
+  }
+  const log = requestOptions.request?.log || console;
+  const parseSuccessResponseBody = requestOptions.request?.parseSuccessResponseBody !== false;
+  const body = isPlainObject10(requestOptions.body) || Array.isArray(requestOptions.body) ? JSONStringify(requestOptions.body) : requestOptions.body;
+  const requestHeaders = Object.fromEntries(
+    Object.entries(requestOptions.headers).map(([name, value]) => [
+      name,
+      String(value)
+    ])
+  );
+  let fetchResponse;
+  try {
+    fetchResponse = await fetch(requestOptions.url, {
+      method: requestOptions.method,
+      body,
+      redirect: requestOptions.request?.redirect,
+      headers: requestHeaders,
+      signal: requestOptions.request?.signal,
+      // duplex must be set if request.body is ReadableStream or Async Iterables.
+      // See https://fetch.spec.whatwg.org/#dom-requestinit-duplex.
+      ...requestOptions.body && { duplex: "half" }
+    });
+  } catch (error2) {
+    let message = "Unknown Error";
+    if (error2 instanceof Error) {
+      if (error2.name === "AbortError") {
+        error2.status = 500;
+        throw error2;
+      }
+      message = error2.message;
+      if (error2.name === "TypeError" && "cause" in error2) {
+        if (error2.cause instanceof Error) {
+          message = error2.cause.message;
+        } else if (typeof error2.cause === "string") {
+          message = error2.cause;
+        }
+      }
+    }
+    const requestError = new RequestError5(message, 500, {
+      request: requestOptions
+    });
+    requestError.cause = error2;
+    throw requestError;
+  }
+  const status = fetchResponse.status;
+  const url = fetchResponse.url;
+  const responseHeaders = {};
+  for (const [key, value] of fetchResponse.headers) {
+    responseHeaders[key] = value;
+  }
+  const octokitResponse = {
+    url,
+    status,
+    headers: responseHeaders,
+    data: ""
+  };
+  if ("deprecation" in responseHeaders) {
+    const matches = responseHeaders.link && responseHeaders.link.match(/<([^<>]+)>; rel="deprecation"/);
+    const deprecationLink = matches && matches.pop();
+    log.warn(
+      `[@octokit/request] "${requestOptions.method} ${requestOptions.url}" is deprecated. It is scheduled to be removed on ${responseHeaders.sunset}${deprecationLink ? `. See ${deprecationLink}` : ""}`
+    );
+  }
+  if (status === 204 || status === 205) {
+    return octokitResponse;
+  }
+  if (requestOptions.method === "HEAD") {
+    if (status < 400) {
+      return octokitResponse;
+    }
+    throw new RequestError5(fetchResponse.statusText, status, {
+      response: octokitResponse,
+      request: requestOptions
+    });
+  }
+  if (status === 304) {
+    octokitResponse.data = await getResponseData5(fetchResponse);
+    throw new RequestError5("Not modified", status, {
+      response: octokitResponse,
+      request: requestOptions
+    });
+  }
+  if (status >= 400) {
+    octokitResponse.data = await getResponseData5(fetchResponse);
+    throw new RequestError5(toErrorMessage5(octokitResponse.data), status, {
+      response: octokitResponse,
+      request: requestOptions
+    });
+  }
+  octokitResponse.data = parseSuccessResponseBody ? await getResponseData5(fetchResponse) : fetchResponse.body;
+  return octokitResponse;
+}
+async function getResponseData5(response) {
+  const contentType = response.headers.get("content-type");
+  if (!contentType) {
+    return response.text().catch(noop5);
+  }
+  const mimetype = (0, import_fast_content_type_parse5.safeParse)(contentType);
+  if (isJSONResponse5(mimetype)) {
+    let text = "";
+    try {
+      text = await response.text();
+      return JSONParse(text);
+    } catch (err) {
+      return text;
+    }
+  } else if (mimetype.type.startsWith("text/") || mimetype.parameters.charset?.toLowerCase() === "utf-8") {
+    return response.text().catch(noop5);
+  } else {
+    return response.arrayBuffer().catch(
+      /* v8 ignore next -- @preserve */
+      () => new ArrayBuffer(0)
+    );
+  }
+}
+function isJSONResponse5(mimetype) {
+  return mimetype.type === "application/json" || mimetype.type === "application/scim+json";
+}
+function toErrorMessage5(data) {
+  if (typeof data === "string") {
+    return data;
+  }
+  if (data instanceof ArrayBuffer) {
+    return "Unknown error";
+  }
+  if ("message" in data) {
+    const suffix = "documentation_url" in data ? ` - ${data.documentation_url}` : "";
+    return Array.isArray(data.errors) ? `${data.message}: ${data.errors.map((v) => JSON.stringify(v)).join(", ")}${suffix}` : `${data.message}${suffix}`;
+  }
+  return `Unknown error: ${JSON.stringify(data)}`;
+}
+function withDefaults10(oldEndpoint, newDefaults) {
+  const endpoint22 = oldEndpoint.defaults(newDefaults);
+  const newApi = function(route, parameters) {
+    const endpointOptions = endpoint22.merge(route, parameters);
+    if (!endpointOptions.request || !endpointOptions.request.hook) {
+      return fetchWrapper5(endpoint22.parse(endpointOptions));
+    }
+    const request22 = (route2, parameters2) => {
+      return fetchWrapper5(
+        endpoint22.parse(endpoint22.merge(route2, parameters2))
+      );
+    };
+    Object.assign(request22, {
+      endpoint: endpoint22,
+      defaults: withDefaults10.bind(null, endpoint22)
+    });
+    return endpointOptions.request.hook(request22, endpointOptions);
+  };
+  return Object.assign(newApi, {
+    endpoint: endpoint22,
+    defaults: withDefaults10.bind(null, endpoint22)
+  });
+}
+var request5 = withDefaults10(endpoint5, defaults_default5);
+
+// node_modules/@octokit/oauth-methods/dist-bundle/index.js
+function requestToOAuthBaseUrl(request7) {
+  const endpointDefaults = request7.endpoint.DEFAULTS;
+  return /^https:\/\/(api\.)?github\.com$/.test(endpointDefaults.baseUrl) ? "https://github.com" : endpointDefaults.baseUrl.replace("/api/v3", "");
+}
+async function oauthRequest(request7, route, parameters) {
+  const withOAuthParameters = {
+    baseUrl: requestToOAuthBaseUrl(request7),
+    headers: {
+      accept: "application/json"
+    },
+    ...parameters
+  };
+  const response = await request7(route, withOAuthParameters);
+  if ("error" in response.data) {
+    const error2 = new RequestError5(
+      `${response.data.error_description} (${response.data.error}, ${response.data.error_uri})`,
+      400,
+      {
+        request: request7.endpoint.merge(
+          route,
+          withOAuthParameters
+        )
+      }
+    );
+    error2.response = response;
+    throw error2;
+  }
+  return response;
+}
+async function exchangeWebFlowCode(options) {
+  const request7 = options.request || request5;
+  const response = await oauthRequest(
+    request7,
+    "POST /login/oauth/access_token",
+    {
+      client_id: options.clientId,
+      client_secret: options.clientSecret,
+      code: options.code,
+      redirect_uri: options.redirectUrl
+    }
+  );
+  const authentication = {
+    clientType: options.clientType,
+    clientId: options.clientId,
+    clientSecret: options.clientSecret,
+    token: response.data.access_token,
+    scopes: response.data.scope.split(/\s+/).filter(Boolean)
+  };
+  if (options.clientType === "github-app") {
+    if ("refresh_token" in response.data) {
+      const apiTimeInMs = new Date(response.headers.date).getTime();
+      authentication.refreshToken = response.data.refresh_token, authentication.expiresAt = toTimestamp(
+        apiTimeInMs,
+        response.data.expires_in
+      ), authentication.refreshTokenExpiresAt = toTimestamp(
+        apiTimeInMs,
+        response.data.refresh_token_expires_in
+      );
+    }
+    delete authentication.scopes;
+  }
+  return { ...response, authentication };
+}
+function toTimestamp(apiTimeInMs, expirationInSeconds) {
+  return new Date(apiTimeInMs + expirationInSeconds * 1e3).toISOString();
+}
+async function createDeviceCode(options) {
+  const request7 = options.request || request5;
+  const parameters = {
+    client_id: options.clientId
+  };
+  if ("scopes" in options && Array.isArray(options.scopes)) {
+    parameters.scope = options.scopes.join(" ");
+  }
+  return oauthRequest(request7, "POST /login/device/code", parameters);
+}
+async function exchangeDeviceCode(options) {
+  const request7 = options.request || request5;
+  const response = await oauthRequest(
+    request7,
+    "POST /login/oauth/access_token",
+    {
+      client_id: options.clientId,
+      device_code: options.code,
+      grant_type: "urn:ietf:params:oauth:grant-type:device_code"
+    }
+  );
+  const authentication = {
+    clientType: options.clientType,
+    clientId: options.clientId,
+    token: response.data.access_token,
+    scopes: response.data.scope.split(/\s+/).filter(Boolean)
+  };
+  if ("clientSecret" in options) {
+    authentication.clientSecret = options.clientSecret;
+  }
+  if (options.clientType === "github-app") {
+    if ("refresh_token" in response.data) {
+      const apiTimeInMs = new Date(response.headers.date).getTime();
+      authentication.refreshToken = response.data.refresh_token, authentication.expiresAt = toTimestamp2(
+        apiTimeInMs,
+        response.data.expires_in
+      ), authentication.refreshTokenExpiresAt = toTimestamp2(
+        apiTimeInMs,
+        response.data.refresh_token_expires_in
+      );
+    }
+    delete authentication.scopes;
+  }
+  return { ...response, authentication };
+}
+function toTimestamp2(apiTimeInMs, expirationInSeconds) {
+  return new Date(apiTimeInMs + expirationInSeconds * 1e3).toISOString();
+}
+async function checkToken(options) {
+  const request7 = options.request || request5;
+  const response = await request7("POST /applications/{client_id}/token", {
+    headers: {
+      authorization: `basic ${btoa(
+        `${options.clientId}:${options.clientSecret}`
+      )}`
+    },
+    client_id: options.clientId,
+    access_token: options.token
+  });
+  const authentication = {
+    clientType: options.clientType,
+    clientId: options.clientId,
+    clientSecret: options.clientSecret,
+    token: options.token,
+    scopes: response.data.scopes
+  };
+  if (response.data.expires_at)
+    authentication.expiresAt = response.data.expires_at;
+  if (options.clientType === "github-app") {
+    delete authentication.scopes;
+  }
+  return { ...response, authentication };
+}
+async function refreshToken(options) {
+  const request7 = options.request || request5;
+  const response = await oauthRequest(
+    request7,
+    "POST /login/oauth/access_token",
+    {
+      client_id: options.clientId,
+      client_secret: options.clientSecret,
+      grant_type: "refresh_token",
+      refresh_token: options.refreshToken
+    }
+  );
+  const apiTimeInMs = new Date(response.headers.date).getTime();
+  const authentication = {
+    clientType: "github-app",
+    clientId: options.clientId,
+    clientSecret: options.clientSecret,
+    token: response.data.access_token,
+    refreshToken: response.data.refresh_token,
+    expiresAt: toTimestamp3(apiTimeInMs, response.data.expires_in),
+    refreshTokenExpiresAt: toTimestamp3(
+      apiTimeInMs,
+      response.data.refresh_token_expires_in
+    )
+  };
+  return { ...response, authentication };
+}
+function toTimestamp3(apiTimeInMs, expirationInSeconds) {
+  return new Date(apiTimeInMs + expirationInSeconds * 1e3).toISOString();
+}
+async function resetToken(options) {
+  const request7 = options.request || request5;
+  const auth5 = btoa(`${options.clientId}:${options.clientSecret}`);
+  const response = await request7(
+    "PATCH /applications/{client_id}/token",
+    {
+      headers: {
+        authorization: `basic ${auth5}`
+      },
+      client_id: options.clientId,
+      access_token: options.token
+    }
+  );
+  const authentication = {
+    clientType: options.clientType,
+    clientId: options.clientId,
+    clientSecret: options.clientSecret,
+    token: response.data.token,
+    scopes: response.data.scopes
+  };
+  if (response.data.expires_at)
+    authentication.expiresAt = response.data.expires_at;
+  if (options.clientType === "github-app") {
+    delete authentication.scopes;
+  }
+  return { ...response, authentication };
+}
+async function deleteToken(options) {
+  const request7 = options.request || request5;
+  const auth5 = btoa(`${options.clientId}:${options.clientSecret}`);
+  return request7(
+    "DELETE /applications/{client_id}/token",
+    {
+      headers: {
+        authorization: `basic ${auth5}`
+      },
+      client_id: options.clientId,
+      access_token: options.token
+    }
+  );
+}
+async function deleteAuthorization(options) {
+  const request7 = options.request || request5;
+  const auth5 = btoa(`${options.clientId}:${options.clientSecret}`);
+  return request7(
+    "DELETE /applications/{client_id}/grant",
+    {
+      headers: {
+        authorization: `basic ${auth5}`
+      },
+      client_id: options.clientId,
+      access_token: options.token
+    }
+  );
+}
+
+// node_modules/@octokit/auth-oauth-device/dist-bundle/index.js
+async function getOAuthAccessToken(state, options) {
+  const cachedAuthentication = getCachedAuthentication(state, options.auth);
+  if (cachedAuthentication) return cachedAuthentication;
+  const { data: verification } = await createDeviceCode({
+    clientType: state.clientType,
+    clientId: state.clientId,
+    request: options.request || state.request,
+    // @ts-expect-error the extra code to make TS happy is not worth it
+    scopes: options.auth.scopes || state.scopes
+  });
+  await state.onVerification(verification);
+  const authentication = await waitForAccessToken(
+    options.request || state.request,
+    state.clientId,
+    state.clientType,
+    verification
+  );
+  state.authentication = authentication;
+  return authentication;
+}
+function getCachedAuthentication(state, auth22) {
+  if (auth22.refresh === true) return false;
+  if (!state.authentication) return false;
+  if (state.clientType === "github-app") {
+    return state.authentication;
+  }
+  const authentication = state.authentication;
+  const newScope = ("scopes" in auth22 && auth22.scopes || state.scopes).join(
+    " "
+  );
+  const currentScope = authentication.scopes.join(" ");
+  return newScope === currentScope ? authentication : false;
+}
+async function wait(seconds) {
+  await new Promise((resolve) => setTimeout(resolve, seconds * 1e3));
+}
+async function waitForAccessToken(request7, clientId, clientType, verification) {
+  try {
+    const options = {
+      clientId,
+      request: request7,
+      code: verification.device_code
+    };
+    const { authentication } = clientType === "oauth-app" ? await exchangeDeviceCode({
+      ...options,
+      clientType: "oauth-app"
+    }) : await exchangeDeviceCode({
+      ...options,
+      clientType: "github-app"
+    });
+    return {
+      type: "token",
+      tokenType: "oauth",
+      ...authentication
+    };
+  } catch (error2) {
+    if (!error2.response) throw error2;
+    const errorType = error2.response.data.error;
+    if (errorType === "authorization_pending") {
+      await wait(verification.interval);
+      return waitForAccessToken(request7, clientId, clientType, verification);
+    }
+    if (errorType === "slow_down") {
+      await wait(verification.interval + 7);
+      return waitForAccessToken(request7, clientId, clientType, verification);
+    }
+    throw error2;
+  }
+}
+async function auth(state, authOptions) {
+  return getOAuthAccessToken(state, {
+    auth: authOptions
+  });
+}
+async function hook(state, request7, route, parameters) {
+  let endpoint6 = request7.endpoint.merge(
+    route,
+    parameters
+  );
+  if (/\/login\/(oauth\/access_token|device\/code)$/.test(endpoint6.url)) {
+    return request7(endpoint6);
+  }
+  const { token } = await getOAuthAccessToken(state, {
+    request: request7,
+    auth: { type: "oauth" }
+  });
+  endpoint6.headers.authorization = `token ${token}`;
+  return request7(endpoint6);
+}
+var VERSION11 = "0.0.0-development";
+function createOAuthDeviceAuth(options) {
+  const requestWithDefaults = options.request || request4.defaults({
+    headers: {
+      "user-agent": `octokit-auth-oauth-device.js/${VERSION11} ${getUserAgent4()}`
+    }
+  });
+  const { request: request7 = requestWithDefaults, ...otherOptions } = options;
+  const state = options.clientType === "github-app" ? {
+    ...otherOptions,
+    clientType: "github-app",
+    request: request7
+  } : {
+    ...otherOptions,
+    clientType: "oauth-app",
+    request: request7,
+    scopes: options.scopes || []
+  };
+  if (!options.clientId) {
+    throw new Error(
+      '[@octokit/auth-oauth-device] "clientId" option must be set (https://github.com/octokit/auth-oauth-device.js#usage)'
+    );
+  }
+  if (!options.onVerification) {
+    throw new Error(
+      '[@octokit/auth-oauth-device] "onVerification" option must be a function (https://github.com/octokit/auth-oauth-device.js#usage)'
+    );
+  }
+  return Object.assign(auth.bind(null, state), {
+    hook: hook.bind(null, state)
+  });
+}
+
+// node_modules/@octokit/auth-oauth-user/dist-bundle/index.js
+var VERSION12 = "0.0.0-development";
+async function getAuthentication(state) {
+  if ("code" in state.strategyOptions) {
+    const { authentication } = await exchangeWebFlowCode({
+      clientId: state.clientId,
+      clientSecret: state.clientSecret,
+      clientType: state.clientType,
+      onTokenCreated: state.onTokenCreated,
+      ...state.strategyOptions,
+      request: state.request
+    });
+    return {
+      type: "token",
+      tokenType: "oauth",
+      ...authentication
+    };
+  }
+  if ("onVerification" in state.strategyOptions) {
+    const deviceAuth = createOAuthDeviceAuth({
+      clientType: state.clientType,
+      clientId: state.clientId,
+      onTokenCreated: state.onTokenCreated,
+      ...state.strategyOptions,
+      request: state.request
+    });
+    const authentication = await deviceAuth({
+      type: "oauth"
+    });
+    return {
+      clientSecret: state.clientSecret,
+      ...authentication
+    };
+  }
+  if ("token" in state.strategyOptions) {
+    return {
+      type: "token",
+      tokenType: "oauth",
+      clientId: state.clientId,
+      clientSecret: state.clientSecret,
+      clientType: state.clientType,
+      onTokenCreated: state.onTokenCreated,
+      ...state.strategyOptions
+    };
+  }
+  throw new Error("[@octokit/auth-oauth-user] Invalid strategy options");
+}
+async function auth2(state, options = {}) {
+  if (!state.authentication) {
+    state.authentication = state.clientType === "oauth-app" ? await getAuthentication(state) : await getAuthentication(state);
+  }
+  if (state.authentication.invalid) {
+    throw new Error("[@octokit/auth-oauth-user] Token is invalid");
+  }
+  const currentAuthentication = state.authentication;
+  if ("expiresAt" in currentAuthentication) {
+    if (options.type === "refresh" || new Date(currentAuthentication.expiresAt) < /* @__PURE__ */ new Date()) {
+      const { authentication } = await refreshToken({
+        clientType: "github-app",
+        clientId: state.clientId,
+        clientSecret: state.clientSecret,
+        refreshToken: currentAuthentication.refreshToken,
+        request: state.request
+      });
+      state.authentication = {
+        tokenType: "oauth",
+        type: "token",
+        ...authentication
+      };
+    }
+  }
+  if (options.type === "refresh") {
+    if (state.clientType === "oauth-app") {
+      throw new Error(
+        "[@octokit/auth-oauth-user] OAuth Apps do not support expiring tokens"
+      );
+    }
+    if (!currentAuthentication.hasOwnProperty("expiresAt")) {
+      throw new Error("[@octokit/auth-oauth-user] Refresh token missing");
+    }
+    await state.onTokenCreated?.(state.authentication, {
+      type: options.type
+    });
+  }
+  if (options.type === "check" || options.type === "reset") {
+    const method = options.type === "check" ? checkToken : resetToken;
+    try {
+      const { authentication } = await method({
+        // @ts-expect-error making TS happy would require unnecessary code so no
+        clientType: state.clientType,
+        clientId: state.clientId,
+        clientSecret: state.clientSecret,
+        token: state.authentication.token,
+        request: state.request
+      });
+      state.authentication = {
+        tokenType: "oauth",
+        type: "token",
+        // @ts-expect-error TBD
+        ...authentication
+      };
+      if (options.type === "reset") {
+        await state.onTokenCreated?.(state.authentication, {
+          type: options.type
+        });
+      }
+      return state.authentication;
+    } catch (error2) {
+      if (error2.status === 404) {
+        error2.message = "[@octokit/auth-oauth-user] Token is invalid";
+        state.authentication.invalid = true;
+      }
+      throw error2;
+    }
+  }
+  if (options.type === "delete" || options.type === "deleteAuthorization") {
+    const method = options.type === "delete" ? deleteToken : deleteAuthorization;
+    try {
+      await method({
+        // @ts-expect-error making TS happy would require unnecessary code so no
+        clientType: state.clientType,
+        clientId: state.clientId,
+        clientSecret: state.clientSecret,
+        token: state.authentication.token,
+        request: state.request
+      });
+    } catch (error2) {
+      if (error2.status !== 404) throw error2;
+    }
+    state.authentication.invalid = true;
+    return state.authentication;
+  }
+  return state.authentication;
+}
+var ROUTES_REQUIRING_BASIC_AUTH = /\/applications\/[^/]+\/(token|grant)s?/;
+function requiresBasicAuth(url) {
+  return url && ROUTES_REQUIRING_BASIC_AUTH.test(url);
+}
+async function hook2(state, request7, route, parameters = {}) {
+  const endpoint6 = request7.endpoint.merge(
+    route,
+    parameters
+  );
+  if (/\/login\/(oauth\/access_token|device\/code)$/.test(endpoint6.url)) {
+    return request7(endpoint6);
+  }
+  if (requiresBasicAuth(endpoint6.url)) {
+    const credentials = btoa(`${state.clientId}:${state.clientSecret}`);
+    endpoint6.headers.authorization = `basic ${credentials}`;
+    return request7(endpoint6);
+  }
+  const { token } = state.clientType === "oauth-app" ? await auth2({ ...state, request: request7 }) : await auth2({ ...state, request: request7 });
+  endpoint6.headers.authorization = "token " + token;
+  return request7(endpoint6);
+}
+function createOAuthUserAuth({
+  clientId,
+  clientSecret,
+  clientType = "oauth-app",
+  request: request7 = request3.defaults({
+    headers: {
+      "user-agent": `octokit-auth-oauth-app.js/${VERSION12} ${getUserAgent3()}`
+    }
+  }),
+  onTokenCreated,
+  ...strategyOptions
+}) {
+  const state = Object.assign({
+    clientType,
+    clientId,
+    clientSecret,
+    onTokenCreated,
+    strategyOptions,
+    request: request7
+  });
+  return Object.assign(auth2.bind(null, state), {
+    // @ts-expect-error not worth the extra code needed to appease TS
+    hook: hook2.bind(null, state)
+  });
+}
+createOAuthUserAuth.VERSION = VERSION12;
+
+// node_modules/@octokit/auth-oauth-app/dist-bundle/index.js
+async function auth3(state, authOptions) {
+  if (authOptions.type === "oauth-app") {
+    return {
+      type: "oauth-app",
+      clientId: state.clientId,
+      clientSecret: state.clientSecret,
+      clientType: state.clientType,
+      headers: {
+        authorization: `basic ${btoa(
+          `${state.clientId}:${state.clientSecret}`
+        )}`
+      }
+    };
+  }
+  if ("factory" in authOptions) {
+    const { type: type2, ...options } = {
+      ...authOptions,
+      ...state
+    };
+    return authOptions.factory(options);
+  }
+  const common2 = {
+    clientId: state.clientId,
+    clientSecret: state.clientSecret,
+    request: state.request,
+    ...authOptions
+  };
+  const userAuth = state.clientType === "oauth-app" ? await createOAuthUserAuth({
+    ...common2,
+    clientType: state.clientType
+  }) : await createOAuthUserAuth({
+    ...common2,
+    clientType: state.clientType
+  });
+  return userAuth();
+}
+async function hook3(state, request22, route, parameters) {
+  let endpoint6 = request22.endpoint.merge(
+    route,
+    parameters
+  );
+  if (/\/login\/(oauth\/access_token|device\/code)$/.test(endpoint6.url)) {
+    return request22(endpoint6);
+  }
+  if (state.clientType === "github-app" && !requiresBasicAuth(endpoint6.url)) {
+    throw new Error(
+      `[@octokit/auth-oauth-app] GitHub Apps cannot use their client ID/secret for basic authentication for endpoints other than "/applications/{client_id}/**". "${endpoint6.method} ${endpoint6.url}" is not supported.`
+    );
+  }
+  const credentials = btoa(`${state.clientId}:${state.clientSecret}`);
+  endpoint6.headers.authorization = `basic ${credentials}`;
+  try {
+    return await request22(endpoint6);
+  } catch (error2) {
+    if (error2.status !== 401) throw error2;
+    error2.message = `[@octokit/auth-oauth-app] "${endpoint6.method} ${endpoint6.url}" does not support clientId/clientSecret basic authentication.`;
+    throw error2;
+  }
+}
+var VERSION13 = "0.0.0-development";
+function createOAuthAppAuth(options) {
+  const state = Object.assign(
+    {
+      request: request2.defaults({
+        headers: {
+          "user-agent": `octokit-auth-oauth-app.js/${VERSION13} ${getUserAgent2()}`
+        }
+      }),
+      clientType: "oauth-app"
+    },
+    options
+  );
+  return Object.assign(auth3.bind(null, state), {
+    hook: hook3.bind(null, state)
+  });
+}
+
+// node_modules/universal-github-app-jwt/lib/utils.js
+function isPkcs1(privateKey) {
+  return privateKey.includes("-----BEGIN RSA PRIVATE KEY-----");
+}
+function isOpenSsh(privateKey) {
+  return privateKey.includes("-----BEGIN OPENSSH PRIVATE KEY-----");
+}
+function string2ArrayBuffer(str2) {
+  const buf = new ArrayBuffer(str2.length);
+  const bufView = new Uint8Array(buf);
+  for (let i = 0, strLen = str2.length; i < strLen; i++) {
+    bufView[i] = str2.charCodeAt(i);
+  }
+  return buf;
+}
+function getDERfromPEM(pem) {
+  const pemB64 = pem.trim().split("\n").slice(1, -1).join("");
+  const decoded = atob(pemB64);
+  return string2ArrayBuffer(decoded);
+}
+function getEncodedMessage(header, payload) {
+  return `${base64encodeJSON(header)}.${base64encodeJSON(payload)}`;
+}
+function base64encode(buffer) {
+  var binary2 = "";
+  var bytes = new Uint8Array(buffer);
+  var len = bytes.byteLength;
+  for (var i = 0; i < len; i++) {
+    binary2 += String.fromCharCode(bytes[i]);
+  }
+  return fromBase64(btoa(binary2));
+}
+function fromBase64(base64) {
+  return base64.replace(/=/g, "").replace(/\+/g, "-").replace(/\//g, "_");
+}
+function base64encodeJSON(obj) {
+  return fromBase64(btoa(JSON.stringify(obj)));
+}
+
+// node_modules/universal-github-app-jwt/lib/crypto-node.js
+var import_node_crypto = require("node:crypto");
+var import_node_crypto2 = require("node:crypto");
+function convertPrivateKey(privateKey) {
+  if (!isPkcs1(privateKey)) return privateKey;
+  return (0, import_node_crypto2.createPrivateKey)(privateKey).export({
+    type: "pkcs8",
+    format: "pem"
+  });
+}
+
+// node_modules/universal-github-app-jwt/lib/get-token.js
+async function getToken({ privateKey, payload }) {
+  const convertedPrivateKey = convertPrivateKey(privateKey);
+  if (isPkcs1(convertedPrivateKey)) {
+    throw new Error(
+      "[universal-github-app-jwt] Private Key is in PKCS#1 format, but only PKCS#8 is supported. See https://github.com/gr2m/universal-github-app-jwt#private-key-formats"
+    );
+  }
+  if (isOpenSsh(convertedPrivateKey)) {
+    throw new Error(
+      "[universal-github-app-jwt] Private Key is in OpenSSH format, but only PKCS#8 is supported. See https://github.com/gr2m/universal-github-app-jwt#private-key-formats"
+    );
+  }
+  const algorithm = {
+    name: "RSASSA-PKCS1-v1_5",
+    hash: { name: "SHA-256" }
+  };
+  const header = { alg: "RS256", typ: "JWT" };
+  const privateKeyDER = getDERfromPEM(convertedPrivateKey);
+  const importedKey = await import_node_crypto.subtle.importKey(
+    "pkcs8",
+    privateKeyDER,
+    algorithm,
+    false,
+    ["sign"]
+  );
+  const encodedMessage = getEncodedMessage(header, payload);
+  const encodedMessageArrBuf = string2ArrayBuffer(encodedMessage);
+  const signatureArrBuf = await import_node_crypto.subtle.sign(
+    algorithm.name,
+    importedKey,
+    encodedMessageArrBuf
+  );
+  const encodedSignature = base64encode(signatureArrBuf);
+  return `${encodedMessage}.${encodedSignature}`;
+}
+
+// node_modules/universal-github-app-jwt/index.js
+async function githubAppJwt({
+  id,
+  privateKey,
+  now = Math.floor(Date.now() / 1e3)
+}) {
+  const privateKeyWithNewlines = privateKey.replace(/\\n/g, "\n");
+  const nowWithSafetyMargin = now - 30;
+  const expiration = nowWithSafetyMargin + 60 * 10;
+  const payload = {
+    iat: nowWithSafetyMargin,
+    // Issued at time
+    exp: expiration,
+    iss: id
+  };
+  const token = await getToken({
+    privateKey: privateKeyWithNewlines,
+    payload
+  });
+  return {
+    appId: id,
+    expiration,
+    token
+  };
+}
+
+// node_modules/toad-cache/dist/toad-cache.mjs
+var LruObject = class {
+  constructor(max = 1e3, ttlInMsecs = 0) {
+    if (isNaN(max) || max < 0) {
+      throw new Error("Invalid max value");
+    }
+    if (isNaN(ttlInMsecs) || ttlInMsecs < 0) {
+      throw new Error("Invalid ttl value");
+    }
+    this.first = null;
+    this.items = /* @__PURE__ */ Object.create(null);
+    this.last = null;
+    this.size = 0;
+    this.max = max;
+    this.ttl = ttlInMsecs;
+  }
+  bumpLru(item) {
+    if (this.last === item) {
+      return;
+    }
+    const last = this.last;
+    const next = item.next;
+    const prev = item.prev;
+    if (this.first === item) {
+      this.first = next;
+    }
+    item.next = null;
+    item.prev = last;
+    last.next = item;
+    if (prev !== null) {
+      prev.next = next;
+    }
+    if (next !== null) {
+      next.prev = prev;
+    }
+    this.last = item;
+  }
+  clear() {
+    this.items = /* @__PURE__ */ Object.create(null);
+    this.first = null;
+    this.last = null;
+    this.size = 0;
+  }
+  delete(key) {
+    if (Object.prototype.hasOwnProperty.call(this.items, key)) {
+      const item = this.items[key];
+      delete this.items[key];
+      this.size--;
+      if (item.prev !== null) {
+        item.prev.next = item.next;
+      }
+      if (item.next !== null) {
+        item.next.prev = item.prev;
+      }
+      if (this.first === item) {
+        this.first = item.next;
+      }
+      if (this.last === item) {
+        this.last = item.prev;
+      }
+    }
+  }
+  deleteMany(keys) {
+    for (var i = 0; i < keys.length; i++) {
+      this.delete(keys[i]);
+    }
+  }
+  evict() {
+    if (this.size > 0) {
+      const item = this.first;
+      delete this.items[item.key];
+      if (--this.size === 0) {
+        this.first = null;
+        this.last = null;
+      } else {
+        this.first = item.next;
+        this.first.prev = null;
+      }
+    }
+  }
+  expiresAt(key) {
+    if (Object.prototype.hasOwnProperty.call(this.items, key)) {
+      return this.items[key].expiry;
+    }
+  }
+  get(key) {
+    if (Object.prototype.hasOwnProperty.call(this.items, key)) {
+      const item = this.items[key];
+      if (this.ttl > 0 && item.expiry <= Date.now()) {
+        this.delete(key);
+        return;
+      }
+      this.bumpLru(item);
+      return item.value;
+    }
+  }
+  getMany(keys) {
+    const result = [];
+    for (var i = 0; i < keys.length; i++) {
+      result.push(this.get(keys[i]));
+    }
+    return result;
+  }
+  keys() {
+    return Object.keys(this.items);
+  }
+  set(key, value) {
+    if (Object.prototype.hasOwnProperty.call(this.items, key)) {
+      const item2 = this.items[key];
+      item2.value = value;
+      item2.expiry = this.ttl > 0 ? Date.now() + this.ttl : this.ttl;
+      if (this.last !== item2) {
+        this.bumpLru(item2);
+      }
+      return;
+    }
+    if (this.max > 0 && this.size === this.max) {
+      this.evict();
+    }
+    const item = {
+      expiry: this.ttl > 0 ? Date.now() + this.ttl : this.ttl,
+      key,
+      prev: this.last,
+      next: null,
+      value
+    };
+    this.items[key] = item;
+    if (++this.size === 1) {
+      this.first = item;
+    } else {
+      this.last.next = item;
+    }
+    this.last = item;
+  }
+};
+
+// node_modules/@octokit/auth-app/dist-node/index.js
+async function getAppAuthentication({
+  appId,
+  privateKey,
+  timeDifference,
+  createJwt
+}) {
+  try {
+    if (createJwt) {
+      const { jwt, expiresAt } = await createJwt(appId, timeDifference);
+      return {
+        type: "app",
+        token: jwt,
+        appId,
+        expiresAt
+      };
+    }
+    const authOptions = {
+      id: appId,
+      privateKey
+    };
+    if (timeDifference) {
+      Object.assign(authOptions, {
+        now: Math.floor(Date.now() / 1e3) + timeDifference
+      });
+    }
+    const appAuthentication = await githubAppJwt(authOptions);
+    return {
+      type: "app",
+      token: appAuthentication.token,
+      appId: appAuthentication.appId,
+      expiresAt: new Date(appAuthentication.expiration * 1e3).toISOString()
+    };
+  } catch (error2) {
+    if (privateKey === "-----BEGIN RSA PRIVATE KEY-----") {
+      throw new Error(
+        "The 'privateKey` option contains only the first line '-----BEGIN RSA PRIVATE KEY-----'. If you are setting it using a `.env` file, make sure it is set on a single line with newlines replaced by '\n'"
+      );
+    } else {
+      throw error2;
+    }
+  }
+}
+function getCache() {
+  return new LruObject(
+    // cache max. 15000 tokens, that will use less than 10mb memory
+    15e3,
+    // Cache for 1 minute less than GitHub expiry
+    1e3 * 60 * 59
+  );
+}
+async function get(cache, options) {
+  const cacheKey = optionsToCacheKey(options);
+  const result = await cache.get(cacheKey);
+  if (!result) {
+    return;
+  }
+  const [
+    token,
+    createdAt,
+    expiresAt,
+    repositorySelection,
+    permissionsString,
+    singleFileName
+  ] = result.split("|");
+  const permissions = options.permissions || permissionsString.split(/,/).reduce((permissions2, string) => {
+    if (/!$/.test(string)) {
+      permissions2[string.slice(0, -1)] = "write";
+    } else {
+      permissions2[string] = "read";
+    }
+    return permissions2;
+  }, {});
+  return {
+    token,
+    createdAt,
+    expiresAt,
+    permissions,
+    repositoryIds: options.repositoryIds,
+    repositoryNames: options.repositoryNames,
+    singleFileName,
+    repositorySelection
+  };
+}
+async function set(cache, options, data) {
+  const key = optionsToCacheKey(options);
+  const permissionsString = options.permissions ? "" : Object.keys(data.permissions).map(
+    (name) => `${name}${data.permissions[name] === "write" ? "!" : ""}`
+  ).join(",");
+  const value = [
+    data.token,
+    data.createdAt,
+    data.expiresAt,
+    data.repositorySelection,
+    permissionsString,
+    data.singleFileName
+  ].join("|");
+  await cache.set(key, value);
+}
+function optionsToCacheKey({
+  installationId,
+  permissions = {},
+  repositoryIds = [],
+  repositoryNames = []
+}) {
+  const permissionsString = Object.keys(permissions).sort().map((name) => permissions[name] === "read" ? name : `${name}!`).join(",");
+  const repositoryIdsString = repositoryIds.sort().join(",");
+  const repositoryNamesString = repositoryNames.join(",");
+  return [
+    installationId,
+    repositoryIdsString,
+    repositoryNamesString,
+    permissionsString
+  ].filter(Boolean).join("|");
+}
+function toTokenAuthentication({
+  installationId,
+  token,
+  createdAt,
+  expiresAt,
+  repositorySelection,
+  permissions,
+  repositoryIds,
+  repositoryNames,
+  singleFileName
+}) {
+  return Object.assign(
+    {
+      type: "token",
+      tokenType: "installation",
+      token,
+      installationId,
+      permissions,
+      createdAt,
+      expiresAt,
+      repositorySelection
+    },
+    repositoryIds ? { repositoryIds } : null,
+    repositoryNames ? { repositoryNames } : null,
+    singleFileName ? { singleFileName } : null
+  );
+}
+async function getInstallationAuthentication(state, options, customRequest) {
+  const installationId = Number(options.installationId || state.installationId);
+  if (!installationId) {
+    throw new Error(
+      "[@octokit/auth-app] installationId option is required for installation authentication."
+    );
+  }
+  if (options.factory) {
+    const { type: type2, factory, oauthApp, ...factoryAuthOptions } = {
+      ...state,
+      ...options
+    };
+    return factory(factoryAuthOptions);
+  }
+  const request7 = customRequest || state.request;
+  return getInstallationAuthenticationConcurrently(
+    state,
+    { ...options, installationId },
+    request7
+  );
+}
+var pendingPromises = /* @__PURE__ */ new Map();
+function getInstallationAuthenticationConcurrently(state, options, request7) {
+  const cacheKey = optionsToCacheKey(options);
+  if (pendingPromises.has(cacheKey)) {
+    return pendingPromises.get(cacheKey);
+  }
+  const promise = getInstallationAuthenticationImpl(
+    state,
+    options,
+    request7
+  ).finally(() => pendingPromises.delete(cacheKey));
+  pendingPromises.set(cacheKey, promise);
+  return promise;
+}
+async function getInstallationAuthenticationImpl(state, options, request7) {
+  if (!options.refresh) {
+    const result = await get(state.cache, options);
+    if (result) {
+      const {
+        token: token2,
+        createdAt: createdAt2,
+        expiresAt: expiresAt2,
+        permissions: permissions2,
+        repositoryIds: repositoryIds2,
+        repositoryNames: repositoryNames2,
+        singleFileName: singleFileName2,
+        repositorySelection: repositorySelection2
+      } = result;
+      return toTokenAuthentication({
+        installationId: options.installationId,
+        token: token2,
+        createdAt: createdAt2,
+        expiresAt: expiresAt2,
+        permissions: permissions2,
+        repositorySelection: repositorySelection2,
+        repositoryIds: repositoryIds2,
+        repositoryNames: repositoryNames2,
+        singleFileName: singleFileName2
+      });
+    }
+  }
+  const appAuthentication = await getAppAuthentication(state);
+  const payload = {
+    installation_id: options.installationId,
+    mediaType: {
+      previews: ["machine-man"]
+    },
+    headers: {
+      authorization: `bearer ${appAuthentication.token}`
+    }
+  };
+  if (options.repositoryIds) {
+    Object.assign(payload, { repository_ids: options.repositoryIds });
+  }
+  if (options.repositoryNames) {
+    Object.assign(payload, {
+      repositories: options.repositoryNames
+    });
+  }
+  if (options.permissions) {
+    Object.assign(payload, { permissions: options.permissions });
+  }
+  const {
+    data: {
+      token,
+      expires_at: expiresAt,
+      repositories,
+      permissions: permissionsOptional,
+      repository_selection: repositorySelectionOptional,
+      single_file: singleFileName
+    }
+  } = await request7(
+    "POST /app/installations/{installation_id}/access_tokens",
+    payload
+  );
+  const permissions = permissionsOptional || {};
+  const repositorySelection = repositorySelectionOptional || "all";
+  const repositoryIds = repositories ? repositories.map((r) => r.id) : void 0;
+  const repositoryNames = repositories ? repositories.map((repo) => repo.name) : void 0;
+  const createdAt = (/* @__PURE__ */ new Date()).toISOString();
+  const cacheOptions = {
+    token,
+    createdAt,
+    expiresAt,
+    repositorySelection,
+    permissions,
+    repositoryIds,
+    repositoryNames
+  };
+  if (singleFileName) {
+    Object.assign(payload, { singleFileName });
+  }
+  await set(state.cache, options, cacheOptions);
+  const cacheData = {
+    installationId: options.installationId,
+    token,
+    createdAt,
+    expiresAt,
+    repositorySelection,
+    permissions,
+    repositoryIds,
+    repositoryNames
+  };
+  if (singleFileName) {
+    Object.assign(cacheData, { singleFileName });
+  }
+  return toTokenAuthentication(cacheData);
+}
+async function auth4(state, authOptions) {
+  switch (authOptions.type) {
+    case "app":
+      return getAppAuthentication(state);
+    case "oauth-app":
+      return state.oauthApp({ type: "oauth-app" });
+    case "installation":
+      authOptions;
+      return getInstallationAuthentication(state, {
+        ...authOptions,
+        type: "installation"
+      });
+    case "oauth-user":
+      return state.oauthApp(authOptions);
+    default:
+      throw new Error(`Invalid auth type: ${authOptions.type}`);
+  }
+}
+var PATHS = [
+  "/app",
+  "/app/hook/config",
+  "/app/hook/deliveries",
+  "/app/hook/deliveries/{delivery_id}",
+  "/app/hook/deliveries/{delivery_id}/attempts",
+  "/app/installations",
+  "/app/installations/{installation_id}",
+  "/app/installations/{installation_id}/access_tokens",
+  "/app/installations/{installation_id}/suspended",
+  "/app/installation-requests",
+  "/marketplace_listing/accounts/{account_id}",
+  "/marketplace_listing/plan",
+  "/marketplace_listing/plans",
+  "/marketplace_listing/plans/{plan_id}/accounts",
+  "/marketplace_listing/stubbed/accounts/{account_id}",
+  "/marketplace_listing/stubbed/plan",
+  "/marketplace_listing/stubbed/plans",
+  "/marketplace_listing/stubbed/plans/{plan_id}/accounts",
+  "/orgs/{org}/installation",
+  "/repos/{owner}/{repo}/installation",
+  "/users/{username}/installation",
+  "/enterprises/{enterprise}/installation"
+];
+function routeMatcher(paths) {
+  const regexes = paths.map(
+    (p) => p.split("/").map((c) => c.startsWith("{") ? "(?:.+?)" : c).join("/")
+  );
+  const regex = `^(?:${regexes.map((r) => `(?:${r})`).join("|")})$`;
+  return new RegExp(regex, "i");
+}
+var REGEX = routeMatcher(PATHS);
+function requiresAppAuth(url) {
+  return !!url && REGEX.test(url.split("?")[0]);
+}
+var FIVE_SECONDS_IN_MS = 5 * 1e3;
+function isNotTimeSkewError(error2) {
+  return !(error2.message.match(
+    /'Expiration time' claim \('exp'\) is too far in the future/
+  ) || error2.message.match(
+    /'Expiration time' claim \('exp'\) must be a numeric value representing the future time at which the assertion expires/
+  ) || error2.message.match(
+    /'Issued at' claim \('iat'\) must be an Integer representing the time that the assertion was issued/
+  ));
+}
+async function hook4(state, request7, route, parameters) {
+  const endpoint6 = request7.endpoint.merge(route, parameters);
+  const url = endpoint6.url;
+  if (/\/login\/oauth\/access_token$/.test(url)) {
+    return request7(endpoint6);
+  }
+  if (requiresAppAuth(url.replace(request7.endpoint.DEFAULTS.baseUrl, ""))) {
+    const { token: token2 } = await getAppAuthentication(state);
+    endpoint6.headers.authorization = `bearer ${token2}`;
+    let response;
+    try {
+      response = await request7(endpoint6);
+    } catch (error2) {
+      if (isNotTimeSkewError(error2)) {
+        throw error2;
+      }
+      if (typeof error2.response.headers.date === "undefined") {
+        throw error2;
+      }
+      const diff = Math.floor(
+        (Date.parse(error2.response.headers.date) - Date.parse((/* @__PURE__ */ new Date()).toString())) / 1e3
+      );
+      state.log.warn(error2.message);
+      state.log.warn(
+        `[@octokit/auth-app] GitHub API time and system time are different by ${diff} seconds. Retrying request with the difference accounted for.`
+      );
+      const { token: token3 } = await getAppAuthentication({
+        ...state,
+        timeDifference: diff
+      });
+      endpoint6.headers.authorization = `bearer ${token3}`;
+      return request7(endpoint6);
+    }
+    return response;
+  }
+  if (requiresBasicAuth(url)) {
+    const authentication = await state.oauthApp({ type: "oauth-app" });
+    endpoint6.headers.authorization = authentication.headers.authorization;
+    return request7(endpoint6);
+  }
+  const { token, createdAt } = await getInstallationAuthentication(
+    state,
+    // @ts-expect-error TBD
+    {},
+    request7.defaults({ baseUrl: endpoint6.baseUrl })
+  );
+  endpoint6.headers.authorization = `token ${token}`;
+  return sendRequestWithRetries(
+    state,
+    request7,
+    endpoint6,
+    createdAt
+  );
+}
+async function sendRequestWithRetries(state, request7, options, createdAt, retries = 0) {
+  const timeSinceTokenCreationInMs = +/* @__PURE__ */ new Date() - +new Date(createdAt);
+  try {
+    return await request7(options);
+  } catch (error2) {
+    if (error2.status !== 401) {
+      throw error2;
+    }
+    if (timeSinceTokenCreationInMs >= FIVE_SECONDS_IN_MS) {
+      if (retries > 0) {
+        error2.message = `After ${retries} retries within ${timeSinceTokenCreationInMs / 1e3}s of creating the installation access token, the response remains 401. At this point, the cause may be an authentication problem or a system outage. Please check https://www.githubstatus.com for status information`;
+      }
+      throw error2;
+    }
+    ++retries;
+    const awaitTime = retries * 1e3;
+    state.log.warn(
+      `[@octokit/auth-app] Retrying after 401 response to account for token replication delay (retry: ${retries}, wait: ${awaitTime / 1e3}s)`
+    );
+    await new Promise((resolve) => setTimeout(resolve, awaitTime));
+    return sendRequestWithRetries(state, request7, options, createdAt, retries);
+  }
+}
+var VERSION14 = "8.2.0";
+function createAppAuth(options) {
+  if (!options.appId) {
+    throw new Error("[@octokit/auth-app] appId option is required");
+  }
+  if (!options.privateKey && !options.createJwt) {
+    throw new Error("[@octokit/auth-app] privateKey option is required");
+  } else if (options.privateKey && options.createJwt) {
+    throw new Error(
+      "[@octokit/auth-app] privateKey and createJwt options are mutually exclusive"
+    );
+  }
+  if ("installationId" in options && !options.installationId) {
+    throw new Error(
+      "[@octokit/auth-app] installationId is set to a falsy value"
+    );
+  }
+  const log = options.log || {};
+  if (typeof log.warn !== "function") {
+    log.warn = console.warn.bind(console);
+  }
+  const request7 = options.request || request.defaults({
+    headers: {
+      "user-agent": `octokit-auth-app.js/${VERSION14} ${getUserAgent()}`
+    }
+  });
+  const state = Object.assign(
+    {
+      request: request7,
+      cache: getCache()
+    },
+    options,
+    options.installationId ? { installationId: Number(options.installationId) } : {},
+    {
+      log,
+      oauthApp: createOAuthAppAuth({
+        clientType: "github-app",
+        clientId: options.clientId || "",
+        clientSecret: options.clientSecret || "",
+        request: request7
+      })
+    }
+  );
+  return Object.assign(auth4.bind(null, state), {
+    hook: hook4.bind(null, state)
+  });
+}
+
+// src/auth.ts
+var import_request13 = __toESM(require_dist_node5(), 1);
+async function mintInstallationToken(appId, privateKey, owner, repo) {
+  const auth5 = createAppAuth({ appId, privateKey });
+  const appJwt = await auth5({ type: "app" });
+  const installation = await (0, import_request13.request)("GET /repos/{owner}/{repo}/installation", {
+    owner,
+    repo,
+    headers: { authorization: `bearer ${appJwt.token}` }
+  });
+  const installationToken = await auth5({
+    type: "installation",
+    installationId: installation.data.id
+  });
+  return {
+    token: installationToken.token,
+    permissions: installationToken.permissions ?? {},
+    installationId: installation.data.id,
+    appSlug: installation.data.app_slug ?? null
+  };
+}
 
 // node_modules/js-yaml/dist/js-yaml.mjs
 function isNothing(subject) {
@@ -24510,7 +28768,7 @@ var timestamp = new type("tag:yaml.org,2002:timestamp", {
 function resolveYamlMerge(data) {
   return data === "<<" || data === null;
 }
-var merge = new type("tag:yaml.org,2002:merge", {
+var merge6 = new type("tag:yaml.org,2002:merge", {
   kind: "scalar",
   resolve: resolveYamlMerge
 });
@@ -24662,7 +28920,7 @@ function resolveYamlSet(data) {
 function constructYamlSet(data) {
   return data !== null ? data : {};
 }
-var set = new type("tag:yaml.org,2002:set", {
+var set2 = new type("tag:yaml.org,2002:set", {
   kind: "mapping",
   resolve: resolveYamlSet,
   construct: constructYamlSet
@@ -24670,13 +28928,13 @@ var set = new type("tag:yaml.org,2002:set", {
 var _default = core.extend({
   implicit: [
     timestamp,
-    merge
+    merge6
   ],
   explicit: [
     binary,
     omap,
     pairs,
-    set
+    set2
   ]
 });
 var _hasOwnProperty$1 = Object.prototype.hasOwnProperty;
@@ -26479,11 +30737,11 @@ var types = {
   map,
   null: _null,
   pairs,
-  set,
+  set: set2,
   timestamp,
   bool,
   int,
-  merge,
+  merge: merge6,
   omap,
   seq,
   str
@@ -27396,11 +31654,81 @@ function locateBranch(config, branchRef) {
   return null;
 }
 
+// src/preflight.ts
+var REQUIRED_PERMISSIONS = [
+  { name: "contents", level: "write", reason: "tag creation, semantic-release CHANGELOG push" },
+  { name: "pull_requests", level: "write", reason: "PR creation, body updates, native auto-merge enabling" },
+  { name: "issues", level: "write", reason: "adding / removing flywheel:* labels on PRs" },
+  { name: "checks", level: "write", reason: "posting flywheel/conventional-commit check on invalid titles" },
+  { name: "metadata", level: "read", reason: "required for any token interacting with a repo" }
+];
+function findMissingPermissions(granted, required = REQUIRED_PERMISSIONS) {
+  const missing = [];
+  for (const req of required) {
+    const got = granted[req.name];
+    if (got === void 0) {
+      missing.push({ name: req.name, required: req.level, granted: "none", reason: req.reason });
+    } else if (req.level === "write" && got !== "write") {
+      missing.push({
+        name: req.name,
+        required: req.level,
+        granted: got === "read" || got === "write" ? got : "none",
+        reason: req.reason
+      });
+    }
+  }
+  return missing;
+}
+function formatMissingPermissionsError(missing, appSlug, repoFullName) {
+  const lines = [
+    `Flywheel: missing or insufficient App permissions on ${repoFullName}.`,
+    "",
+    "Missing:"
+  ];
+  for (const m of missing) {
+    lines.push(`  - ${m.name}: need ${m.required}, granted ${m.granted} \u2014 ${m.reason}`);
+  }
+  lines.push("");
+  if (appSlug) {
+    lines.push(`Update the App's permissions:`);
+    lines.push(`  https://github.com/settings/apps/${appSlug}/permissions`);
+    lines.push(`(or for org-owned Apps: https://github.com/organizations/<org>/settings/apps/${appSlug}/permissions)`);
+  } else {
+    lines.push("Update the App's permissions in its settings page on GitHub.");
+  }
+  lines.push("");
+  lines.push("After updating, each App installation must accept the new permissions before they take effect.");
+  return lines.join("\n");
+}
+
 // src/main.ts
 var CONFIG_FILE = ".flywheel.yml";
 async function run() {
   const event = core2.getInput("event", { required: true });
-  const token = core2.getInput("token", { required: true });
+  const appId = core2.getInput("app-id", { required: true });
+  const privateKey = core2.getInput("app-private-key", { required: true });
+  const ctx = github2.context;
+  const owner = ctx.repo.owner;
+  const repo = ctx.repo.repo;
+  let auth5;
+  try {
+    auth5 = await mintInstallationToken(appId, privateKey, owner, repo);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    core2.setFailed(`Could not mint installation token for ${owner}/${repo}: ${msg}`);
+    return;
+  }
+  core2.setSecret(auth5.token);
+  core2.setOutput("token", auth5.token);
+  const missing = findMissingPermissions(auth5.permissions);
+  if (missing.length > 0) {
+    core2.setFailed(formatMissingPermissionsError(missing, auth5.appSlug, `${owner}/${repo}`));
+    return;
+  }
+  core2.info(
+    `Pre-flight: App permissions verified (${Object.keys(auth5.permissions).length} granted, installation ${auth5.installationId}).`
+  );
+  const token = auth5.token;
   const workspace = process.env.GITHUB_WORKSPACE ?? process.cwd();
   const configPath = (0, import_node_path2.join)(workspace, CONFIG_FILE);
   if (!(0, import_node_fs.existsSync)(configPath)) {
