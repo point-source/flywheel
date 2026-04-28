@@ -2,54 +2,79 @@
 # Apply the swarmflow ruleset bundle to an adopter (or sandbox) repo.
 #
 # Usage:
-#   REPO=owner/name APP_ACTOR_ID=<app_id> ./scripts/setup-rulesets.sh
-#   REPO=owner/name APP_ACTOR_ID=<app_id> SKIP=naming ./scripts/setup-rulesets.sh
+#   ./scripts/setup-rulesets.sh --repo owner/name --app-id <app_id> [--skip name,...]
+#   ./scripts/setup-rulesets.sh --help
 #
-# Required env:
-#   REPO            owner/name of the target repo
-#   APP_ACTOR_ID    GitHub App ID to grant bypass to. Find this:
-#                     - Your App's settings page (top of page: "App ID: 12345")
-#                     - In repo secrets if you stored it as APP_ID:
-#                         gh secret list --repo $REPO  (lists names, not values)
-#                     - This is the *App* id, NOT the installation id.
+# Required:
+#   --repo <owner/name>      Target repo to apply rulesets to.
+#   --app-id <number>        GitHub App id to grant bypass to. Find this on
+#                            the App settings page (top: "App ID: 12345").
+#                            NOT the slug, NOT the installation id.
 #
-# Optional env:
-#   SKIP            Comma-separated list of rulesets to skip:
-#                     managed  - "swarmflow / managed branches" (Ruleset 1)
-#                     tags     - "swarmflow / version tags" (Ruleset 3)
-#                     naming   - "swarmflow / feature branch naming" (Ruleset 4)
-#                   The merge_queue rule inside Ruleset 1 may fail on plans
-#                   without merge queue available; if so, edit
-#                   templates/rulesets/managed-branches.json to remove the
-#                   `{ "type": "merge_queue" }` line and re-run.
+# Optional:
+#   --skip <name,...>        Comma-separated rulesets to skip:
+#                              managed  - "swarmflow / managed branches"
+#                              tags     - "swarmflow / version tags"
+#                              naming   - "swarmflow / feature branch naming"
+#                            The merge_queue rule inside `managed` may fail on
+#                            plans without merge queue available; if so, edit
+#                            templates/rulesets/managed-branches.json to
+#                            remove the `{ "type": "merge_queue" }` line.
+#
+#   -h, --help               Show this help.
 #
 # Idempotency: GitHub rejects duplicate ruleset names. If a ruleset with the
 # same name already exists, this script aborts with HTTP 422. Delete the
 # existing rulesets via the UI (Settings → Rules → Rulesets) or
-# `gh api repos/$REPO/rulesets/$ID -X DELETE`, then re-run.
+# `gh api repos/<repo>/rulesets/<id> -X DELETE`, then re-run.
 #
 # Requires: gh CLI authenticated as a repo admin (or anyone who can manage
-# rulesets on $REPO).
+# rulesets on the target repo).
 #
 # Compatible with bash 3.2+ (the macOS default).
 
 set -euo pipefail
 
-: "${REPO:?REPO=owner/name is required}"
-: "${APP_ACTOR_ID:?APP_ACTOR_ID=<app_id> is required (find it on your GitHub App settings page, e.g. App ID: 12345)}"
+usage() {
+  sed -n '/^# Apply/,/^# Compatible/p' "$0" | sed 's/^# \{0,1\}//'
+}
+
+REPO=""
+APP_ACTOR_ID=""
+SKIP=""
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --repo)    REPO="${2:-}"; shift 2 ;;
+    --app-id)  APP_ACTOR_ID="${2:-}"; shift 2 ;;
+    --skip)    SKIP="${2:-}"; shift 2 ;;
+    -h|--help) usage; exit 0 ;;
+    *)         echo "::error::unknown argument: $1" >&2; usage >&2; exit 2 ;;
+  esac
+done
+
+if [[ -z "$REPO" ]]; then
+  echo "::error::--repo <owner/name> is required" >&2
+  echo "Run with --help for usage." >&2
+  exit 2
+fi
+
+if [[ -z "$APP_ACTOR_ID" ]]; then
+  echo "::error::--app-id <number> is required" >&2
+  echo "Find it on your GitHub App settings page (top: App ID: 12345)." >&2
+  exit 2
+fi
+
+if ! [[ "$APP_ACTOR_ID" =~ ^[0-9]+$ ]]; then
+  echo "::error::--app-id must be a number (the App id, not the slug). Got: '$APP_ACTOR_ID'" >&2
+  exit 2
+fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TEMPLATES_DIR="$(cd "$SCRIPT_DIR/.." && pwd)/templates/rulesets"
 
 if [[ ! -d "$TEMPLATES_DIR" ]]; then
   echo "::error::ruleset templates dir not found: $TEMPLATES_DIR" >&2
-  exit 1
-fi
-
-# Validate APP_ACTOR_ID is numeric (catches the common "passed app slug
-# instead of id" mistake).
-if ! [[ "$APP_ACTOR_ID" =~ ^[0-9]+$ ]]; then
-  echo "::error::APP_ACTOR_ID must be a number (the App id, not the slug). Got: '$APP_ACTOR_ID'" >&2
   exit 1
 fi
 
@@ -67,7 +92,7 @@ apply_ruleset() {
   local key="$1"
   local file="$2"
   if is_skipped "$key"; then
-    echo "Skipping '$key' (per SKIP)"
+    echo "Skipping '$key' (per --skip)"
     return 0
   fi
   if [[ ! -f "$file" ]]; then

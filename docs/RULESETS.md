@@ -17,19 +17,21 @@ A helper script applies all rulesets in one command. The swarmflow GitHub App
 must already be installed on the target repo (see `docs/install-app/`).
 
 ```sh
-REPO=your-org/your-repo APP_ACTOR_ID=12345 ./scripts/setup-rulesets.sh
+./scripts/setup-rulesets.sh --repo your-org/your-repo --app-id 12345
 ```
 
-`APP_ACTOR_ID` is the numeric App id (NOT the slug, NOT the installation id).
-Find it on the App's settings page — the top of the page shows
-"App ID: 12345". You may already have it stored as the `APP_ID` repo secret.
+`--app-id` takes the numeric App id (NOT the slug, NOT the installation id).
+Find it on the App settings page — the top shows "App ID: 12345". You may
+already have the same value stored as the `APP_ID` repo secret.
 
 Skip individual rulesets if not wanted (the feature-branch naming rule is
 optional, for example):
 
 ```sh
-REPO=your-org/your-repo APP_ACTOR_ID=12345 SKIP=naming ./scripts/setup-rulesets.sh
+./scripts/setup-rulesets.sh --repo your-org/your-repo --app-id 12345 --skip naming
 ```
+
+Run with `--help` for the full options list.
 
 If your plan does not support GitHub merge queue, edit
 `templates/rulesets/managed-branches.json` and remove the
