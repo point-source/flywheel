@@ -41,19 +41,3 @@ jobs:
 
 Status: open. Revisit after `init.sh` / `doctor.sh` adoption telemetry exists, so the decision is informed by which step in `docs/adopter-setup.md` adopters actually trip on.
 
-## Migrate dogfood workflows from `GH_PAT || GITHUB_TOKEN` to App tokens
-
-`.github/workflows/flywheel-pr.yml`, `flywheel-push.yml`, and `release-major-tag.yml` still reference `secrets.GH_PAT || secrets.GITHUB_TOKEN`. The repo has neither `GH_PAT` nor `APP_ID` / `APP_PRIVATE_KEY` set, so these run on the `GITHUB_TOKEN` fallback today.
-
-### What's needed before migration
-
-- A dedicated GitHub App (separate from `flywheel-build-e2e`, which is provisioned for sandbox testing) installed on `point-source/flywheel` with Contents r/w, Pull requests r/w, Metadata r.
-- `APP_ID` and `APP_PRIVATE_KEY` set as repo secrets.
-- A scratch verification: open a `chore: smoke test` PR after migration, confirm release fires on merge.
-
-### Why it matters
-
-- `doctor.sh` currently flags this repo's own setup as misconfigured. A self-hosted Flywheel that fails its own doctor is a credibility tax.
-- `GITHUB_TOKEN` cannot trigger downstream workflows from PRs it creates. The dogfood happens to work today because the simple single-branch config never opens a promotion PR — but if we ever add a `develop`-style branch to the dogfood, the missing App token immediately breaks the promotion-PR fan-out.
-
-Status: blocked on App provisioning. Mechanical change once the secrets exist.
