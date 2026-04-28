@@ -12,13 +12,14 @@ pipeline:
     main:    <bool>          # default: false
 
   merge_strategy: <enum>     # squash | merge | rebase. default: squash
-  merge_queue:    <enum>     # auto | true | false.    default: auto
 
   auto_merge_types:          # default: [fix, chore, refactor, perf, style, test]
     - <conventional commit type>
 
   publish_on_develop: <bool> # default: true
   publish_on_staging: <bool> # default: true
+
+  merge_queue: <enum>        # auto | true | false. default: auto
 
   workflows:
     build:   <path>          # default: pipeline-build.yml

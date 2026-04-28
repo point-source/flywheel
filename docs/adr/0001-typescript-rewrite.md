@@ -89,7 +89,7 @@ Each becomes a named test in the new suite. Commit history remains accessible vi
 - **Adopter templates return to spec-shape (~12 lines)**: `swarmflow_repo`/`swarmflow_ref` are internal workflow inputs with defaults; adopters never see them.
 - **Cross-repo composite resolution shrinks** from ~9 plumbed references per workflow to 1 (one checkout, one `uses: ./.swarmflow`).
 - **`dist/index.js` (1–3 MB) is committed** to the repo. Reviewers do not read the bundle; they trust the CI freshness check. `.gitattributes` marks `dist/index.js linguist-generated=true` so PR diffs collapse it.
-- **Bash contributors must onboard to TypeScript.** `docs/CONTRIBUTING.md` includes a "how to add a new command" walkthrough that maps composite-action vocabulary to module vocabulary.
+- **Bash contributors must onboard to TypeScript.** New commands are added by writing a module under `src/commands/`, registering it in the `Command` union and switch in `src/index.ts`, and exposing any new inputs in `action.yml`. The reusable workflow does not need editing — the orchestrator already takes a `command` input.
 - **First green e2e is later** than it would be with incremental migration, but Phase 1.5's vertical-slice e2e validates the architecture before any module work, and unit tests cover ~80% of logic from Phase 2a onward.
 - **Spec.md §41 is honored**: `release-please` is imported as a library (its `parser` and `changelog` modules), not invoked as a CLI orchestrator.
 - **Spec.md §779's "Quality check interface" open question is closed**: `workflow_dispatch` with `pr_number` and `sha` inputs. The starter template (`templates/pipeline-quality.yml.example`) already used this contract; the spec now formalizes it.
