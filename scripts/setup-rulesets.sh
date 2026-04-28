@@ -15,12 +15,17 @@
 #   --skip <name,...>        Comma-separated rulesets to skip:
 #                              managed  - "swarmflow / managed branches"
 #                              tags     - "swarmflow / version tags"
-#                              naming   - "swarmflow / feature branch naming"
 #
 #                            The default `managed` template does NOT include
 #                            the merge_queue rule (the API requires a long
 #                            parameters block; UI setup is easier). See
 #                            docs/RULESETS.md "Merge queue (optional)".
+#
+#   --with <name,...>        Comma-separated optional rulesets to ALSO apply:
+#                              naming   - branch_name_pattern enforcement
+#                                         (plan-restricted; not all repos
+#                                         accept the API call — set up via
+#                                         the UI if this errors out)
 #
 #   -h, --help               Show this help.
 #
@@ -43,12 +48,14 @@ usage() {
 REPO=""
 APP_ACTOR_ID=""
 SKIP=""
+WITH=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --repo)    REPO="${2:-}"; shift 2 ;;
     --app-id)  APP_ACTOR_ID="${2:-}"; shift 2 ;;
     --skip)    SKIP="${2:-}"; shift 2 ;;
+    --with)    WITH="${2:-}"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *)         echo "::error::unknown argument: $1" >&2; usage >&2; exit 2 ;;
   esac
@@ -120,7 +127,13 @@ apply_ruleset() {
 
 apply_ruleset managed "$TEMPLATES_DIR/managed-branches.json"
 apply_ruleset tags    "$TEMPLATES_DIR/version-tags.json"
-apply_ruleset naming  "$TEMPLATES_DIR/feature-branch-naming.json"
+# `naming` is opt-in (spec §92 marks it optional). The branch_name_pattern
+# rule type isn't accepted on all plans/repos; pass --with naming only when
+# you know it works for yours, or set it up via the UI.
+WITH_LIST=" ${WITH//,/ } "
+case "$WITH_LIST" in
+  *" naming "*) apply_ruleset naming "$TEMPLATES_DIR/feature-branch-naming.json" ;;
+esac
 
 echo
 echo "Done. Verify in $REPO → Settings → Rules → Rulesets"

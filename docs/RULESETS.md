@@ -85,12 +85,25 @@ Folded into the `pull_request` rule above; no separate ruleset needed.
 `templates/rulesets/version-tags.json`. Prevents anyone but the App from
 creating, updating, or deleting tags matching `v*`.
 
-## Ruleset 4 — Restrict feature branch naming (optional)
+## Ruleset 4 — Restrict feature branch naming (optional, opt-in)
 
 `templates/rulesets/feature-branch-naming.json`. Forces feature branches
 to start with a conventional-commit type prefix (`feat/`, `fix/`, etc.).
 Optional but recommended for swarm environments — makes branch intent
 machine-readable and prevents agents from creating untyped branches.
+
+The `branch_name_pattern` rule type is not accepted by every plan/repo
+combination through the REST API (some return HTTP 422 with no detail).
+The setup script does NOT apply this ruleset by default; opt in with
+`--with naming`:
+
+```sh
+./scripts/setup-rulesets.sh --repo your-org/your-repo --app-id 12345 --with naming
+```
+
+If the API still rejects, configure the rule via the GitHub UI instead
+(Settings → Rules → Rulesets → New ruleset → "Restrict branch names"),
+which auto-fills the parameters correctly.
 
 ## Repository-level settings
 
