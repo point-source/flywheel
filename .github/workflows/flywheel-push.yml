@@ -20,6 +20,16 @@ jobs:
           app-private-key: ${{ secrets.APP_PRIVATE_KEY }}
       - name: Run semantic-release
         if: steps.flywheel.outputs.managed_branch == 'true'
-        run: npx semantic-release@24
+        # Plugins must be co-installed; npx will not resolve them from the
+        # generated .releaserc.json on its own.
+        run: |
+          npx --yes \
+            -p semantic-release@24 \
+            -p @semantic-release/commit-analyzer \
+            -p @semantic-release/release-notes-generator \
+            -p @semantic-release/changelog \
+            -p @semantic-release/git \
+            -p @semantic-release/github \
+            semantic-release
         env:
           GITHUB_TOKEN: ${{ steps.flywheel.outputs.token }}

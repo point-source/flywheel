@@ -83,13 +83,31 @@ export async function mergePR(
   method: "squash" | "merge" | "rebase" = "squash",
 ): Promise<string> {
   const octokit = sandboxOctokit();
-  const res = await octokit.rest.pulls.merge({
-    owner: SANDBOX_OWNER,
-    repo: SANDBOX_REPO,
-    pull_number: prNumber,
-    merge_method: method,
-  });
-  return res.data.sha;
+  // GitHub returns 405 with "Base branch was modified" if the base ref tip
+  // moves between the PR's mergeable check and the merge call. This races
+  // against parallel test runs and the action chain itself; retry briefly.
+  let lastErr: unknown = null;
+  for (let attempt = 0; attempt < 5; attempt++) {
+    try {
+      const res = await octokit.rest.pulls.merge({
+        owner: SANDBOX_OWNER,
+        repo: SANDBOX_REPO,
+        pull_number: prNumber,
+        merge_method: method,
+      });
+      return res.data.sha;
+    } catch (err) {
+      const status = (err as { status?: number } | undefined)?.status;
+      const message = err instanceof Error ? err.message : String(err);
+      if (status === 405 && /base branch was modified/i.test(message)) {
+        lastErr = err;
+        await new Promise((r) => setTimeout(r, 1500));
+        continue;
+      }
+      throw err;
+    }
+  }
+  throw lastErr ?? new Error(`mergePR(${prNumber}) failed after retries`);
 }
 
 export async function getPRMergeState(prNumber: number): Promise<PRMergeState> {
