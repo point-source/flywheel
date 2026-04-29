@@ -30,11 +30,22 @@ python3 -c "import yaml" 2>/dev/null || {
   exit 1
 }
 
+cwd_repo=""
+if cwd_repo="$(gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null)"; then
+  :
+fi
 if [[ -z "$REPO" ]]; then
-  if ! REPO="$(gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null)"; then
+  if [[ -z "$cwd_repo" ]]; then
     echo "error: pass owner/repo or run from inside a checked-out repo with 'gh auth login'." >&2
     exit 1
   fi
+  REPO="$cwd_repo"
+fi
+# When validating a different repo than cwd, never trust local files —
+# they belong to the running script's repo, not the target.
+remote_only=0
+if [[ "$REPO" != "$cwd_repo" ]]; then
+  remote_only=1
 fi
 
 bold "Flywheel doctor — $REPO"
@@ -42,7 +53,7 @@ bold "Flywheel doctor — $REPO"
 # 1. .flywheel.yml present and parseable.
 bold ".flywheel.yml"
 yml=""
-if [[ -f .flywheel.yml ]]; then
+if [[ $remote_only -eq 0 && -f .flywheel.yml ]]; then
   yml=".flywheel.yml"
   ok "found at $yml"
 else
@@ -51,7 +62,7 @@ else
     echo "$yml_content" | base64 --decode > "$yml"
     ok "fetched .flywheel.yml from $REPO"
   else
-    fail "no .flywheel.yml in cwd or in the remote repo root"
+    fail "no .flywheel.yml in $REPO repo root"
     yml=""
   fi
 fi
@@ -119,23 +130,29 @@ else
   fail "could not read repo settings"
 fi
 
-# 5. Workflow files in the repo (cwd-only).
+# 5. Workflow files. Read from cwd when validating the local repo,
+# fetch from $REPO otherwise so the check reflects the remote contents.
 bold "Workflow files"
 for wf in flywheel-pr.yml flywheel-push.yml; do
   path=".github/workflows/$wf"
-  if [[ -f "$path" ]]; then
-    if grep -q "point-source/flywheel@" "$path"; then
-      ok "$path references point-source/flywheel@..."
-    else
-      fail "$path exists but does not reference point-source/flywheel@<version>"
-    fi
-    if grep -q "actions/create-github-app-token" "$path"; then
-      ok "$path uses actions/create-github-app-token"
-    else
-      warn "$path does not use actions/create-github-app-token — Flywheel expects App-token plumbing"
-    fi
+  content=""
+  if [[ $remote_only -eq 0 && -f "$path" ]]; then
+    content="$(cat "$path")"
+  elif wf_content="$(gh api "repos/$REPO/contents/$path" -q .content 2>/dev/null)"; then
+    content="$(echo "$wf_content" | base64 --decode)"
   else
-    fail "$path missing"
+    fail "$path missing in $REPO"
+    continue
+  fi
+  if echo "$content" | grep -q "point-source/flywheel@"; then
+    ok "$path references point-source/flywheel@..."
+  else
+    fail "$path exists but does not reference point-source/flywheel@<version>"
+  fi
+  if echo "$content" | grep -qE "(app-id:|actions/create-github-app-token)"; then
+    ok "$path uses App-token plumbing"
+  else
+    warn "$path does not use app-id input or actions/create-github-app-token — Flywheel expects App-token plumbing"
   fi
 done
 
