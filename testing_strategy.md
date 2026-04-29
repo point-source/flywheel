@@ -35,13 +35,14 @@ mode. No special infrastructure required.
 
 | File | Tests | Coverage |
 |---|---|---|
-| `tests/conventional.test.ts` | 56 | `parseTitle`, `detectBreakingInBody`, `computeIncrement`, combinatorial `mostImpactfulType` precedence (the bulk are `it.each`-generated pairwise precedence cases) |
+| `tests/conventional.test.ts` | 57 | `parseTitle`, `detectBreakingInBody`, `computeIncrement`, combinatorial `mostImpactfulType` precedence (the bulk are `it.each`-generated pairwise precedence cases); accepts missing-space-after-colon as a typo to be normalized downstream |
 | `tests/config.test.ts` | 11 | All 6 `.flywheel.yml` validation rules; multi-error collection; malformed YAML; missing top-level mapping; `merge_strategy: merge` rejection |
 | `tests/dogfood-config.test.ts` | 3 | Validates the repo's own `.flywheel.yml`; asserts `feat!` is excluded from `main`'s `auto_merge` |
 | `tests/release-rc.test.ts` | 8 | `.releaserc.json` shape; `chooseTagFormat` primary-vs-secondary; plugin merging without dropping defaults; declaration order |
-| `tests/pr-flow.test.ts` | 8 | PR title/body rewrite; label application; both label-flip directions; GraphQL refusal fallback; idempotency; unmanaged base ref; invalid-title check |
+| `tests/pr-flow.test.ts` | 11 | PR title/body rewrite; label application; both label-flip directions; auto-merge → direct-merge fallback (success and both-fail paths); idempotency; unmanaged base ref; invalid-title check |
 | `tests/promotion.test.ts` | 12 | Promotion PR create/upsert; `computePendingCommits` squash-merge dedup; rebase-merge dedup; `(#NN)` suffix stripping; terminal/single-branch no-op |
 | `tests/push-flow.test.ts` | 3 | `.releaserc.json` write to workspace; managed-vs-unmanaged branch routing |
+| `tests/preflight.test.ts` | 8 | App permission preflight: missing/insufficient permissions detected; helpful error message formatting |
 
 ### Load-bearing tests
 
@@ -65,12 +66,16 @@ Two flavors are tested:
 If this logic regresses, every promotion PR re-includes already-promoted work
 and the changelog becomes a duplicate-laden mess.
 
-#### GraphQL `enableAutoMerge` refusal fallback
+#### Auto-merge → direct-merge fallback
 
-`tests/pr-flow.test.ts:129-145`. The `enableAutoMerge` GraphQL mutation can
-fail (repo doesn't have auto-merge enabled, branch protection misconfigured,
-etc.). The flow must log a warning and proceed — never throw — so the label is
-still applied and the PR is queryable.
+`tests/pr-flow.test.ts:129-168`. The `enableAutoMerge` GraphQL mutation can
+fail (most commonly: the PR is in clean state because the repo has no
+required status checks). The flow must fall through to a direct REST merge
+(`pulls.merge`) so adopters without required checks aren't stuck — and if
+the direct merge also fails, the label is still applied, a warning is
+logged, and the PR is queryable. Two scenarios cover the success path
+(auto-merge declines → direct merge succeeds → `merged: true`) and the
+both-fail path (label applied, `merged: false`, warning logged).
 
 #### Idempotency
 
@@ -92,7 +97,8 @@ no errors.
 | `.releaserc.json` generation, multi-stream tag isolation | ✅ | `release-rc.test.ts`, `push-flow.test.ts` |
 | PR title rewrite, body increment annotation | ✅ | `pr-flow.test.ts` |
 | Label application + flip in both directions | ✅ | `pr-flow.test.ts` |
-| Native auto-merge enablement + refusal fallback | ✅ | `pr-flow.test.ts` |
+| Native auto-merge enablement + direct-merge fallback | ✅ | `pr-flow.test.ts` |
+| App permission preflight (action-side validation) | ✅ | `preflight.test.ts` |
 | Invalid-title check creation | ✅ | `pr-flow.test.ts` |
 | Promotion PR create / upsert / chore-only no-op | ✅ | `promotion.test.ts` |
 | Promotion dedup (squash + rebase + `(#NN)`) | ✅ | `promotion.test.ts` |
@@ -357,16 +363,46 @@ directly for each stream, asserting that `main-line → v${version}`,
 This catches the only thing the dry-run could have caught (cross-stream tag
 collision) without mutating the sandbox or shelling out to `npx`.
 
-### Risk: scenario 01 flakiness
+### Scenario design notes (lessons from initial Layer 3 stabilization)
 
-Native auto-merge can stick at `mergeStateStatus: BLOCKED` even with all
-required checks green (observed in the pre-reset harness; commits `87d5643`,
-`60fe99a`). Mitigations in scenario 01: 120s timeout instead of the 90s
-default; on failure, pollUntil dumps `mergeable_state`, `auto_merge`, and
-all check_runs on the head SHA. If the scenario flakes more than once across
-≥3 CI runs, file a separate issue to port the pre-reset direct-merge fallback
-into `runPrFlow`. The harness intentionally does not paper over this in
-test-side code — Layer 3's job is to test flywheel as flywheel.
+#### Scenario 05/07 — push-workflow batching
+
+The `flywheel-push.yml` workflow uses a per-branch concurrency group
+(`group: flywheel-push-${{ github.ref_name }}`). When two PRs merge to
+e2e-develop back-to-back, the first run can batch both commits into a
+single promotion PR; the second run then correctly logs "no pending
+commits". An assertion of "a *new* promotion PR appears for *my* merge"
+will read that as failure, even though the product is doing the right
+thing.
+
+Scenario 05 verifies the actual product invariant: after the merge, a
+develop→staging promotion PR exists whose `updated_at` is at-or-after
+our merge time, in any state (open, merged, closed). Whichever push run
+carried the commit, the promotion happened.
+
+Scenario 07 verifies upsert by retargeting to staging→main: e2e-main
+has `auto_merge: []`, so the first promotion PR stays open between the
+two merges and the upsert is observable. (On develop→staging, fix-titled
+promotion PRs auto-merge before the second push run can update them.)
+
+#### Scenario 06 — chore-only invariant under shared state
+
+Scenario 06 originally asserted "no new staging→main promotion PR
+exists after a chore merge". In a shared sandbox, prior scenarios can
+leave fixes pending on staging — the chore push run correctly opens a
+promotion PR carrying those fixes, which read as failure. The shipped
+test instead verifies the real invariant: any new promotion PR must
+contain at least one bumping commit (i.e., the chore alone never
+triggered it).
+
+### Direct-merge fallback in `runPrFlow`
+
+A separate concern from test design: native auto-merge can refuse with
+"Pull request is in clean status" when the target branch has no required
+checks. Rather than the e2e harness papering over this, `runPrFlow` itself
+falls through to a direct REST `pulls.merge` (see "Auto-merge →
+direct-merge fallback" above). Adopters without required checks get the
+auto-merge UX automatically.
 
 ---
 

@@ -117,6 +117,30 @@ steps for the new branches):
   --branches "e2e-main,e2e-staging,e2e-develop,e2e-customer-acme"
 ```
 
+Passing `--app-id` adds the App as a bypass actor on **both** rulesets.
+The branch ruleset bypass is mandatory — without it, semantic-release's
+push of the version commit + tag to a managed branch is rejected by the
+"changes must be made through a pull request" rule and every release
+fails with `EGITNOPERMISSION`. The tag ruleset bypass lets the App
+create the version tag itself.
+
+### Workflow content the e2e suite depends on
+
+`scripts/templates/flywheel-push.yml` carries two adopter-relevant
+details that aren't obvious — keep them when copying:
+
+- `actions/checkout@v4` is invoked with `persist-credentials: false`.
+  Without this flag, checkout writes the workflow's default
+  `GITHUB_TOKEN` into `http.<url>.extraheader`, which shadows the App
+  installation token semantic-release embeds in its push URL — the push
+  then fails as `github-actions[bot]` even though the App token was
+  passed.
+- The `Run semantic-release` step co-installs the plugin set inline
+  (`@semantic-release/changelog`, `/git`, `/github`,
+  `/commit-analyzer`, `/release-notes-generator`) via `npx -p`. Plugins
+  referenced in the generated `.releaserc.json` are not auto-resolved
+  by `npx semantic-release` alone — the run errors with `MODULE_NOT_FOUND`.
+
 Layer 3 cleanup branches its tests under `e2e/<scenario>-<unix-millis>`
 (distinct from Layer 2's `test/...` prefix); the same prune command works:
 
