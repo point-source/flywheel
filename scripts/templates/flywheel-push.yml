@@ -12,6 +12,11 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          # Don't persist the workflow's default GITHUB_TOKEN as a git
+          # extraheader — it would shadow the App installation token that
+          # semantic-release embeds in its push URL, and the workflow's
+          # token only has read scope here.
+          persist-credentials: false
       - uses: point-source/flywheel@v1
         id: flywheel
         with:
