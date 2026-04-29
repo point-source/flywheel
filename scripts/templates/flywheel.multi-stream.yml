@@ -1,0 +1,16 @@
+flywheel:
+  streams:
+    - name: main-line
+      branches:
+        - name: develop
+          prerelease: dev
+          auto_merge: [fix, feat, chore]
+        - name: main
+          auto_merge: []
+    - name: customer-acme
+      branches:
+        - name: customer-acme
+          prerelease: acme
+          auto_merge: [fix, fix!, chore]
+  merge_strategy: squash
+  initial_version: 0.1.0

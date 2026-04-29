@@ -1,0 +1,6 @@
+flywheel:
+  streams:
+    - name: solo
+      branches:
+        - name: main
+          auto_merge: [fix, chore]

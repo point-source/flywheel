@@ -1,782 +1,647 @@
-# Autonomous release pipeline — design specification
+# Flywheel — specification
 
-## Overview
+## What it is
 
-A language-agnostic, branch-topology-agnostic CI/CD orchestration layer hosted as reusable GitHub Actions workflows. Adopters supply their own build and publish workflows; this pipeline supplies everything else: conventional commit parsing, semver versioning, changelog generation, PR lifecycle management, promotion gating, and release tagging.
+Flywheel is a lightweight GitHub Actions-native CI/CD orchestration layer for teams and AI agent swarms. It automates the journey from conventional commit to versioned release artifact without prescribing how you build, what you publish, or how your branches relate to each other.
 
-Designed for a high-velocity, AI-agent-dominant development model where human review gates are triggered by **change type**, not by branch position.
-
----
-
-## Core design decisions
-
-### Human review is gated on change type, not branch
-
-| Commit type | Auto-merge | Notes |
-|---|---|---|
-| `fix`, `chore`, `refactor`, `perf`, `style`, `test` | ✅ Yes | After quality checks pass |
-| `feat` | ❌ No | Always requires human review |
-| Any type with `BREAKING CHANGE` footer or `!` suffix | ❌ No | Always requires human review, overrides auto-merge config |
-| `feat!`, `refactor!`, etc. | ❌ No | Breaking change flag takes precedence |
-
-This list is configurable in `.pipeline.yml` (see config reference). The breaking change override is not configurable — it always requires human review.
-
-### Semver across branches
-
-Pre-release versions follow [semver 2.0.0](https://semver.org/) strictly:
-
-```
-develop  →  1.2.0-dev.1, 1.2.0-dev.2, ...
-staging  →  1.2.0-rc.1, 1.2.0-rc.2, ...
-main     →  1.2.0
-```
-
-The identifiers map directly to branch purpose: `dev` = development snapshot from `develop`, `rc` = release candidate from `staging`. Both are valid semver pre-release identifiers and sort correctly below the release version (`dev` < `rc` < release by lexicographic comparison). The counter resets when the base version changes.
-
-A git tag is applied to every commit that represents a published artifact:
-- `v1.2.0-dev.3` on develop
-- `v1.2.0-rc.1` on staging
-- `v1.2.0` on main
-
-### Version/changelog engine: release-please (as a library, not orchestrator)
-
-`release-please` handles conventional commit parsing and changelog generation. The pipeline calls it as a step to compute the next version and produce a changelog fragment. It does **not** drive branch strategy or PR creation — the orchestrator owns those.
-
-### Auth: GitHub App
-
-All bot actions (PR creation, PR body updates, tag pushes, comment posting, triggering downstream workflows) use a GitHub App token. This is required because:
-
-- `GITHUB_TOKEN` cannot trigger new workflow runs from push events (prevents downstream workflows from firing)
-- PATs are per-user and create operational coupling to individuals
-- A GitHub App provides fine-grained per-repo permissions and a proper bot identity
-
-Adopters install the GitHub App and store `APP_ID` and `APP_PRIVATE_KEY` as repo secrets. The pipeline exchanges these for a short-lived installation token at the start of each run.
-
-### Merge strategy
-
-Default: **squash merge**. Configurable per-repo in `.pipeline.yml`. Squash produces one conventional commit per PR on the target branch, which is exactly what `release-please` expects for clean version computation.
-
-### Merge queue
-
-When multiple PRs are open against the same branch simultaneously — the expected state in an agent swarm — a merge queue serializes them without requiring manual rebasing. GitHub's native merge queue is the recommended mechanism. When enabled on a branch, the pipeline bot enqueues eligible PRs rather than merging them directly. GitHub creates a temporary branch combining the PR with everything ahead of it in the queue, re-runs required status checks against that combined state, and only completes the merge if checks pass. See the [merge queue section](#merge-queue-1) for full configuration guidance.
+Flywheel is not a long-running orchestrator. It is a collection of short-lived, single-purpose event reactions. The repository itself — its branches, tags, PRs, and labels — is the state machine.
 
 ---
 
-## Branch topology
+## Design principles
 
-### Fixed promotion order
+**Stateless and event-driven.** No workflow waits for another. Each workflow reacts to one event, does one job, and exits. Long-running build and publish steps are fully decoupled and run independently.
 
-The pipeline always promotes in the order `develop → staging → main`. This is a deliberate, non-configurable constraint — not an arbitrary one. Each branch has fixed semantics regardless of which ones are enabled:
+**No double billing.** Build and publish workflows are triggered by events Flywheel produces (tags, releases), not called synchronously by the pipeline. A 30-minute mobile build incurs no waiting cost on the pipeline side.
 
-- `develop` — integration point for feature branches; produces `dev` pre-release builds
-- `staging` — release candidate validation; produces `rc` pre-release builds
-- `main` — production; produces release versions
+**Language and destination agnostic.** Flywheel produces a version, a changelog, and a tag. What you do with those is entirely up to your own build and publish workflows.
 
-Disabling a branch collapses the adjacent steps but does not change what the remaining branches mean. If `staging` is disabled, `develop` still means integration and `main` still means production — the promotion PR just goes directly between them.
+**No assumed branch hierarchy.** Branch relationships are defined by stream membership and branch order within a stream. Flywheel makes no assumptions about which branches exist or how streams relate to each other. A project with one stream containing one branch and a project with six parallel customer streams use the same system.
 
-### Branch flags
+**Version numbers are stream-scoped.** Within a stream, the base version is consistent across all branches — `v1.3.0-dev.2`, `v1.3.0-rc.1`, and `v1.3.0` all represent the same logical release. Across streams, versions are computed independently and may collide if streams share a publish destination. See the versioning section for implications and guidance.
 
-Branches are enabled independently via `.pipeline.yml`. The pipeline reads these flags at runtime on every invocation, so changes take effect on the next PR without modifying any workflow files or rulesets.
+**Minimal permissions footprint.** Most operations use `GITHUB_TOKEN`. A GitHub App installation token is required only for creating PRs that trigger downstream workflows and pushing tags from workflow context.
+
+**One config file.** `.flywheel.yml` in the adopting repo is the single source of truth for branch topology, auto-merge rules, and pipeline behavior. Flywheel derives everything else — including semantic-release configuration — from it at runtime.
+
+---
+
+## Components
+
+### 1. `pr-conductor` (Flywheel's only custom code)
+
+A TypeScript GitHub Action, published to the GitHub Actions marketplace as `point-source/flywheel@v1`. Implemented with Deno for native TypeScript execution without a compilation step.
+
+Reacts to `pull_request` events and `push` events on managed branches. It is stateless — reads `.flywheel.yml`, reads/writes the PR or repo state, and exits. Holds no state between runs.
+
+Responsibilities:
+
+- Parse PR title as a conventional commit
+- Rewrite PR title and body with changelog fragment and increment type
+- Evaluate auto-merge eligibility against `.flywheel.yml` for the target branch
+- Apply `flywheel:auto-merge` or `flywheel:needs-review` label
+- Enable GitHub's native auto-merge when eligible
+- On push to a non-terminal branch in a stream, upsert the promotion PR to the next branch in the stream
+
+### 2. semantic-release
+
+Handles version computation, changelog generation, git tagging, and GitHub Release creation. Runs as a step in `flywheel-push.yml` on push to any managed branch. `pr-conductor` generates `.releaserc.json` at runtime from `.flywheel.yml` — adopters never configure semantic-release directly.
+
+### 3. GitHub merge queue
+
+Serializes parallel PRs without manual rebasing. When multiple agent-opened PRs target the same branch, the merge queue tests each against the state that will exist when it is their turn. Flywheel enables auto-merge into the queue; it never bypasses it.
+
+### 4. User-defined build and publish workflows
+
+Plain GitHub Actions workflows in the adopting repo. Not called by Flywheel — they react to events Flywheel produces:
+
+- Build workflow triggers on `release: published`
+- Publish workflow triggers on `workflow_run: [Build] completed`
+
+Version and changelog are available from the GitHub Release object. No Flywheel-specific inputs required.
+
+---
+
+## Event chain
+
+```
+agent / developer pushes a branch
+        │
+        ▼
+pull_request opened against a managed branch
+        │
+        ▼
+pr-conductor fires  (pull_request: opened / synchronize / reopened)
+  ├── parse PR title → type, scope, description, breaking flag
+  ├── compute increment type  (major / minor / patch / none)
+  ├── rewrite PR title + body
+  ├── check .flywheel.yml auto_merge list for target branch
+  ├── eligible   → apply flywheel:auto-merge label, enable native auto-merge
+  └── ineligible → apply flywheel:needs-review label
+
+        │  quality check workflows fire independently via on: pull_request
+        │  merge queue serializes concurrent PRs, re-runs checks against combined state
+        ▼
+PR merges → push to managed branch
+        │
+        ├──────────────────────────────────────────────────────────┐
+        ▼                                                          ▼
+semantic-release fires                                  pr-conductor fires
+(flywheel-push.yml)                                     (promotion PR upsert)
+  ├── generate .releaserc from .flywheel.yml              ├── find stream + position of pushed branch
+  ├── compute version from landed commits                 ├── if absent → exit (no promotion PR)
+  ├── generate CHANGELOG.md fragment                      ├── collect commits not yet in target
+  ├── create git tag  e.g. v1.2.0-dev.3                  ├── determine most impactful commit type
+  └── create GitHub Release                               ├── check type against target's auto_merge
+        │                                                 ├── eligible   → create/update PR + flywheel:auto-merge
+        ▼                                                 └── ineligible → create/update PR + flywheel:needs-review
+on: release published
+  └── user build workflow fires independently
+        │
+        ▼
+on: workflow_run build completed
+  └── user publish workflow fires independently
+```
+
+**Important:** The release flow and the promotion PR flow are independent reactions to the same push event. A branch that is last in its stream (the terminal branch) still releases — being last means no promotion PR is created, not that no release occurs. Releases happen on every push to any managed branch where semantic-release computes a new version. A single-branch stream releases immediately on every qualifying push with no promotion step.
+
+---
+
+## `.flywheel.yml` reference
 
 ```yaml
-pipeline:
-  branches:
-    develop: true
-    staging: false
-    main: false
+# .flywheel.yml
+# Place in the root of the adopting repo.
+
+flywheel:
+  # A stream is a group of branches that share a version history and move
+  # releases through stages toward a common production target.
+  # Each stream is an independent version domain with its own semantic-release config.
+  # Branch order within a stream defines the promotion chain: first = least stable,
+  # last = most stable (production target). Promotion PRs flow in array order.
+  # A branch may belong to only one stream.
+  streams:
+    - name: main-line
+      branches:
+        - name: develop
+          # Optional. Semver pre-release identifier.
+          # Absent or false = production release (no suffix).
+          # Must be unique across streams if using a shared publish destination.
+          prerelease: dev
+
+          # Required. Commit types that auto-merge into this branch without human review.
+          # Use conventional commit type, optionally suffixed with ! for breaking changes.
+          # A type listed without ! does not imply the ! variant is also allowed.
+          # Empty list = all PRs require human approval.
+          auto_merge:
+            - fix
+            - fix! # breaking fixes auto-merge; breaking feats do not
+            - feat
+            - chore
+            - refactor
+            - perf
+            - style
+            - test
+            - docs
+
+        - name: staging
+          prerelease: rc
+          auto_merge:
+            - fix
+            - chore
+            - style
+            - test
+            - docs
+
+        - name: main
+          # prerelease absent = production release, no suffix
+          auto_merge: [] # all PRs require human approval
+
+    # A second stream for a customer variant — independent version history
+    - name: customer-acme
+      branches:
+        - name: customer-acme
+          prerelease: acme
+          auto_merge:
+            - fix
+            - fix!
+            - chore
+
+  # Merge strategy: squash (default) | rebase
+  # Note: 'merge' is intentionally omitted. The recommended branch ruleset
+  # requires linear history, which is incompatible with merge commits.
+  # If you need merge commits, disable the linear history ruleset requirement.
+  merge_strategy: squash
+
+  # Initial version if no tags exist in the repo.
+  initial_version: 0.1.0
 ```
 
-The promotion chain is derived automatically from whichever branches are enabled, always in `develop → staging → main` order through the active set.
+### Branch config fields
 
-### Supported combinations
+| Field        | Required | Default | Description                                                                                  |
+| ------------ | -------- | ------- | -------------------------------------------------------------------------------------------- |
+| `name`       | Yes      | —       | Git branch name                                                                              |
+| `prerelease` | No       | `false` | Semver pre-release identifier, or `false` / absent for production release                    |
+| `auto_merge` | Yes      | —       | List of commit types (with optional `!`) that auto-merge. Empty list = all need human review |
 
-| develop | staging | main | Promotion chain | Pre-release versions |
-|---|---|---|---|---|
-| ✅ | ✅ | ✅ | develop → staging → main | `dev`, `rc`, release |
-| ✅ | ❌ | ✅ | develop → main | `dev`, release |
-| ❌ | ✅ | ✅ | staging → main | `rc`, release |
-| ✅ | ✅ | ❌ | develop → staging | `dev`, `rc` (no prod release) |
-| ✅ | ❌ | ❌ | develop only | `dev` builds only |
-| ❌ | ❌ | ✅ | main only | release only |
-| ❌ | ✅ | ❌ | staging only | `rc` builds only |
+### Valid `auto_merge` entries
 
-The default is `develop: true, staging: false, main: false` — optimised for the common early-development case where a developer is publishing preview builds before owning a production environment or app store presence. Enabling additional branches later is purely additive and requires no changes to workflow files, rulesets, or any other configuration.
+Any conventional commit type, with or without `!`:
 
-### Starting at either end
+`feat`, `feat!`, `fix`, `fix!`, `chore`, `chore!`, `refactor`, `refactor!`, `perf`, `perf!`,
+`style`, `style!`, `test`, `test!`, `docs`, `docs!`, `build`, `build!`, `ci`, `ci!`, `revert`, `revert!`
 
-A repo can start from either end of the chain and add branches in any direction:
+A `fix!` entry matches PRs of type `fix` with a breaking change — indicated by `!` in the title or a `BREAKING CHANGE:` footer in any commit body on the branch. Listing `fix` and `fix!` independently allows breaking fixes through while still gating non-breaking fixes if desired.
 
-**Develop-first (default):** Start with `develop: true` only. Feature branches PR against `develop`, `dev` pre-release builds are published on every merge. When ready for production, enable `main: true` — the promotion PR from `develop` to `main` begins appearing automatically. Optionally insert `staging: true` at any point to add a validation gate between them.
+### Validation
 
-**Main-first:** Start with `main: true` only. Feature branches PR directly against `main`, every merge produces a release. Add `develop: true` later to introduce an integration branch without changing any existing configuration — `main` retains its role and the promotion chain lengthens behind it.
+`pr-conductor` validates `.flywheel.yml` on every run and posts a failing check with a descriptive error if:
 
-In both cases, enabling a new branch requires only two things: creating the branch in git (`git checkout -b staging && git push -u origin staging`) and flipping the flag in `.pipeline.yml`. The entrypoint workflows already listen on all three branch names; a branch that does not exist simply never triggers them.
-
-### Effect on rulesets
-
-Rulesets are defined per branch name and are inert for branches that do not exist. When a new branch is created and enabled, the existing ruleset immediately applies to it — no ruleset changes are needed at enablement time. Adopters should create all three branch rulesets during initial setup even if only one branch is active, so the protection is in place the moment each branch is introduced.
-
-### Hotfix / frictionless patch path
-
-In all configurations, `fix` commits auto-merge through every active branch without human gates as long as quality checks pass. There is no special hotfix branch or flow — the commit type alone determines the path. An AI agent (or human) opens a PR with a `fix:` commit against the lowest active branch; if checks pass, it propagates through the promotion chain to `main` and is released with no human intervention.
+- A branch appears in more than one stream — each branch may belong to exactly one stream.
+- More than one branch within the same stream has `prerelease: false` or absent — only the last branch in a stream should be the production release branch.
+- More than one stream has a terminal branch (last branch) with `prerelease: false` and the streams share a publish destination — version collision is likely. A warning (not an error) is emitted with guidance to use distinct `prerelease` identifiers.
+- An `auto_merge` entry is not a recognized conventional commit type (with or without `!`).
+- A stream contains only one branch — a single-branch stream is valid (immediate release, no promotion) but `pr-conductor` emits an info notice so the user can confirm this is intentional.
 
 ---
 
-## Pipeline architecture
+## Versioning
 
-### Wiring model: reusable workflows + thin entrypoints
+### Version numbers are stream-scoped
 
-The pipeline lives in `your-org/release-pipeline` as reusable workflow files. Adopting repos contain:
+Within a stream, versions are coherent across all branches. The base version (`1.3.0`) is the same on `develop`, `staging`, and `main` — only the pre-release suffix differs. This makes `v1.3.0-dev.2` recognizably the same release as `v1.3.0-rc.1` and eventually `v1.3.0`. Version drift between stages is structurally prevented.
 
-1. **Thin entrypoint workflows** (3 files, ~10 lines each) that fire on GitHub events and call the orchestrator
-2. **`.pipeline.yml`** — repo-level config
-3. **`pipeline-build.yml`** and **`pipeline-publish.yml`** — user-defined workflows at known paths, accepting the standard input contract
+Across streams, versions are computed independently. **Two streams with similar commit histories can produce the same version string.**
 
-```
-adopting-repo/
-├── .github/
-│   └── workflows/
-│       ├── on-pr.yml              ← calls orchestrator on pull_request events
-│       ├── on-push.yml            ← calls orchestrator on push to managed branches
-│       ├── pipeline-build.yml     ← user-defined, accepts standard inputs
-│       └── pipeline-publish.yml   ← user-defined, accepts standard inputs
-└── .pipeline.yml                  ← repo config
-```
+Example: if `main` (stream: main-line) and `customer-acme` (stream: customer-acme) both descend from a `v1.0.0` tag and each receives one `fix` commit, both independently compute and release `v1.0.1`. The artifacts are different; the version strings are identical.
 
-The orchestrator calls back into the adopting repo's build/publish workflows via `workflow_call` at the paths declared in `.pipeline.yml` (defaulting to the names above).
+**Tag collision across streams is always a hard error, regardless of publish destination.** Git tags are repository-global. Two streams in the same repo that both produce `v1.0.1` will cause the second semantic-release run to fail with a tag collision error — Git will refuse to create a tag that already exists at a different commit.
 
-### Workflow files in `your-org/release-pipeline`
+Flywheel handles this by generating a stream-scoped `tagFormat` for every stream's `.releaserc.json`. Each stream uses its stream name as a tag prefix:
 
 ```
-release-pipeline/
-└── .github/
-    └── workflows/
-        ├── orchestrator.yml       ← main reusable workflow (workflow_call)
-        ├── pr-lifecycle.yml       ← PR body/title management + quality checks
-        ├── promote.yml            ← branch promotion + promotion PR management
-        └── release.yml            ← tag creation + GitHub Release + publish dispatch
+main-line stream:      v1.0.1          (tagFormat: v${version})
+customer-acme stream:  customer-acme/v1.0.1   (tagFormat: customer-acme/v${version})
 ```
+
+The first (or only) stream with a terminal `prerelease: false` branch uses the default `v${version}` tag format. All other streams use a prefixed format derived from their stream name. Flywheel generates this automatically — adopters do not configure `tagFormat` directly.
+
+This means the "harmless collision" framing in earlier versions of this spec was incorrect. There is no safe scenario where two streams in the same repo produce the same tag string. The tag format scoping is mandatory and non-optional.
+
+Flywheel emits a validation **error** (not warning) if multiple streams have terminal branches with `prerelease: false` and no tag format disambiguation can be inferred. In practice this means: at most one stream may have the "primary" `v${version}` tag format. All other streams are automatically prefixed.
+
+### JIT computation
+
+Version is computed on push to a managed branch, never at PR-open time. PR titles and bodies show the **increment type** (major / minor / patch) not a predicted version number. The predicted version would be wrong for any PR that is not the first to merge when multiple PRs are open simultaneously, which is the normal state in an agent swarm.
+
+### Version scheme
+
+Within a stream, the base version is consistent across all branches — only the pre-release suffix differs. This means `v1.3.0-dev.4` on `develop`, `v1.3.0-rc.1` on `staging`, and `v1.3.0` on `main` all represent the same logical release moving through stages. The `develop` and `staging` versions are not independent counters racing ahead of `main` — they are anchored to the same next version that `main` will eventually release.
+
+```
+develop  →  1.3.0-dev.1,  1.3.0-dev.2, ...
+staging  →  1.3.0-rc.1,   1.3.0-rc.2,  ...
+main     →  1.3.0
+```
+
+This is enforced by declaring stream branches to semantic-release as an ordered sequence. semantic-release computes pre-release versions relative to the stream's production branch tag history, not independently per branch. The version drift problem (`develop` at `23.4.3-dev.1` while `main` is at `3.6.5`) is structurally impossible within a stream.
+
+The pre-release identifier comes from the `prerelease` field in `.flywheel.yml`. The counter increments automatically via semantic-release's tag inspection.
+
+### Increment rules
+
+| Commit type                                                 | Increment |
+| ----------------------------------------------------------- | --------- |
+| Any type with `!` or `BREAKING CHANGE:` footer              | major     |
+| `feat`                                                      | minor     |
+| `fix`, `perf`                                               | patch     |
+| `chore`, `refactor`, `style`, `test`, `docs`, `build`, `ci` | none      |
+
+Non-bumping commits accumulate silently until a qualifying commit lands. They are included in the changelog of the next real release. No tag or GitHub Release is created for a push that contains only non-bumping commits.
+
+### `.releaserc.json` generation
+
+`pr-conductor` writes `.releaserc.json` to the workspace before semantic-release runs, derived from `.flywheel.yml`. Adopters never manually configure semantic-release.
+
+**Plugin config:** Flywheel always generates an explicit plugin list, never relying on semantic-release defaults. The default plugin set includes `@semantic-release/npm` which breaks non-Node projects. Flywheel's generated config uses:
+
+```json
+{
+  "plugins": [
+    "@semantic-release/commit-analyzer",
+    "@semantic-release/release-notes-generator",
+    "@semantic-release/changelog",
+    ["@semantic-release/git", { "assets": ["CHANGELOG.md"] }],
+    "@semantic-release/github"
+  ]
+}
+```
+
+No npm plugin. Adopters who need additional plugins (npm publish, pub.dev, etc.) add them to a `semantic_release_plugins` array in `.flywheel.yml` which gets merged into the generated config.
+
+**Branch config:** For each stream, Flywheel generates a `branches` array in stream order. This ordered declaration anchors pre-release versions to the stream's shared version history:
+
+```json
+{
+  "tagFormat": "v${version}",
+  "branches": [
+    { "name": "develop", "prerelease": "dev", "channel": "dev" },
+    { "name": "staging", "prerelease": "rc", "channel": "rc" },
+    { "name": "main" }
+  ]
+}
+```
+
+**Tag format scoping:** Each stream gets a unique `tagFormat` to prevent repo-global tag collisions. The primary stream (first stream defined, or only stream with `prerelease: false` terminal branch) uses `v${version}`. All other streams use `{stream-name}/v${version}`:
+
+```json
+{
+  "tagFormat": "customer-acme/v${version}",
+  "branches": [{ "name": "customer-acme" }]
+}
+```
+
+**Single-branch streams:** semantic-release requires at least one non-pre-release branch in its config (`ERELEASEBRANCHES` error otherwise). A stream whose only branch has a `prerelease` identifier (e.g. `customer-acme` with `prerelease: acme`) is treated by Flywheel as a release branch — the `prerelease` field in `.flywheel.yml` controls the tag format prefix, not semantic-release's `prerelease` flag. The branch is declared as a normal release branch with a scoped tag format.
+
+For repositories with multiple streams, `pr-conductor` detects which stream the current branch belongs to and generates the appropriate `.releaserc.json` scoped to that stream. Each stream runs semantic-release independently.
+
+### Why semantic-release over release-please
+
+Both tools handle conventional commit parsing and changelog generation. semantic-release is the better fit for Flywheel for three reasons:
+
+**Multi-branch pre-release channels.** semantic-release natively models N branches with independent pre-release identifiers and handles version ordering and conflict detection between them. release-please is fundamentally single-branch and requires workarounds for this pattern.
+
+**Event-driven model compatibility.** semantic-release runs as a CLI step and exits. It doesn't own PRs or drive the merge flow — it just computes and tags. This composability is exactly what the Flywheel event-driven model requires. release-please wants to be the orchestrator.
+
+**Monorepo path.** When monorepo support is added, semantic-release's manifest mode supports N independently versioned packages with per-package tag prefixes (`pkg-a/v1.2.0`, `pkg-b/v3.0.0`). This composes with Flywheel's model without structural changes.
 
 ---
 
-## Workflow call contract
+## PR title and body
 
-### Inputs the orchestrator receives (from adopting repo entrypoints)
+`pr-conductor` owns and rewrites the PR title and body for all PRs targeting managed branches. Reviewers use comments for human notes — not the body.
 
-```yaml
-inputs:
-  event_type:
-    description: 'pr_opened | pr_updated | pr_merged | push'
-    required: true
-  source_branch:
-    required: true
-  target_branch:
-    required: true
-```
-
-### Inputs the build workflow receives (from orchestrator)
-
-```yaml
-inputs:
-  version:
-    description: 'Full semver string, e.g. 1.2.0-alpha.3 or 1.2.0'
-    required: true
-  changelog:
-    description: 'Markdown changelog fragment for this version'
-    required: true
-  environment:
-    description: 'develop | staging | production'
-    required: true
-  artifact_path:
-    description: 'Where to write the build artifact for the publish step'
-    required: true
-    default: 'dist/'
-```
-
-### Inputs the publish workflow receives (from orchestrator)
-
-```yaml
-inputs:
-  version:
-    required: true
-  changelog:
-    required: true
-  environment:
-    required: true
-  artifact_path:
-    description: 'Path to artifact produced by the build step'
-    required: true
-```
-
-The publish workflow decides what to do with `environment` — it may publish to different registries, app stores, or artifact stores per environment. The orchestrator does not need to know about those destinations.
-
----
-
-## Pipeline flow diagram
-
-```mermaid
-flowchart TD
-    A([PR opened against managed branch]) --> B
-
-    B[Parse commits\nextract type · scope · bump signal] --> C
-    C[Rewrite PR title + body\nno version — changelog fragment only] --> D
-    D[Quality checks\nuser-defined pipeline-quality.yml] --> E{Auto-merge eligible?\nfix/chore/refactor/perf/style/test\nno BREAKING CHANGE}
-
-    D -->|fail| FAIL([Block PR])
-
-    E -->|No — feat or breaking| HUMAN([Human review required])
-    HUMAN -->|approved| MERGE
-    E -->|Yes| MERGE
-
-    MERGE[Auto-merge — squash\nGitHub App bot] --> BRANCH{Target branch?}
-
-    BRANCH -->|develop| DEV[Upsert develop→staging PR\nbuild if publish_on_develop=true]
-    BRANCH -->|staging| STG[Upsert staging→main PR\nbuild · environment=staging]
-    BRANCH -->|main| VCOMP[Compute version\nrelease-please · all landed commits]
-    VCOMP --> REL([Tag · GitHub Release · build · publish\nenvironment=production])
-
-    DEV -->|human approves promotion PR| STG
-    STG -->|human approves promotion PR| REL
-
-    style FAIL fill:#A32D2D,color:#F7C1C1
-    style HUMAN fill:#993C1D,color:#F5C4B3
-    style REL fill:#3B6D11,color:#C0DD97
-    style MERGE fill:#0F6E56,color:#9FE1CB
-    style DEV fill:#185FA5,color:#B5D4F4
-    style STG fill:#185FA5,color:#B5D4F4
-    style B fill:#534AB7,color:#CECBF6
-    style C fill:#534AB7,color:#CECBF6
-    style D fill:#0F6E56,color:#9FE1CB
-    style VCOMP fill:#534AB7,color:#CECBF6
-```
-
----
-
-## Event flows
-
-### Flow 1: Auto-mergeable commit (fix/chore/refactor/perf/style/test, no breaking change)
+### Title format
 
 ```
-developer opens PR (fix: ...) against develop/main
-  └── on-pr.yml fires → orchestrator
-        ├── parse commits → extract type, scope, description, bump signal
-        ├── rewrite PR title + body with changelog fragment (no version)
-        ├── run quality checks (calls user-defined quality workflow)
-        └── if checks pass → enqueue PR (merge queue) or auto-merge PR (squash)
-              │   [orchestrator detects merge queue via GitHub API and routes accordingly]
-              └── on-push.yml fires → orchestrator
-                    ├── if develop (full/dual mode):
-                    │     ├── compute version from landed commits (dev pre-release)
-                    │     ├── trigger build (environment=develop) if publish_on_develop=true
-                    │     └── upsert promotion PR (develop→staging or develop→main)
-                    │           └── recompute PR title+body with accumulated changelog + version
-                    ├── if staging (full mode):
-                    │     ├── compute version from landed commits (rc pre-release)
-                    │     ├── trigger build (environment=staging)
-                    │     └── upsert promotion PR (staging→main) with version
-                    └── if main:
-                          ├── compute version from all landed commits (release-please)
-                          ├── generate final changelog
-                          ├── apply git tag (e.g. v1.2.3)
-                          ├── create GitHub Release
-                          ├── trigger build (environment=production)
-                          └── on build complete → trigger publish (environment=production)
+<type>[(<scope>)][!]: <description>
 ```
 
-### Flow 2: Feature or breaking change commit
-
-Same as Flow 1 through the quality check step. After checks pass:
+Examples:
 
 ```
-quality checks pass → post "ready for review" status on PR
-  └── human reviews PR
-        ├── requests changes → developer commits → Flow 1/2 restarts from top
-        └── approves → merges PR
-              └── continues from "on-push.yml fires" in Flow 1
+fix(auth): handle token refresh race condition
+feat!: drop support for API v1
+chore: update dependencies
 ```
 
-### Flow 3: Promotion PR (develop→staging, staging→main)
-
-Promotion PRs are created automatically when changes land on a source branch. They are owned by the pipeline bot — title and body are recomputed on every push to the source branch to accumulate the full changelog of pending changes.
-
-```
-push to develop
-  └── orchestrator upserts promotion PR (develop→staging)
-        ├── if PR doesn't exist: create it, set title + body
-        └── if PR exists: recompute title + body with accumulated changelog
-
-human reviews promotion PR
-  ├── fix/chore commits in the PR → these auto-merged individually already,
-  │   but the promotion PR itself still requires human approval
-  │   (promotion PRs are always human-reviewed — they represent an environment gate)
-  └── approves → merges
-        └── triggers staging build + upserts staging→main promotion PR
-```
-
-> **Note:** Individual feature/fix PRs are auto-merged based on commit type. Promotion PRs (branch-to-branch) are always human-reviewed because they represent an intentional environment promotion decision. This is the correct level for human oversight.
-
----
-
-## PR title and body format
-
-The pipeline bot owns PR title and body for all PRs it manages. Human reviewers should treat the body as pipeline output — if they want to add context, they use PR comments, not the body.
-
-### Feature/fix PR title
-
-```
-<type>(<scope>): <description>
-```
-
-Example: `feat(auth): add OAuth2 PKCE flow`
-
-No version suffix. The version is not known at PR-open time — it depends on what else lands before this PR, which is not deterministic. Displaying a predicted version here would be wrong for any PR except the first to merge.
-
-### Feature/fix PR body
+### Body format
 
 ```markdown
+## Summary
+
+<description>
+
 ## Changes
 
-<!-- Generated from conventional commits -->
-### feat
-- add OAuth2 PKCE flow (abc1234)
-
 ### fix
-- handle token refresh race condition (def5678)
+
+- handle token refresh race condition (abc1234)
+
+### chore
+
+- update dependencies (def5678)
 
 ---
-**Version bump:** minor
-**Target:** develop
+
+**Increment type:** patch
+**Target branch:** develop
+**Status:** ✅ flywheel:auto-merge — fix is in auto_merge list for develop
+**Quality checks:** ⏳ pending
+```
+
+For human review required:
+
+```markdown
+---
+
+**Increment type:** minor
+**Target branch:** main
+**Status:** 👀 flywheel:needs-review — feat not in auto_merge list for main
 **Quality checks:** ✅ passed
 ```
 
-The body shows the *bump signal* (major / minor / patch) rather than a specific version number. This tells reviewers the significance of the change without making a false precision claim. The actual version is computed just-in-time when the merge commit lands on the target branch.
+### Labels
 
-### Promotion PR title
+Every PR targeting a managed branch receives exactly one Flywheel label:
+
+| Label                   | Meaning                                                               |
+| ----------------------- | --------------------------------------------------------------------- |
+| `flywheel:auto-merge`   | Eligible for auto-merge per branch config. Native auto-merge enabled. |
+| `flywheel:needs-review` | Requires human approval before merge. Auto-merge not enabled.         |
+
+Labels are updated on every `synchronize` event (new commit pushed to PR). A PR that was `needs-review` becomes `auto-merge` if the author amends the title to a qualifying type.
+
+### Promotion PR format
+
+When `pr-conductor` upserts a promotion PR (e.g. `develop → staging`, the next branch in the stream):
+
+**Title:**
 
 ```
-chore(release): promote develop → staging [v1.3.0-rc.1]
+<most-impactful-type>[!]: promote develop → staging
 ```
 
-### Promotion PR body
+Where `<most-impactful-type>` is derived from the highest-precedence commit type in the pending commits, using this order:
 
-Accumulated changelog of all commits pending in this promotion, formatted as a standard CHANGELOG.md fragment.
+`feat!` > `fix!` > `<any other>!` > `feat` > `fix` > `perf` > `refactor` > `chore` / `style` / `test` / `docs` > `build` / `ci`
+
+This determines whether the promotion PR itself gets `flywheel:auto-merge` or `flywheel:needs-review` against the target branch's `auto_merge` list — using the same evaluation logic as any other PR.
+
+**Body:** Accumulated changelog of all commits pending in this promotion, formatted as a CHANGELOG.md fragment. Recomputed on every push to the source branch.
 
 ---
 
-## `.pipeline.yml` reference
+## Distribution and adopter setup
+
+### Distribution
+
+Flywheel is published to the GitHub Actions marketplace as `point-source/flywheel@v1`. Adopters reference it directly — no forking required. The marketplace Action contains `pr-conductor` (TypeScript/Deno). The two thin entrypoint workflow files (`flywheel-pr.yml`, `flywheel-push.yml`) are copied once into the adopting repo.
+
+### What you need
+
+A GitHub App with:
+
+- Contents: read and write (tag creation, `.releaserc.json` write)
+- Pull requests: read and write (PR creation, body/label updates, auto-merge)
+- Metadata: read
+
+Store the App credentials as `APP_ID` + `APP_PRIVATE_KEY` repo secrets. Each workflow mints a short-lived installation token at the start of the job via [`actions/create-github-app-token`](https://github.com/actions/create-github-app-token).
+
+Personal Access Tokens are not supported — they don't reliably propagate the cross-workflow trigger semantics Flywheel relies on (in particular, native auto-merge enable and downstream workflow firing on bot-created PRs).
+
+### Files to add
+
+```
+your-repo/
+├── .flywheel.yml                    ← you write this
+├── .github/
+│   └── workflows/
+│       ├── flywheel-pr.yml          ← copy from Flywheel docs (thin, rarely changes)
+│       ├── flywheel-push.yml        ← copy from Flywheel docs (thin, rarely changes)
+│       ├── build.yml                ← you write: on: release published
+│       └── publish.yml              ← you write: on: workflow_run
+```
+
+### `flywheel-pr.yml` (copy as-is)
 
 ```yaml
-pipeline:
-  # Which branches are active in the promotion chain.
-  # The pipeline always promotes develop → staging → main through whichever are enabled.
-  # Changing these flags takes effect immediately with no workflow or ruleset changes.
-  # Default is develop-only — optimised for preview/pre-production development.
-  branches:
-    develop: true
-    staging: false
-    main: false
-
-  # Merge strategy for auto-merged PRs: squash | merge | rebase
-  merge_strategy: squash
-
-  # Which commit types auto-merge without human review
-  # BREAKING CHANGE always requires human review regardless of this list
-  auto_merge_types:
-    - fix
-    - chore
-    - refactor
-    - perf
-    - style
-    - test
-
-  # Publish a develop-environment artifact on every auto-merge to develop
-  publish_on_develop: true
-
-  # Publish a staging-environment artifact on every merge to staging
-  publish_on_staging: true
-
-  # Merge queue: set to true if GitHub merge queue is enabled on managed branches.
-  # When true, the bot calls the enqueue API instead of the merge API for eligible PRs.
-  # The orchestrator also auto-detects this via the GitHub API, so this flag is optional
-  # and only needed to force-disable auto-detection.
-  merge_queue: auto  # auto | true | false
-
-  # Paths to user-defined workflows (relative to .github/workflows/)
-  # Override to avoid filename collisions with existing workflows
-  workflows:
-    build: pipeline-build.yml
-    publish: pipeline-publish.yml
-    quality: pipeline-quality.yml   # optional; if absent, quality checks are skipped
-
-# Initial version if no tags exist
-initial_version: 0.1.0
+name: Flywheel — PR
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+concurrency:
+  group: flywheel-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+jobs:
+  conduct:
+    if: github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/create-github-app-token@v1
+        id: app-token
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+      - uses: actions/checkout@v4
+      - uses: point-source/flywheel@v1
+        with:
+          event: pull_request
+          token: ${{ steps.app-token.outputs.token }}
 ```
 
----
+### `flywheel-push.yml` (copy as-is)
 
-## Version computation rules
+```yaml
+name: Flywheel — Push
+on:
+  push:
+    branches: ["**"]
+concurrency:
+  group: flywheel-push-${{ github.ref_name }}
+  cancel-in-progress: false
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/create-github-app-token@v1
+        id: app-token
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ steps.app-token.outputs.token }}
+      - uses: point-source/flywheel@v1
+        id: flywheel
+        with:
+          event: push
+          token: ${{ steps.app-token.outputs.token }}
+      - name: Run semantic-release
+        # Only runs when pr-conductor confirms this is a managed branch and
+        # has written a .releaserc.json. Unmanaged branch pushes exit cleanly.
+        if: steps.flywheel.outputs.managed_branch == 'true'
+        run: npx semantic-release
+        env:
+          GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
+```
 
-Version is computed **just-in-time on push to a managed branch**, never at PR-open time. This ensures the version always reflects the actual set of commits that have landed, regardless of the order PRs were opened or reviewed.
+`pr-conductor` sets `managed_branch` output to `true` when the pushed branch is found in a stream in `.flywheel.yml`, and writes `.releaserc.json` to the workspace. If the branch is not managed, it sets `managed_branch` to `false` and exits without writing any files — the semantic-release step is skipped entirely.
 
-1. Find the latest semver tag on the target branch lineage — the highest `v*` tag reachable from `main`. If none, use `initial_version` from config.
-2. Parse all conventional commits since that tag on the current branch (i.e. commits that have landed, not commits in open PRs).
-3. Determine bump:
-   - Any `BREAKING CHANGE` or `!` → MAJOR
-   - Any `feat` → MINOR
-   - Any `fix`, `perf`, etc. → PATCH
-   - `chore`, `style`, `test`, `refactor` → no version bump (no release generated)
-4. Compute pre-release identifier (applies only when triggered by push, not at PR-open time):
-   - On `develop`: append `-dev.N` where N increments from the last `-dev` tag for this base version
-   - On `staging`: append `-rc.N` where N increments from the last `-rc` tag for this base version
-   - On `main`: release version, no suffix
-5. Tag format: `v{MAJOR}.{MINOR}.{PATCH}[-{pre-release}]`
+### `build.yml` (you write this)
 
-### Why JIT versioning is correct with a merge queue
+```yaml
+name: Build
+on:
+  release:
+    types: [published]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/create-github-app-token@v1
+        id: app-token
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+      - name: Build
+        run: ./your-build-script.sh
+        env:
+          VERSION: ${{ github.event.release.tag_name }}
+          CHANGELOG: ${{ github.event.release.body }}
+      - name: Upload artifact
+        # actions/upload-release-asset is archived. Use softprops/action-gh-release
+        # or the GitHub CLI instead.
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ./dist/your-artifact
+        env:
+          GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
+```
 
-With a merge queue, PRs land in a serialized but potentially reordered sequence relative to when they were opened. A `feat` PR opened after a `fix` PR may land first if the `fix` fails queue checks and gets ejected. JIT versioning handles this correctly: whichever PR lands first gets the version computed from the commits present at that moment. The next PR to land gets a fresh computation against the updated tag. No prediction, no collision, no stale version claims in PR titles.
+### `publish.yml` (you write this)
 
-### Edge case: chore-only changes
-
-If all commits since the last tag are `chore`/`style`/`test`/`refactor` (no version bump), no release is generated. A build artifact may still be published (controlled by `publish_on_develop` / `publish_on_staging`) but no new version tag is created.
-
----
-
-## Adopter onboarding checklist
-
-1. **Install the GitHub App** and store `APP_ID` + `APP_PRIVATE_KEY` as repo secrets
-2. **Copy entrypoint workflows** (`on-pr.yml`, `on-push.yml`) into `.github/workflows/`
-3. **Create `.pipeline.yml`** — minimal config is just the `branches` flags; default is `develop: true` only
-4. **Create `pipeline-build.yml`** accepting the standard build inputs
-5. **Create `pipeline-publish.yml`** accepting the standard publish inputs
-6. *(Optional)* Create `pipeline-quality.yml` for custom quality checks; if absent, the quality gate is skipped
-7. **Configure rulesets and branch protection** per the guidance in the section below
-8. **Tag an initial version** if you have existing code: `git tag v0.1.0 && git push --tags`
+```yaml
+name: Publish
+on:
+  workflow_run:
+    workflows: [Build]
+    types: [completed]
+jobs:
+  publish:
+    if: github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download artifact
+        run: # download from release assets
+      - name: Publish
+        run: ./your-publish-script.sh
+```
 
 ---
 
 ## Branch protection and rulesets
 
-This section describes the GitHub branch protection rules and rulesets required to make the pipeline work correctly in an AI agent swarm environment. The goal is to make it structurally impossible for agents (or humans) to bypass pipeline conventions — not just policy-impossible.
+Quality checks are **not configured in `.flywheel.yml`**. Define them as normal GitHub Actions workflows and register their check names as required status checks in branch protection. Flywheel does not invoke or wait for them.
 
-### Why rulesets over classic branch protection rules
-
-Classic branch protection rules still work, but GitHub Rulesets are preferred here because:
-
-- Rulesets support **bypass actors** with fine-grained scoping — you can grant the GitHub App bot bypass permission without granting it to all admins or all users with a given role.
-- Rulesets can be applied to **tag patterns** in addition to branches, which is needed to protect the version tag namespace.
-- Rulesets are **exportable as JSON** and can be checked into the repo or managed via the GitHub API, making them reproducible across environments.
-- Multiple rulesets can stack on the same branch; you can layer a "base protection" ruleset with a "merge method enforcement" ruleset independently.
-
-Classic branch protection rules should only be used as a fallback if rulesets are unavailable on your GitHub plan tier.
-
----
-
-### Ruleset 1: Protect managed branches from direct pushes
-
-**Target pattern:** `main`, `staging`, `develop` (create all three rulesets upfront; they are inert for branches that do not yet exist)
-
-**Enforcement:** Active
-
-**Bypass actors:** GitHub App bot (the pipeline bot only — no humans, no other apps)
-
-**Rules to enable:**
-
-| Rule | Setting | Rationale |
-|---|---|---|
-| Restrict updates | Enabled | Only the bot bypass actor can push directly; everyone else must use PRs |
-| Restrict deletions | Enabled | Prevents agents from deleting managed branches |
-| Require a pull request before merging | Enabled | All changes must arrive via PR, including bot auto-merges |
-| Require status checks to pass | Enabled — add `pipeline / quality` check | Blocks merge (including bot auto-merge) if quality checks fail |
-| Block force pushes | Enabled | Prevents history rewriting on managed branches |
-| Require linear history | Enabled | Enforces squash/rebase merge only; prevents merge commits polluting conventional commit history |
-
-**Key constraint for agents:** An AI agent cannot push a branch called `main` or push directly to `main` — it must open a PR. The bot is the only actor permitted to merge without the normal PR approval flow (which it uses for auto-merges of eligible commit types).
-
----
-
-### Ruleset 2: Enforce conventional commit format on PR titles
-
-**Target pattern:** `main`, `staging`, `develop`
-
-**Enforcement:** Active
-
-**Bypass actors:** GitHub App bot
-
-**Rules to enable:**
-
-| Rule | Setting | Rationale |
-|---|---|---|
-| Require a pull request before merging → **Require conversation resolution before merging** | Enabled | Prevents merging PRs that have unresolved review comments from quality check bots |
-| Require a pull request before merging → **Dismiss stale reviews when new commits are pushed** | Enabled | An agent adding a commit to a PR that was already approved must re-trigger review; prevents stale approval being used to bypass re-check |
-
-> **Note:** GitHub does not natively enforce conventional commit format via rulesets. The pipeline enforces this at the workflow level — the `pr-lifecycle` workflow validates that all commits on the PR branch match the conventional commit pattern and fails the required status check if they do not. The ruleset's role is to make that status check non-bypassable.
-
----
-
-### Ruleset 3: Protect the version tag namespace
-
-**Target pattern:** `v*` (matches all version tags)
-
-**Enforcement:** Active
-
-**Bypass actors:** GitHub App bot only
-
-**Rules to enable:**
-
-| Rule | Setting | Rationale |
-|---|---|---|
-| Restrict creations | Enabled | Only the pipeline bot can create `v*` tags; agents cannot manually mint version tags |
-| Restrict updates | Enabled | Version tags are immutable once created (per semver spec) |
-| Restrict deletions | Enabled | Prevents tag deletion which would break version history and re-trigger release logic |
-
-This is the most important ruleset for version integrity. Without it, an agent could push `v1.2.3` to an arbitrary commit, causing the version computation logic to produce incorrect next versions.
-
----
-
-### Ruleset 4: Restrict feature branch naming (optional but recommended)
-
-**Target pattern:** All branches not matching `main`, `staging`, `develop`
-
-**Enforcement:** Active
-
-**Bypass actors:** None (applies to all actors including the bot)
-
-**Rules to enable:**
-
-| Rule | Setting | Rationale |
-|---|---|---|
-| Restrict creations — **branch name pattern** | Must match `(feat\|fix\|chore\|refactor\|perf\|style\|test\|docs)/.*` | Ensures branch names reflect their conventional commit type; makes it obvious what an agent is working on |
-
-This is optional but valuable in a swarm environment — it makes the intent of every branch machine-readable from the branch name alone, and prevents agents from creating untyped branches like `agent-work-123` that obscure what they contain.
-
----
-
-### Repository-level settings (not ruleset-based)
-
-These are set in **Settings → General** and apply repo-wide regardless of rulesets:
-
-| Setting | Value | Rationale |
-|---|---|---|
-| Allow merge commits | Disabled | Only squash and rebase allowed; prevents agents choosing merge commit method |
-| Allow squash merging | Enabled | Pipeline default merge strategy |
-| Allow rebase merging | Enabled | Available as an alternative via `pipeline.yml` config |
-| Default squash commit message | **Pull request title and description** | Ensures the PR title (which the bot sets to a conventional commit format) becomes the squash commit message on the target branch |
-| Automatically delete head branches | Enabled | Cleans up feature branches after merge; prevents agent branch accumulation |
-| Allow auto-merge | Enabled | Required for the bot to trigger GitHub's native auto-merge after setting it on eligible PRs |
-
----
-
-### GitHub App permissions required
-
-The GitHub App used as the pipeline bot must be granted the following repository permissions:
-
-| Permission | Level | Reason |
-|---|---|---|
-| Contents | Read and write | Push tags, read commits |
-| Pull requests | Read and write | Create, update, and merge PRs |
-| Checks | Read and write | Post status checks and quality results |
-| Actions | Read | Trigger and monitor workflow runs |
-| Metadata | Read | Required by GitHub for all apps |
-
-The App should **not** be granted Admin permission. It should be a bypass actor in specific rulesets, not a blanket admin. This limits the blast radius if the App's private key is ever compromised.
-
----
-
-### Summary: what agents can and cannot do
-
-| Action | Agent (human or AI) | Pipeline bot |
-|---|---|---|
-| Push directly to `main`/`staging`/`develop` | ❌ Blocked by ruleset 1 | ✅ Bypass actor |
-| Open a PR against any managed branch | ✅ Allowed | ✅ Allowed |
-| Merge a PR without passing status checks | ❌ Blocked by ruleset 1 | ❌ Also blocked (status check is required for all) |
-| Create a `v*` tag | ❌ Blocked by ruleset 3 | ✅ Bypass actor |
-| Delete a `v*` tag | ❌ Blocked by ruleset 3 | ❌ Also blocked (tags are immutable) |
-| Force-push to managed branches | ❌ Blocked by ruleset 1 | ❌ Also blocked |
-| Create a branch with a non-conventional name | ❌ Blocked by ruleset 4 (if enabled) | ✅ Bypass actor |
-| Delete a managed branch | ❌ Blocked by ruleset 1 | ❌ Also blocked |
-| Merge a PR that has unresolved bot comments | ❌ Blocked by ruleset 2 | ✅ Bypass actor (bot resolves its own comments before auto-merging) |
-
----
-
-## Merge queue
-
-### The problem: concurrent PRs in a swarm
-
-In a high-velocity agent environment, it is normal to have 5–20 PRs open against `develop` simultaneously. Without a merge queue:
-
-- PR #1 merges; PRs #2–5 are now behind by one commit
-- If branch protection requires up-to-date branches, all four must rebase before they can merge
-- Each rebase triggers a new CI run; with N PRs in flight you get O(N²) CI runs in the worst case
-- Agents rebasing against each other can create a feedback loop of re-runs
-
-### How GitHub's native merge queue solves this
-
-When merge queue is enabled on a branch, merging a PR does not happen at the moment of approval. Instead:
-
-1. The bot (or human) adds the PR to the queue via the GitHub API
-2. GitHub creates a temporary `gh-readonly-queue/{branch}/pr-{N}` branch that combines the PR with all PRs ahead of it in the queue
-3. Required status checks run against this combined state
-4. If checks pass, the PR merges in queue order; if they fail, only that PR is ejected and the queue continues
-
-No manual rebasing. No stale merges. PRs behind in the queue are automatically tested against the state that will exist when it is their turn to merge.
-
-### Interaction with the pipeline bot
-
-Without merge queue, the orchestrator calls the GitHub merge API directly for auto-eligible PRs. With merge queue, it calls the enqueue API instead. The orchestrator detects which mode is active by checking the branch's ruleset configuration via the GitHub API at runtime — no manual config flag required, though `merge_queue: true/false` in `.pipeline.yml` can override detection.
-
-For human-reviewed PRs (feat/breaking), the bot does not auto-enqueue — it leaves that to the human reviewer, who approves and then clicks "Merge when ready" (which enqueues) in the GitHub UI. The bot's job in that case is purely to run checks and post status.
-
-### Recommended merge queue configuration per branch
-
-**`develop`** — highest throughput needed, most concurrent agent PRs
-
-| Setting | Value | Rationale |
-|---|---|---|
-| Merge method | Squash | Consistent with pipeline merge strategy |
-| Build concurrency | Up to 5 PRs per group | Batching trades some isolation for throughput; suitable for `fix`/`chore` heavy branches |
-| Minimum group size | 1 | Don't wait to batch; merge as soon as a PR is ready |
-| Maximum group size | 5 | Cap batch size to keep CI time reasonable |
-| Status checks | Same as branch protection | Queue re-runs checks against combined state |
-| Only merge non-failing PRs | Enabled | Eject a failing PR without blocking the rest of the queue |
-
-**`staging`** — lower volume, higher confidence needed
-
-| Setting | Value | Rationale |
-|---|---|---|
-| Build concurrency | 1 PR per group | Staging should merge serially; each RC should be individually validated |
-| Minimum group size | 1 | |
-| Maximum group size | 1 | No batching on staging |
-
-**`main`** — production, serialize strictly
-
-| Setting | Value | Rationale |
-|---|---|---|
-| Build concurrency | 1 PR per group | One release at a time |
-| Require deployments to succeed | Enabled (staging environment) | Only merge to main if staging deployment passed |
-
-### Ruleset update: enable merge queue on managed branches
-
-Add the following to **Ruleset 1** (protect managed branches):
-
-| Rule | Setting |
-|---|---|
-| Require merge queue | Enabled on `develop`, `staging`, `main` |
-
-This makes it structurally impossible to merge directly without going through the queue, even with bypass permissions for most actors. The pipeline bot is the only bypass actor and should use the queue API, not bypass it.
-
-### Effect on versioning
-
-Merge queue does not change version computation. Each PR that exits the queue produces one squash commit on the target branch, and the push event fires normally, triggering the orchestrator's promotion and versioning logic. The queue's temporary branches (`gh-readonly-queue/...`) are ignored by the `on: push` trigger because they do not match the managed branch patterns.
-
----
-
-## Example entrypoint workflow files
-
-These two files are **identical across all adopting repos** — copy them as-is. The only thing that varies per-repo is `.pipeline.yml` and the user-defined build/publish/quality workflows. Replace `your-org/release-pipeline` with your actual orchestrator repo reference.
-
-### `.github/workflows/on-pr.yml`
+**Critical:** workflows that serve as required status checks must include **both** `pull_request` and `merge_group` triggers. Without `merge_group`, the check will not run when a PR enters the merge queue, causing the queue to stall waiting for a check that never fires.
 
 ```yaml
-# Entrypoint: pull request events on managed branches.
-# This file is identical across all adopting repos. Copy it as-is.
-# All pipeline logic lives in the orchestrator — nothing here changes
-# per-project. Per-project config belongs in .pipeline.yml.
-
-name: Pipeline — PR
-
+# Example quality check workflow
+name: Quality
 on:
   pull_request:
-    branches:
-      - main
-      - staging
-      - develop
-    types:
-      - opened
-      - synchronize  # new commit pushed to PR branch
-      - reopened
-      - ready_for_review
-
-# Cancel any in-progress run for the same PR when a new commit arrives.
-# This prevents stale quality checks from blocking an updated PR.
-concurrency:
-  group: pipeline-pr-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
-
+  merge_group: # required for merge queue compatibility
 jobs:
-  orchestrate:
-    # Skip draft PRs — agents should mark PRs ready when they want pipeline
-    # feedback. Avoids wasting CI minutes on work-in-progress.
-    if: github.event.pull_request.draft == false
-    uses: your-org/release-pipeline/.github/workflows/orchestrator.yml@v1
-    with:
-      event_type: >-
-        ${{
-          github.event.action == 'opened'      && 'pr_opened'  ||
-          github.event.action == 'reopened'    && 'pr_opened'  ||
-          github.event.action == 'synchronize' && 'pr_updated' ||
-          'pr_opened'
-        }}
-      source_branch: ${{ github.head_ref }}
-      target_branch: ${{ github.base_ref }}
-      pr_number: ${{ github.event.pull_request.number }}
-    secrets: inherit
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: ./your-test-script.sh
 ```
 
-### `.github/workflows/on-push.yml`
+The check name registered in branch protection must match the job name exactly (e.g. `test` in the example above).
 
-```yaml
-# Entrypoint: push events to managed branches.
-# Fires after a PR is merged (the merge commit lands on the branch).
-# This file is identical across all adopting repos. Copy it as-is.
-#
-# Note: this will NOT fire when the GitHub App bot pushes using
-# GITHUB_TOKEN — the bot uses its App installation token, which
-# does trigger this workflow, enabling the promotion and release
-# chain to continue automatically.
+### Ruleset 1 — Protect managed branches
 
-name: Pipeline — Push
+Target all branches listed in `.flywheel.yml`. Enable: require PRs, require status checks (add your quality check names), block force push, block deletion, require linear history. Bypass actor: GitHub App bot only.
 
-on:
-  push:
-    branches:
-      - main
-      - staging
-      - develop
+### Ruleset 2 — Merge queue
 
-# One release/promotion run per branch at a time. A second push
-# (e.g. two PRs merging in quick succession) queues rather than
-# cancels — we don't want to drop a release trigger.
-concurrency:
-  group: pipeline-push-${{ github.ref_name }}
-  cancel-in-progress: false
+Enable on all managed branches.
 
-jobs:
-  orchestrate:
-    uses: your-org/release-pipeline/.github/workflows/orchestrator.yml@v1
-    with:
-      event_type: push
-      source_branch: ${{ github.ref_name }}
-      target_branch: ${{ github.ref_name }}
-    secrets: inherit
-```
+- `develop`-style branches: batch up to 5, minimum group 1
+- Stricter branches (`main`, etc.): group size 1
 
-### Why two files instead of one
+### Ruleset 3 — Protect `v*` tag namespace
 
-A single workflow file can only have one `on:` block. While both triggers could technically be combined, keeping them separate means:
+Only the GitHub App bot may create or delete version tags. Prevents agents from minting arbitrary version tags and breaking version computation.
 
-- The `cancel-in-progress` behavior can differ: PR runs should cancel on new commits (stale checks are useless); push/release runs should queue (dropping a release trigger causes silent failures).
-- GitHub's workflow run UI labels them separately, making it easier to debug which trigger fired and why.
-- The files remain small enough that their purpose is self-evident.
+### Ruleset 4 — Branch naming (optional)
 
-### Adapting the branch trigger list
+Require feature branches to match `(feat|fix|chore|refactor|perf|style|test|docs|build|ci|revert)/.*`.
 
-The entrypoint workflows list all three branch names in their `branches:` filter. This is intentional — a branch that does not exist simply never triggers the workflow, so there is no cost to listing all three upfront. If you are certain a branch will never exist in a given repo, you can remove it from the list to make the intent explicit, but it is not required.
+---
+
+## `pr-conductor` implementation sketch
+
+TypeScript, compiled to a single bundled JavaScript file for distribution. Target ~400–500 lines of source TypeScript. Published as a marketplace Action via `action.yml` with `runs.using: node24`. The build step uses `ncc` or `esbuild` to bundle the compiled output and all dependencies into a single `dist/index.js` — the standard approach for all marketplace actions. Source is TypeScript; the compiled bundle is what GitHub executes. No Deno runtime required.
+
+### On `pull_request` event
+
+1. Read and validate `.flywheel.yml` — emit failing check and exit on validation errors
+2. Find branch entry matching `github.base_ref` — exit silently if not a managed branch
+3. Parse PR title: `type(scope)!: description` — fail check if not valid conventional commit
+4. Detect breaking flag: `!` in title OR `BREAKING CHANGE:` footer in any commit body on branch
+5. Determine increment type: breaking → major, feat → minor, fix/perf → patch, else → none
+6. Rewrite PR title to normalized format
+7. Rewrite PR body with changelog fragment, increment type, auto-merge status
+8. Construct match key: `type` or `type!` if breaking
+9. Check if match key is in branch `auto_merge` list
+10. If eligible: apply `flywheel:auto-merge` label, call GitHub API to enable auto-merge with configured merge strategy
+11. If not eligible: apply `flywheel:needs-review` label, remove `flywheel:auto-merge` label if present
+
+### On `push` event — release flow (always runs)
+
+1. Read `.flywheel.yml` — exit silently if pushed branch not in any stream
+2. Find the stream containing the pushed branch
+3. Generate `.releaserc.json` from that stream's branch array, in order
+4. Exit — semantic-release runs as the next step in `flywheel-push.yml` and picks up the generated config
+
+### On `push` event — promotion PR flow (independent of release flow)
+
+1. Read `.flywheel.yml` — find which stream contains the pushed branch
+2. If pushed branch is the last branch in its stream — exit (terminal branch; no promotion PR; does not affect whether a release occurs)
+3. Identify next branch in stream array as the promotion target
+4. Collect pending commits using commit message matching rather than SHA ancestry. Because the default `merge_strategy: squash` produces new SHAs on the target branch, SHA-based ancestry (`git log target..source`) will incorrectly show already-promoted commits as pending. Instead, Flywheel compares commit messages (conventional commit title lines) between source and target, excluding messages already present in target branch history since the last Flywheel promotion tag.
+5. If no qualifying commits (only non-bumping types since last promotion) — exit without creating or updating the promotion PR. This is intentional: chore/style/docs/etc. commits have no release significance on their own and will be included in the next promotion PR when a qualifying commit joins them. The promotion PR is a signal that something worth releasing is ready to move forward.
+6. Determine most impactful commit type from pending commits using precedence order
+7. Generate accumulated changelog from pending commits
+8. Construct promotion PR title using most impactful type
+9. Check if most impactful type is in target branch `auto_merge` list
+10. Check for existing open PR from source → target
+11. If none: create PR, apply `flywheel:auto-merge` or `flywheel:needs-review` label
+12. If exists: update title, body, and label
 
 ---
 
 ## Open questions / deferred decisions
 
-- **Quality check interface:** What inputs does `pipeline-quality.yml` receive? Likely `version`, `environment`, and `pr_number`. To be specified when quality check integration is designed.
-- **Notification hooks:** Should the pipeline post Slack/email notifications on release? Out of scope for v1, can be added as a post-publish step in user-defined `pipeline-publish.yml`.
-- **Monorepo support:** Multiple releasable packages in one repo. Not in scope for v1 — `release-please` supports this via manifest mode and could be integrated later.
-- **Release branch backport:** In `full` mode, if a `fix` merges to `main` directly (e.g. emergency), should it be automatically back-ported to `staging` and `develop`? Currently not handled — the assumption is that all changes flow bottom-up.
+- **Monorepo support:** Multiple independently versioned packages in one repo. The stream model maps directly — each package gets its own stream with an optional `path` field scoping it to a subdirectory. semantic-release manifest mode is the underlying mechanism. Deferred to v2 but the config structure is designed to accommodate it without breaking changes: `path` is simply added as an optional stream-level field.
+- **Cross-stream version collision:** Documented above as a known property of independent streams. Validation warns when multiple streams have `prerelease: false` terminal branches. Deeper tooling (e.g. a publish destination uniqueness check) is out of scope for v1.
+- **Commit message validation on feature branches:** Flywheel validates PR titles (which become squash commit messages). Individual commit messages on feature branches are not validated. A `commitlint` pre-commit hook or push-triggered check in the adopting repo fills this gap if needed.
+- **Notification hooks:** Out of scope for v1. Implement as steps in user-defined `publish.yml`.
+- **TypeScript compilation:** `pr-conductor` is authored in TypeScript and compiled to a bundled `dist/index.js` via `ncc` or `esbuild` before release. The `runs.using: node24` runtime in `action.yml` executes the bundle directly. The compilation step runs in CI on the Flywheel repo itself and the compiled output is committed or attached to the release tag. This is the standard pattern for all marketplace actions.

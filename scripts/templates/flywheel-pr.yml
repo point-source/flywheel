@@ -1,0 +1,18 @@
+name: Flywheel — PR
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+concurrency:
+  group: flywheel-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+jobs:
+  conduct:
+    if: github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: point-source/flywheel@v1
+        with:
+          event: pull_request
+          app-id: ${{ secrets.APP_ID }}
+          app-private-key: ${{ secrets.APP_PRIVATE_KEY }}
