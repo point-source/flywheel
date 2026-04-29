@@ -101,7 +101,11 @@ if [[ "${#branches[@]}" -gt 0 ]]; then
   done
 fi
 
-# 3. App-token secrets.
+# 3. App-token secrets. Listing secrets requires an admin PAT with the
+# 'secrets:read' scope; GitHub App installation tokens are NOT permitted
+# to read secrets via the API regardless of granted permissions. When the
+# listing fails, downgrade to a warning rather than a hard fail so doctor
+# can still pass when invoked with App credentials.
 bold "Repo secrets"
 if secrets_json="$(gh api "repos/$REPO/actions/secrets" 2>/dev/null)"; then
   for name in APP_ID APP_PRIVATE_KEY; do
@@ -115,7 +119,7 @@ if secrets_json="$(gh api "repos/$REPO/actions/secrets" 2>/dev/null)"; then
     warn "GH_PAT secret present — Flywheel does not use it; remove if it's left over from an older setup"
   fi
 else
-  fail "could not list repo secrets (token lacks Secrets:read scope or repo unreachable)"
+  warn "could not list repo secrets — verify APP_ID and APP_PRIVATE_KEY are set in repo Settings → Secrets and variables → Actions (App tokens cannot list secrets)"
 fi
 
 # 4. Repo settings: allow_auto_merge.
