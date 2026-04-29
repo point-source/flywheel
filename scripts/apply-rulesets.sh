@@ -92,6 +92,14 @@ if [[ -n "$REQUIRED_CHECKS" ]]; then
     '.rules += [{"type":"required_status_checks","parameters":{"required_status_checks":$checks,"strict_required_status_checks_policy":false}}]')"
 fi
 
+# Without a bypass entry the App cannot push semantic-release's version
+# commit/tag back to a managed branch (PR-only rule).
+if [[ -n "$APP_ID" ]]; then
+  managed_payload="$(echo "$managed_payload" | jq \
+    --arg app_id "$APP_ID" \
+    '.bypass_actors = [{"actor_id": ($app_id | tonumber), "actor_type": "Integration", "bypass_mode": "always"}]')"
+fi
+
 echo "$managed_payload" | gh api -X POST "/repos/$REPO/rulesets" --input -
 
 echo "Applying tag-namespace ruleset to $REPO..."
