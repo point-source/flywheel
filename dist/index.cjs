@@ -31302,9 +31302,7 @@ async function runPrFlow({ pr, config, gh, log }) {
   }
   if (eligible) {
     await gh.addLabels(pr.number, [FLYWHEEL_AUTO_MERGE_LABEL]);
-    if (pr.labels.includes(FLYWHEEL_NEEDS_REVIEW_LABEL)) {
-      await gh.removeLabel(pr.number, FLYWHEEL_NEEDS_REVIEW_LABEL);
-    }
+    await gh.removeLabel(pr.number, FLYWHEEL_NEEDS_REVIEW_LABEL);
     const method = mergeMethod(config);
     const result = await gh.enableAutoMerge(pr.nodeId, method);
     if (result.ok) {
@@ -31343,10 +31341,8 @@ async function runPrFlow({ pr, config, gh, log }) {
     };
   }
   await gh.addLabels(pr.number, [FLYWHEEL_NEEDS_REVIEW_LABEL]);
-  if (pr.labels.includes(FLYWHEEL_AUTO_MERGE_LABEL)) {
-    await gh.removeLabel(pr.number, FLYWHEEL_AUTO_MERGE_LABEL);
-    await gh.disableAutoMerge(pr.nodeId);
-  }
+  await gh.removeLabel(pr.number, FLYWHEEL_AUTO_MERGE_LABEL);
+  await gh.disableAutoMerge(pr.nodeId);
   log.info(`PR #${pr.number}: ${matchKey} not in auto_merge list for ${branch.name} \u2192 needs review.`);
   return {
     kind: "labeled",
