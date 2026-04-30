@@ -1,0 +1,111 @@
+import { describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
+
+import { loadConfig } from "../src/config.js";
+
+const fixturesDir = join(dirname(fileURLToPath(import.meta.url)), "..", "test-fixtures");
+const fx = (name: string) => readFileSync(join(fixturesDir, name), "utf8");
+
+describe("loadConfig", () => {
+  it("parses the canonical valid example", () => {
+    const result = loadConfig(fx("flywheel.valid.yml"));
+    expect(result.errors).toEqual([]);
+    expect(result.config).not.toBeNull();
+    expect(result.config!.streams).toHaveLength(2);
+    expect(result.config!.streams[0]!.name).toBe("main-line");
+    expect(result.config!.streams[0]!.branches.map((b) => b.name)).toEqual([
+      "develop",
+      "staging",
+      "main",
+    ]);
+    expect(result.config!.streams[0]!.branches[2]!.prerelease).toBeUndefined();
+    expect(result.config!.merge_strategy).toBe("squash");
+    expect(result.config!.initial_version).toBe("0.1.0");
+  });
+
+  it("flags branch in multiple streams (rule 1)", () => {
+    const result = loadConfig(fx("flywheel.dup-branch.yml"));
+    expect(result.config).toBeNull();
+    expect(result.errors.some((e) => e.includes('branch "shared" appears in multiple streams'))).toBe(true);
+  });
+
+  it("flags multiple production branches in same stream (rule 2)", () => {
+    const result = loadConfig(fx("flywheel.dup-prod-in-stream.yml"));
+    expect(result.config).toBeNull();
+    expect(
+      result.errors.some((e) =>
+        e.includes('stream "main-line": multiple branches without a prerelease identifier'),
+      ),
+    ).toBe(true);
+  });
+
+  it("flags multiple streams with terminal production branch as a hard error (rule 3, §Versioning correction)", () => {
+    const result = loadConfig(fx("flywheel.dup-prod-across-streams.yml"));
+    expect(result.config).toBeNull();
+    expect(
+      result.errors.some((e) => e.includes("multiple streams have a terminal production branch")),
+    ).toBe(true);
+  });
+
+  it("flags unrecognized auto_merge entries (rule 4)", () => {
+    const result = loadConfig(fx("flywheel.bad-type.yml"));
+    expect(result.config).toBeNull();
+    expect(result.errors.some((e) => e.includes('"flatfish" is not a recognized'))).toBe(true);
+  });
+
+  it("emits an info notice for single-branch streams (rule 5, not an error)", () => {
+    const result = loadConfig(fx("flywheel.single-branch.yml"));
+    expect(result.errors).toEqual([]);
+    expect(result.config).not.toBeNull();
+    expect(result.notices.some((n) => n.includes('stream "solo" has only one branch'))).toBe(true);
+  });
+
+  it("flags unknown keys (rule 6) — catches `auto-merge` typo", () => {
+    const result = loadConfig(fx("flywheel.unknown-key.yml"));
+    expect(result.config).toBeNull();
+    expect(result.errors.some((e) => e.includes("auto-merge: unknown key"))).toBe(true);
+  });
+
+  it("collects multiple errors into a single result (no first-error-wins)", () => {
+    const yamlText = `
+flywheel:
+  streams:
+    - name: bad-stream
+      branches:
+        - name: only
+          auto_merge: [fix, totally-not-a-type, zzz]
+`;
+    const result = loadConfig(yamlText);
+    expect(result.config).toBeNull();
+    expect(result.errors.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("errors on completely missing top-level flywheel mapping", () => {
+    const result = loadConfig("not-the-right-key:\n  streams: []\n");
+    expect(result.config).toBeNull();
+    expect(result.errors[0]).toContain("expected a top-level `flywheel:` mapping");
+  });
+
+  it("errors on malformed YAML", () => {
+    const result = loadConfig("flywheel: [\n  not yaml\n");
+    expect(result.config).toBeNull();
+    expect(result.errors[0]).toContain("failed to parse YAML");
+  });
+
+  it("rejects merge_strategy: merge with descriptive error", () => {
+    const yamlText = `
+flywheel:
+  streams:
+    - name: only
+      branches:
+        - name: main
+          auto_merge: []
+  merge_strategy: merge
+`;
+    const result = loadConfig(yamlText);
+    expect(result.config).toBeNull();
+    expect(result.errors.some((e) => e.includes('merge_strategy'))).toBe(true);
+  });
+});

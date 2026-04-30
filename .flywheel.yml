@@ -1,0 +1,23 @@
+flywheel:
+  streams:
+    - name: main-line
+      branches:
+        - name: main
+          # main is the only branch in this stream → releases happen on every
+          # qualifying push to main; no promotion PRs are created. This is
+          # intentional for the action repo: Flywheel releases the action
+          # itself, and major bumps go through human review.
+          auto_merge:
+            - feat
+            - fix
+            - fix!
+            - chore
+            - refactor
+            - perf
+            - style
+            - test
+            - docs
+            - ci
+            - build
+  merge_strategy: squash
+  initial_version: 0.1.0

@@ -1,0 +1,10 @@
+flywheel:
+  streams:
+    - name: stream-a
+      branches:
+        - name: main-a
+          auto_merge: []
+    - name: stream-b
+      branches:
+        - name: main-b
+          auto_merge: []

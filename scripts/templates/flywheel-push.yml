@@ -1,0 +1,40 @@
+name: Flywheel — Push
+on:
+  push:
+    branches: ["**"]
+concurrency:
+  group: flywheel-push-${{ github.ref_name }}
+  cancel-in-progress: false
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          # Don't persist the workflow's default GITHUB_TOKEN as a git
+          # extraheader — it would shadow the App installation token that
+          # semantic-release embeds in its push URL, and the workflow's
+          # token only has read scope here.
+          persist-credentials: false
+      - uses: point-source/flywheel@v1
+        id: flywheel
+        with:
+          event: push
+          app-id: ${{ secrets.APP_ID }}
+          app-private-key: ${{ secrets.APP_PRIVATE_KEY }}
+      - name: Run semantic-release
+        if: steps.flywheel.outputs.managed_branch == 'true'
+        # Plugins must be co-installed; npx will not resolve them from the
+        # generated .releaserc.json on its own.
+        run: |
+          npx --yes \
+            -p semantic-release@24 \
+            -p @semantic-release/commit-analyzer \
+            -p @semantic-release/release-notes-generator \
+            -p @semantic-release/changelog \
+            -p @semantic-release/git \
+            -p @semantic-release/github \
+            semantic-release
+        env:
+          GITHUB_TOKEN: ${{ steps.flywheel.outputs.token }}
