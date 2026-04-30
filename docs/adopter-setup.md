@@ -11,7 +11,7 @@ Step-by-step guide to wiring Flywheel into your repository.
 
 ## Quick start (one command)
 
-If you have `gh`, `jq`, and `yq` installed and you're in your repo with `gh auth login` already done, the steps below collapse to:
+If you have `gh`, `jq`, and `python3` (with `PyYAML`) installed and you're in your repo with `gh auth login` already done, the steps below collapse to:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/point-source/flywheel/v1/scripts/init.sh | bash
@@ -42,7 +42,7 @@ Install the App on your repo. Then store its credentials as repo secrets:
 - `APP_ID` — the numeric App ID (visible on the App's settings page).
 - `APP_PRIVATE_KEY` — the PEM-format private key downloaded from the App settings.
 
-Each Flywheel workflow mints a short-lived installation token at the start of the job via [`actions/create-github-app-token`](https://github.com/actions/create-github-app-token); see the workflow YAML in §3 below.
+Pass these straight into the Flywheel action via the `app-id` and `app-private-key` inputs (see the workflow YAML in §3). The action mints its own short-lived installation token internally and validates that the App's granted permissions match the list above — if anything is missing it fails fast with a friendly error pointing you at the App settings. You do not need a separate `actions/create-github-app-token` step.
 
 ## 2. Add `.flywheel.yml`
 
@@ -122,16 +122,12 @@ jobs:
     if: github.event.pull_request.draft == false
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/create-github-app-token@v1
-        id: app-token
-        with:
-          app-id: ${{ secrets.APP_ID }}
-          private-key: ${{ secrets.APP_PRIVATE_KEY }}
       - uses: actions/checkout@v4
       - uses: point-source/flywheel@v1
         with:
           event: pull_request
-          token: ${{ steps.app-token.outputs.token }}
+          app-id: ${{ secrets.APP_ID }}
+          app-private-key: ${{ secrets.APP_PRIVATE_KEY }}
 ```
 
 Create `.github/workflows/flywheel-push.yml`:
@@ -148,26 +144,38 @@ jobs:
   release:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/create-github-app-token@v1
-        id: app-token
-        with:
-          app-id: ${{ secrets.APP_ID }}
-          private-key: ${{ secrets.APP_PRIVATE_KEY }}
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          token: ${{ steps.app-token.outputs.token }}
+          # Don't persist the workflow's default GITHUB_TOKEN as a git
+          # extraheader — it would shadow the App installation token that
+          # semantic-release embeds in its push URL, and the workflow's
+          # token only has read scope here.
+          persist-credentials: false
       - uses: point-source/flywheel@v1
         id: flywheel
         with:
           event: push
-          token: ${{ steps.app-token.outputs.token }}
+          app-id: ${{ secrets.APP_ID }}
+          app-private-key: ${{ secrets.APP_PRIVATE_KEY }}
       - name: Run semantic-release
         if: steps.flywheel.outputs.managed_branch == 'true'
-        run: npx semantic-release@24
+        # Plugins must be co-installed; npx will not resolve them from the
+        # generated .releaserc.json on its own (else MODULE_NOT_FOUND).
+        run: |
+          npx --yes \
+            -p semantic-release@24 \
+            -p @semantic-release/commit-analyzer \
+            -p @semantic-release/release-notes-generator \
+            -p @semantic-release/changelog \
+            -p @semantic-release/git \
+            -p @semantic-release/github \
+            semantic-release
         env:
-          GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
+          GITHUB_TOKEN: ${{ steps.flywheel.outputs.token }}
 ```
+
+Both files are also available verbatim under [`scripts/templates/`](../scripts/templates/) in the Flywheel repo — `init.sh` writes them for you in the quick-start path.
 
 ## 4. Add your build and publish workflows
 
@@ -243,12 +251,12 @@ jobs:
 
 ### Recommended rulesets
 
-1. **Protect managed branches** — target every branch listed in `.flywheel.yml`. Require PRs, require status checks (your quality check names), block force push, block deletion, require linear history. Bypass actor: your Flywheel GitHub App.
+1. **Protect managed branches** — target every branch listed in `.flywheel.yml`. Require PRs, require status checks (your quality check names), block force push, block deletion, require linear history. **Bypass actor: your Flywheel GitHub App, in `bypass_mode: always` — required.** Without this, `semantic-release` cannot push the version commit + tag back to the managed branch (the PR-only rule rejects it) and every release fails with `EGITNOPERMISSION`.
 2. **Merge queue** on managed branches. Stricter branches (`main`) use group size 1; `develop`-style branches can batch up to 5.
-3. **Protect `v*` tag namespace** — only the bot may create or delete version tags. Prevents agents from minting arbitrary version tags.
+3. **Protect `v*` tag namespace** — only the bot may create or delete version tags. Prevents agents from minting arbitrary version tags. The App is added as a bypass actor here too so it can mint the release tag.
 4. **Branch naming (optional)** — require feature branches to match `(feat|fix|chore|refactor|perf|style|test|docs|build|ci|revert)/.*`.
 
-The first and third rulesets can be applied in one command:
+The first and third rulesets can be applied in one command. **Pass `--app-id` — it's mandatory**, not optional:
 
 ```bash
 scripts/apply-rulesets.sh <owner/repo> --required-checks "Quality" --app-id <your-app-id>
@@ -284,7 +292,13 @@ Merge the PR. On the resulting push, confirm:
 
 **Got `flywheel:needs-review` but expected `flywheel:auto-merge`.** Compare the PR's commit type (with `!` if breaking) against the target branch's `auto_merge` list. `fix!` only matches if `fix!` is listed explicitly — listing `fix` doesn't imply `fix!`.
 
-**Native auto-merge wasn't enabled even though the PR got `flywheel:auto-merge`.** Either the branch doesn't have native auto-merge enabled (check **Settings → General → Pull Requests → Allow auto-merge**), the App lacks **Pull requests: write**, or the workflow is reading `secrets.GITHUB_TOKEN` instead of an App installation token. `doctor.sh` flags all three.
+**Native auto-merge wasn't enabled even though the PR got `flywheel:auto-merge`.** Either the branch doesn't have native auto-merge enabled (check **Settings → General → Pull Requests → Allow auto-merge**), the App lacks **Pull requests: write**, or you're passing a `secrets.GITHUB_TOKEN` somewhere instead of the App credentials (`app-id` / `app-private-key`). `doctor.sh` flags all three. Note: if your repo has no required status checks, the GraphQL `enableAutoMerge` mutation refuses with "Pull request is in clean status" — Flywheel falls through to a direct REST merge, so the PR still merges; the label stays applied.
+
+**Release job failed with `EGITNOPERMISSION` / "denied to github-actions[bot]".** Two distinct causes:
+- The branch ruleset doesn't list the App as a bypass actor — re-run `scripts/apply-rulesets.sh <owner/repo> --app-id <id>`.
+- `actions/checkout@v4` was invoked without `persist-credentials: false`. The default behavior writes the workflow's GITHUB_TOKEN into git's `extraheader`, which shadows the App token semantic-release embeds in its push URL. Use the workflow YAML in §3 verbatim — the flag is already set.
+
+**Release job failed with `MODULE_NOT_FOUND` for `@semantic-release/changelog` (or similar).** `npx semantic-release@24` alone doesn't auto-resolve plugins from the generated `.releaserc.json`. The §3 YAML co-installs them with `npx -p` flags — copy it verbatim.
 
 **Promotion PR didn't appear after merging to a non-terminal branch.** Either the branch is the terminal (last) branch in its stream — terminal branches release but don't promote — or the pending commits are all non-bumping types (`chore`, `style`, `docs`, `test`, `ci`, `build`, `refactor`). Promotion PRs only open when something with release significance is ready to move forward; the non-bumping commits will be included in the next promotion.
 
