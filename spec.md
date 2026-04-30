@@ -20,7 +20,7 @@ Flywheel is not a long-running orchestrator. It is a collection of short-lived, 
 
 **Version numbers are stream-scoped.** Within a stream, the base version is consistent across all branches — `v1.3.0-dev.2`, `v1.3.0-rc.1`, and `v1.3.0` all represent the same logical release. Across streams, versions are computed independently and may collide if streams share a publish destination. See the versioning section for implications and guidance.
 
-**Minimal permissions footprint.** Most operations use `GITHUB_TOKEN`. A GitHub App installation token is required only for creating PRs that trigger downstream workflows and pushing tags from workflow context.
+**Minimal permissions footprint.** A single GitHub App installation token does all the work. Adopters store the App's `app-id` and `app-private-key` as repo secrets; the action mints a short-lived installation token internally and validates the granted permissions before doing anything. The default workflow `GITHUB_TOKEN` isn't sufficient — a bot-created PR opened with `GITHUB_TOKEN` does not trigger downstream workflows, and native auto-merge enabled with `GITHUB_TOKEN` does not propagate to the merge-queue.
 
 **One config file.** `.flywheel.yml` in the adopting repo is the single source of truth for branch topology, auto-merge rules, and pipeline behavior. Flywheel derives everything else — including semantic-release configuration — from it at runtime.
 
@@ -30,7 +30,7 @@ Flywheel is not a long-running orchestrator. It is a collection of short-lived, 
 
 ### 1. `pr-conductor` (Flywheel's only custom code)
 
-A TypeScript GitHub Action, published to the GitHub Actions marketplace as `point-source/flywheel@v1`. Implemented with Deno for native TypeScript execution without a compilation step.
+A TypeScript GitHub Action, published to the GitHub Actions marketplace as `point-source/flywheel@v1`. Authored in TypeScript and bundled to a single `dist/index.cjs` via esbuild; runs on the `node24` Action runtime. See "Implementation sketch" below.
 
 Reacts to `pull_request` events and `push` events on managed branches. It is stateless — reads `.flywheel.yml`, reads/writes the PR or repo state, and exits. Holds no state between runs.
 
@@ -40,8 +40,9 @@ Responsibilities:
 - Rewrite PR title and body with changelog fragment and increment type
 - Evaluate auto-merge eligibility against `.flywheel.yml` for the target branch
 - Apply `flywheel:auto-merge` or `flywheel:needs-review` label
-- Enable GitHub's native auto-merge when eligible
+- Enable GitHub's native auto-merge when eligible; if the GraphQL mutation refuses (typically because the PR is in clean state and the repo has no required checks), fall through to a direct REST merge so adopters without required checks aren't stuck
 - On push to a non-terminal branch in a stream, upsert the promotion PR to the next branch in the stream
+- Mint its own short-lived installation token from the App credentials passed in (`app-id` + `app-private-key` inputs); validate that the granted permissions cover what Flywheel needs and fail fast with a friendly error otherwise
 
 ### 2. semantic-release
 
@@ -415,9 +416,11 @@ A GitHub App with:
 
 - Contents: read and write (tag creation, `.releaserc.json` write)
 - Pull requests: read and write (PR creation, body/label updates, auto-merge)
-- Metadata: read
+- Issues: read and write (label add/remove on PRs)
+- Checks: read and write (post the `flywheel/conventional-commit` check)
+- Metadata: read (always required)
 
-Store the App credentials as `APP_ID` + `APP_PRIVATE_KEY` repo secrets. Each workflow mints a short-lived installation token at the start of the job via [`actions/create-github-app-token`](https://github.com/actions/create-github-app-token).
+Store the App credentials as `APP_ID` + `APP_PRIVATE_KEY` repo secrets and pass them straight into the Flywheel action via the `app-id` and `app-private-key` inputs. The action mints its own installation token internally, validates that the granted permissions match the list above, and exposes the token as a step output for downstream steps that need it (e.g. semantic-release). Adopters do **not** add a separate `actions/create-github-app-token` step.
 
 Personal Access Tokens are not supported — they don't reliably propagate the cross-workflow trigger semantics Flywheel relies on (in particular, native auto-merge enable and downstream workflow firing on bot-created PRs).
 
@@ -449,16 +452,12 @@ jobs:
     if: github.event.pull_request.draft == false
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/create-github-app-token@v1
-        id: app-token
-        with:
-          app-id: ${{ secrets.APP_ID }}
-          private-key: ${{ secrets.APP_PRIVATE_KEY }}
       - uses: actions/checkout@v4
       - uses: point-source/flywheel@v1
         with:
           event: pull_request
-          token: ${{ steps.app-token.outputs.token }}
+          app-id: ${{ secrets.APP_ID }}
+          app-private-key: ${{ secrets.APP_PRIVATE_KEY }}
 ```
 
 ### `flywheel-push.yml` (copy as-is)
@@ -475,27 +474,37 @@ jobs:
   release:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/create-github-app-token@v1
-        id: app-token
-        with:
-          app-id: ${{ secrets.APP_ID }}
-          private-key: ${{ secrets.APP_PRIVATE_KEY }}
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          token: ${{ steps.app-token.outputs.token }}
+          # Don't persist the workflow's default GITHUB_TOKEN as a git
+          # extraheader — it would shadow the App installation token that
+          # semantic-release embeds in its push URL, and the workflow's
+          # token only has read scope here.
+          persist-credentials: false
       - uses: point-source/flywheel@v1
         id: flywheel
         with:
           event: push
-          token: ${{ steps.app-token.outputs.token }}
+          app-id: ${{ secrets.APP_ID }}
+          app-private-key: ${{ secrets.APP_PRIVATE_KEY }}
       - name: Run semantic-release
         # Only runs when pr-conductor confirms this is a managed branch and
         # has written a .releaserc.json. Unmanaged branch pushes exit cleanly.
         if: steps.flywheel.outputs.managed_branch == 'true'
-        run: npx semantic-release
+        # Plugins must be co-installed; npx will not resolve them from the
+        # generated .releaserc.json on its own (else MODULE_NOT_FOUND).
+        run: |
+          npx --yes \
+            -p semantic-release@24 \
+            -p @semantic-release/commit-analyzer \
+            -p @semantic-release/release-notes-generator \
+            -p @semantic-release/changelog \
+            -p @semantic-release/git \
+            -p @semantic-release/github \
+            semantic-release
         env:
-          GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
+          GITHUB_TOKEN: ${{ steps.flywheel.outputs.token }}
 ```
 
 `pr-conductor` sets `managed_branch` output to `true` when the pushed branch is found in a stream in `.flywheel.yml`, and writes `.releaserc.json` to the workspace. If the branch is not managed, it sets `managed_branch` to `false` and exits without writing any files — the semantic-release step is skipped entirely.
@@ -577,7 +586,7 @@ The check name registered in branch protection must match the job name exactly (
 
 ### Ruleset 1 — Protect managed branches
 
-Target all branches listed in `.flywheel.yml`. Enable: require PRs, require status checks (add your quality check names), block force push, block deletion, require linear history. Bypass actor: GitHub App bot only.
+Target all branches listed in `.flywheel.yml`. Enable: require PRs, require status checks (add your quality check names), block force push, block deletion, require linear history. **Bypass actor: the Flywheel GitHub App, in `bypass_mode: always` — required.** Without this, semantic-release's push of the version commit and tag back to a managed branch is rejected by the "changes must be made through a pull request" rule and every release fails with `EGITNOPERMISSION`. `scripts/apply-rulesets.sh --app-id <id>` writes this for you.
 
 ### Ruleset 2 — Merge queue
 
@@ -598,7 +607,7 @@ Require feature branches to match `(feat|fix|chore|refactor|perf|style|test|docs
 
 ## `pr-conductor` implementation sketch
 
-TypeScript, compiled to a single bundled JavaScript file for distribution. Target ~400–500 lines of source TypeScript. Published as a marketplace Action via `action.yml` with `runs.using: node24`. The build step uses `ncc` or `esbuild` to bundle the compiled output and all dependencies into a single `dist/index.js` — the standard approach for all marketplace actions. Source is TypeScript; the compiled bundle is what GitHub executes. No Deno runtime required.
+TypeScript, compiled to a single bundled JavaScript file for distribution. Published as a marketplace Action via `action.yml` with `runs.using: node24`. The build step uses `esbuild` to bundle the compiled output and all dependencies into a single `dist/index.cjs` — the standard approach for all marketplace actions. Source is TypeScript; the compiled bundle is what GitHub executes.
 
 ### On `pull_request` event
 
@@ -611,8 +620,8 @@ TypeScript, compiled to a single bundled JavaScript file for distribution. Targe
 7. Rewrite PR body with changelog fragment, increment type, auto-merge status
 8. Construct match key: `type` or `type!` if breaking
 9. Check if match key is in branch `auto_merge` list
-10. If eligible: apply `flywheel:auto-merge` label, call GitHub API to enable auto-merge with configured merge strategy
-11. If not eligible: apply `flywheel:needs-review` label, remove `flywheel:auto-merge` label if present
+10. If eligible: apply `flywheel:auto-merge` label and call GraphQL `enablePullRequestAutoMerge`. If the mutation refuses (typical when the PR is in clean state because the repo has no required checks), fall through to a direct REST `pulls.merge` so the PR still merges. If both fail, leave the label applied, log a warning, and exit cleanly — the PR remains queryable for manual action.
+11. If not eligible: apply `flywheel:needs-review` label, remove `flywheel:auto-merge` label if present, disable native auto-merge on the PR
 
 ### On `push` event — release flow (always runs)
 
@@ -644,4 +653,4 @@ TypeScript, compiled to a single bundled JavaScript file for distribution. Targe
 - **Cross-stream version collision:** Documented above as a known property of independent streams. Validation warns when multiple streams have `prerelease: false` terminal branches. Deeper tooling (e.g. a publish destination uniqueness check) is out of scope for v1.
 - **Commit message validation on feature branches:** Flywheel validates PR titles (which become squash commit messages). Individual commit messages on feature branches are not validated. A `commitlint` pre-commit hook or push-triggered check in the adopting repo fills this gap if needed.
 - **Notification hooks:** Out of scope for v1. Implement as steps in user-defined `publish.yml`.
-- **TypeScript compilation:** `pr-conductor` is authored in TypeScript and compiled to a bundled `dist/index.js` via `ncc` or `esbuild` before release. The `runs.using: node24` runtime in `action.yml` executes the bundle directly. The compilation step runs in CI on the Flywheel repo itself and the compiled output is committed or attached to the release tag. This is the standard pattern for all marketplace actions.
+- **TypeScript compilation:** `pr-conductor` is authored in TypeScript and compiled to a bundled `dist/index.cjs` via `esbuild` before release. The `runs.using: node24` runtime in `action.yml` executes the bundle directly. The compiled output is committed alongside the source so marketplace consumers don't need a build step; a `verify-dist` CI job checks for drift between source and bundle on every PR.
