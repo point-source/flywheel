@@ -1,18 +1,16 @@
-name: E2E tests
+name: Integration tests
 on:
+  pull_request:
   push:
-    branches: ["develop"]
+    branches: ["develop", "main"]
   workflow_dispatch:
 
-concurrency:
-  group: e2e-${{ github.ref }}
-  cancel-in-progress: false
-
 jobs:
-  e2e:
+  integration:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
-    if: ${{ github.event.repository.fork == false }}
+    # Skip on PRs from forks: the App secrets are not exposed to fork PRs
+    # and the suite would skip every test anyway. Save the CI minutes.
+    if: ${{ github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -22,6 +20,9 @@ jobs:
 
       # Mint a short-lived installation token from the flywheel-build-e2e
       # GitHub App, scoped to point-source/flywheel-sandbox only.
+      # Required secrets in this repo:
+      #   E2E_APP_ID          — flywheel-build-e2e App ID
+      #   E2E_APP_PRIVATE_KEY — flywheel-build-e2e App private key (PEM)
       - name: Mint sandbox installation token
         id: app-token
         uses: actions/create-github-app-token@v1
@@ -31,12 +32,7 @@ jobs:
           owner: point-source
           repositories: flywheel-sandbox
 
-      - name: Pre-flight (doctor.sh against sandbox)
-        env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
-        run: ./scripts/doctor.sh point-source/flywheel-sandbox
-
-      - name: Run e2e suite
+      - name: Run integration tests
         env:
           SANDBOX_GH_TOKEN: ${{ steps.app-token.outputs.token }}
-        run: npm run test:e2e
+        run: npm run test:integration
