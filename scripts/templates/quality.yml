@@ -1,0 +1,32 @@
+# Quality — example PR + merge-queue compatible quality check.
+#
+# This is a starter template, NOT a workflow Flywheel installs or invokes.
+# Copy it to .github/workflows/quality.yml and replace the placeholder
+# `your-test-script.sh` with your real test command(s).
+#
+# Why both pull_request AND merge_group:
+#   If you register this workflow as a required status check on a branch
+#   that uses GitHub's merge queue, the merge_group trigger is what fires
+#   the check inside the queue. Without it, the queue stalls forever
+#   waiting for a check that never runs against the merge group's
+#   speculative commit.
+#
+# Keep the job NAME stable — that's what you list in the ruleset under
+# "Required status checks". Renaming the job here means re-pointing every
+# ruleset that references it.
+name: Quality
+on:
+  pull_request:
+  merge_group:    # required for merge-queue compatibility
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Replace this with your real test invocation. If you have multiple
+      # check types (lint, typecheck, unit, integration), it's fine to
+      # split them into separate jobs in this same file — each becomes its
+      # own required check. Keep the file's `name:` field above stable so
+      # ruleset references don't drift.
+      - name: Test
+        run: ./your-test-script.sh

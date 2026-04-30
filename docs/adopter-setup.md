@@ -242,6 +242,17 @@ Flywheel does not invoke or wait for your quality checks — register them yours
 
 **Critical:** any workflow used as a required status check **must include both** `pull_request` and `merge_group` triggers. Without `merge_group`, the merge queue stalls waiting for a check that never fires.
 
+A copy-paste starter ships at [`scripts/templates/quality.yml`](https://github.com/point-source/flywheel/blob/v1/scripts/templates/quality.yml) — fetch it directly into your repo:
+
+```bash
+mkdir -p .github/workflows
+curl -fsSL https://raw.githubusercontent.com/point-source/flywheel/v1/scripts/templates/quality.yml \
+  -o .github/workflows/quality.yml
+# then edit the run line to call your real test command
+```
+
+Or write it inline:
+
 ```yaml
 name: Quality
 on:
