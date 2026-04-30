@@ -122,6 +122,89 @@ for wf in flywheel-pr.yml flywheel-push.yml; do
 done
 
 # 3. App-token secrets.
+locate_create_script() {
+  if [[ -n "$LOCAL_TEMPLATES" ]]; then
+    local sibling="$SCRIPT_DIR/create-flywheel-app.py"
+    if [[ -f "$sibling" ]]; then
+      echo "$sibling"
+      return 0
+    fi
+  fi
+  local tmp
+  tmp="$(mktemp)"
+  if curl -fsSL "https://raw.githubusercontent.com/point-source/flywheel/v1/scripts/create-flywheel-app.py" -o "$tmp" 2>/dev/null; then
+    echo "$tmp"
+    return 0
+  fi
+  return 1
+}
+
+create_app_via_manifest() {
+  local create_script
+  if ! create_script="$(locate_create_script)"; then
+    echo "  error: could not locate or fetch create-flywheel-app.py — falling back to manual setup." >&2
+    return 1
+  fi
+  local owner="${REPO%%/*}"
+  local repo_name="${REPO##*/}"
+  local org_flag=""
+  if [[ "$(gh api "users/$owner" --jq .type 2>/dev/null)" == "Organization" ]]; then
+    org_flag="--org"
+  fi
+  echo
+  echo "  Creating a GitHub App named 'Flywheel for $repo_name'..."
+  local result
+  if ! result="$(python3 "$create_script" "$owner" $org_flag --app-name "Flywheel for $repo_name")"; then
+    echo "  error: App creation failed." >&2
+    return 1
+  fi
+  local app_id pem html_url
+  app_id="$(echo "$result" | python3 -c 'import json,sys;print(json.load(sys.stdin)["id"])')"
+  pem="$(echo "$result" | python3 -c 'import json,sys;print(json.load(sys.stdin)["pem"])')"
+  html_url="$(echo "$result" | python3 -c 'import json,sys;print(json.load(sys.stdin)["html_url"])')"
+  gh secret set APP_ID --body "$app_id" --repo "$REPO"
+  printf '%s' "$pem" | gh secret set APP_PRIVATE_KEY --repo "$REPO"
+  echo "  set APP_ID + APP_PRIVATE_KEY secrets."
+  echo
+  echo "  Final manual step: install the App on $REPO."
+  echo "    Open: $html_url/installations/new"
+  echo "    Choose 'Only select repositories' → $repo_name and click Install."
+  echo "    Without installation, the App's tokens have no repo access."
+  if [[ -t 0 ]]; then
+    read -r -p "  Press ENTER once installation is complete..."
+  fi
+  return 0
+}
+
+prompt_existing_app_credentials() {
+  cat <<EOF
+  If you haven't created the App yet, follow:
+    https://docs.github.com/en/apps/creating-github-apps/about-creating-github-apps/creating-a-github-app
+  Required permissions: Contents r/w, Pull requests r/w, Issues r/w,
+  Checks r/w, Metadata r. Install on $REPO.
+EOF
+  if [[ "$has_app_id" -eq 0 ]]; then
+    read -r -p "  GitHub App ID (numeric): " app_id
+    if [[ -z "$app_id" ]]; then
+      echo "  empty App ID — skipping APP_ID secret."
+    else
+      gh secret set APP_ID --body "$app_id" --repo "$REPO"
+      echo "  set APP_ID secret."
+    fi
+  fi
+  if [[ "$has_app_key" -eq 0 ]]; then
+    read -r -p "  Path to private-key PEM file: " pem_path
+    if [[ -z "$pem_path" ]]; then
+      echo "  empty path — skipping APP_PRIVATE_KEY secret."
+    elif [[ ! -f "$pem_path" ]]; then
+      echo "  error: PEM file not found at '$pem_path' — skipping APP_PRIVATE_KEY secret." >&2
+    else
+      gh secret set APP_PRIVATE_KEY --repo "$REPO" < "$pem_path"
+      echo "  set APP_PRIVATE_KEY secret."
+    fi
+  fi
+}
+
 if [[ "$SKIP_SECRETS" -eq 1 ]]; then
   echo "  --skip-secrets set; not touching repo secrets."
 else
@@ -132,40 +215,28 @@ else
 
   if [[ "$has_app_id" -eq 1 && "$has_app_key" -eq 1 ]]; then
     echo "  APP_ID + APP_PRIVATE_KEY secrets already set."
+  elif [[ ! -t 0 ]]; then
+    echo "  non-interactive shell — skipping secret prompts. Set APP_ID + APP_PRIVATE_KEY manually:"
+    echo "    gh secret set APP_ID --body '<your-app-id>' --repo $REPO"
+    echo "    gh secret set APP_PRIVATE_KEY < /path/to/private-key.pem --repo $REPO"
   else
-    if [[ ! -t 0 ]]; then
-      echo "  non-interactive shell — skipping secret prompts. Set APP_ID + APP_PRIVATE_KEY manually:"
-      echo "    gh secret set APP_ID --body '<your-app-id>' --repo $REPO"
-      echo "    gh secret set APP_PRIVATE_KEY < /path/to/private-key.pem --repo $REPO"
-    else
-      cat <<EOF
-  Flywheel uses a GitHub App installation token (PATs are not supported).
-  If you haven't created the App yet, follow:
-    https://docs.github.com/en/apps/creating-github-apps/about-creating-github-apps/creating-a-github-app
-  Required scopes: Contents r/w, Pull requests r/w, Issues r/w, Checks r/w,
-  Metadata r. Install on $REPO.
-EOF
-      if [[ "$has_app_id" -eq 0 ]]; then
-        read -r -p "  GitHub App ID (numeric): " app_id
-        if [[ -z "$app_id" ]]; then
-          echo "  empty App ID — skipping APP_ID secret."
-        else
-          gh secret set APP_ID --body "$app_id" --repo "$REPO"
-          echo "  set APP_ID secret."
+    echo
+    echo "  Flywheel needs a GitHub App for installation tokens. Pick a setup path:"
+    echo "    1) Create the App for me  — opens browser, ~30s round-trip"
+    echo "    2) I have an App already — paste credentials manually"
+    echo "    3) Skip — I'll set the secrets later"
+    read -r -p "  Selection [1/2/3] (default 1): " app_choice
+    case "${app_choice:-1}" in
+      1)
+        if ! create_app_via_manifest; then
+          echo "  Falling back to manual prompts."
+          prompt_existing_app_credentials
         fi
-      fi
-      if [[ "$has_app_key" -eq 0 ]]; then
-        read -r -p "  Path to private-key PEM file: " pem_path
-        if [[ -z "$pem_path" ]]; then
-          echo "  empty path — skipping APP_PRIVATE_KEY secret."
-        elif [[ ! -f "$pem_path" ]]; then
-          echo "  error: PEM file not found at '$pem_path' — skipping APP_PRIVATE_KEY secret." >&2
-        else
-          gh secret set APP_PRIVATE_KEY --repo "$REPO" < "$pem_path"
-          echo "  set APP_PRIVATE_KEY secret."
-        fi
-      fi
-    fi
+        ;;
+      2) prompt_existing_app_credentials ;;
+      3) echo "  Skipped — set APP_ID and APP_PRIVATE_KEY before any Flywheel workflow runs." ;;
+      *) echo "  invalid selection — skipping." ;;
+    esac
   fi
 fi
 
