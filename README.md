@@ -13,7 +13,7 @@ It is **not** a long-running orchestrator. It is a collection of short-lived, si
 - On every push to a managed branch, generates `.releaserc.json` and gates a separate `semantic-release` step that computes the version, tags, and creates a GitHub Release.
 - On every push to a non-terminal branch in a stream, upserts a single open promotion PR to the next branch in the stream.
 
-Build and publish steps are **not** owned by Flywheel — they are workflows you write that react to the `release: published` and `workflow_run: [Build] completed` events Flywheel produces. A 30-minute mobile build incurs no waiting cost on the Flywheel pipeline side.
+What Flywheel does **not** own: your quality checks, your build, your publish. You write those as separate workflows. Quality checks register as required status checks on managed branches (and must subscribe to both `pull_request` and `merge_group` to be merge-queue compatible). Build and publish react to the `release: published` and `workflow_run: [Build] completed` events Flywheel produces — a 30-minute mobile build incurs no waiting cost on the Flywheel pipeline side.
 
 ## Quick start
 
@@ -37,6 +37,7 @@ your-repo/
 └── .github/workflows/
     ├── flywheel-pr.yml              ← copy from docs/adopter-setup.md
     ├── flywheel-push.yml            ← copy from docs/adopter-setup.md
+    ├── quality.yml                  ← you write: on: pull_request + merge_group
     ├── build.yml                    ← you write: on: release published
     └── publish.yml                  ← you write: on: workflow_run
 ```
