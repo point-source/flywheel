@@ -148,8 +148,8 @@ for wf in flywheel-pr.yml flywheel-push.yml; do
     fail "$path missing in $REPO"
     continue
   fi
-  if echo "$content" | grep -q "point-source/flywheel@"; then
-    ok "$path references point-source/flywheel@..."
+  if echo "$content" | grep -qE "point-source/flywheel@|uses:[[:space:]]*\./"; then
+    ok "$path references the flywheel action"
   else
     fail "$path exists but does not reference point-source/flywheel@<version>"
   fi
