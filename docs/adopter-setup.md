@@ -29,7 +29,9 @@ The rest of this document is the manual walkthrough — useful if you want to un
 
 Flywheel uses a GitHub App installation token. Personal Access Tokens are not supported — they don't reliably propagate the cross-workflow trigger semantics Flywheel relies on (in particular, native auto-merge enable and downstream workflow firing on bot-created PRs).
 
-Follow GitHub's [Creating a GitHub App](https://docs.github.com/en/apps/creating-github-apps/about-creating-github-apps/creating-a-github-app) guide. Required permissions:
+**Fastest path: let `init.sh` do it.** The quick-start command (§Quick start) opens a browser to GitHub's App-creation page pre-populated with the required permissions, captures the credentials on a localhost callback, and writes them as repo secrets — about 30 seconds end to end. The only remaining manual step is clicking "Install" on the resulting App page to scope it to your repo. If that's all you need, skip the rest of this section.
+
+If you'd rather create the App by hand: follow GitHub's [Creating a GitHub App](https://docs.github.com/en/apps/creating-github-apps/about-creating-github-apps/creating-a-github-app) guide with these permissions:
 
 - **Contents: read and write** — tag creation, `.releaserc.json` write
 - **Pull requests: read and write** — PR creation, body updates, auto-merge
