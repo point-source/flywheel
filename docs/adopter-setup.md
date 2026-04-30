@@ -292,7 +292,61 @@ scripts/apply-rulesets.sh <owner/repo> --required-checks "Quality" --app-id <you
 
 (Or via `curl -fsSL https://raw.githubusercontent.com/point-source/flywheel/v1/scripts/apply-rulesets.sh | bash -s -- <owner/repo>` if you don't have the Flywheel repo checked out.)
 
-## 6. Verify
+## 6. Brief your AI coding agents
+
+Skip this section if no AI agents (Claude Code, Cursor, Copilot, Codex, internal swarms) open PRs in this repo.
+
+If they do, they will produce more compliant PRs if you tell them about Flywheel's rules in their instruction file — typically `CLAUDE.md`, `AGENTS.md`, or `.cursorrules` at the repo root. Without this, agents reliably invent branch names, write free-form PR titles, target the wrong branch, or try to mint their own version tags — and Flywheel dutifully labels every one of those PRs `flywheel:needs-review` until a human untangles it. With dozens or hundreds of concurrent agent-driven PRs, those wasted round-trips also burn GitHub Actions minutes (see [§5 Cost control under high PR volume](#cost-control-under-high-pr-volume)).
+
+Paste the snippet below into your agent instruction file (rename / reformat as your tool expects). The bracketed placeholders split into two groups — three are mechanically derivable from `.flywheel.yml`, two require values that live outside Flywheel's config:
+
+| Placeholder | Source | How to fill it in |
+| --- | --- | --- |
+| `<DEFAULT_TARGET_BRANCH>` | `.flywheel.yml` | The first branch in the first stream — the entry point of your main-line. In a single-branch config it's just that branch. |
+| `<list other managed branches>` | `.flywheel.yml` | Every `branches[].name` across all streams, **excluding** `<DEFAULT_TARGET_BRANCH>`. May be empty for a single-branch single-stream config. |
+| `<copy auto_merge list from .flywheel.yml>` | `.flywheel.yml` | The `auto_merge` array for the branch you used as `<DEFAULT_TARGET_BRANCH>`. Copy verbatim, including any `!` variants. |
+| `<list required check names>` | repo ruleset | The status checks marked required on your default target branch (e.g. `Quality`). These come from §5 — they aren't in `.flywheel.yml`. |
+| `<local commands>` | your `quality.yml` | The local equivalent of whatever `quality.yml` runs in CI (e.g. `npm test`, `pytest`, `./scripts/ci.sh`). |
+
+> **If you are an AI agent reading this doc to configure yourself:** the first three rows above are deterministic — derive them yourself by reading `.flywheel.yml` from the repo root. For the last two, ask the human adopter; they depend on repo configuration outside Flywheel's control.
+
+````markdown
+## How this repo handles PRs (Flywheel)
+
+This repo uses [Flywheel](https://github.com/point-source/flywheel) to orchestrate PRs and releases. Read these rules before opening a PR — non-compliant PRs get labeled `flywheel:needs-review` and stall.
+
+**Target branch.** Open all PRs against `<DEFAULT_TARGET_BRANCH>` unless explicitly asked otherwise. Do **not** PR directly into other managed branches (`<list other managed branches>`) — Flywheel manages branch-to-branch promotion automatically via bot-authored promotion PRs.
+
+**PR title format.** Must be a [Conventional Commit](https://www.conventionalcommits.org/): `<type>(<optional scope>): <description>`. Recognized types: `feat`, `fix`, `chore`, `refactor`, `perf`, `style`, `test`, `docs`, `build`, `ci`, `revert`. Append `!` for breaking changes (e.g. `feat!: rename foo to bar`). Flywheel will rewrite a malformed title, but getting it right first time avoids re-runs.
+
+**One logical change per PR.** Flywheel derives the version bump from the title, so squashing two unrelated `feat`s into one PR loses one of them in the release notes.
+
+**Branch naming.** Use `<type>/<short-kebab-description>` (e.g. `feat/login-rate-limit`, `fix/null-deref-on-empty-list`). Some repos enforce this via ruleset; pushes that don't match are rejected.
+
+**Auto-merge eligibility on `<DEFAULT_TARGET_BRANCH>`.** PRs whose title type is in `[<copy auto_merge list from .flywheel.yml>]` get labeled `flywheel:auto-merge` and enter the merge queue automatically once required checks pass. Any other type — including `feat!` when only `feat` is listed — routes to human review and waits for an approval.
+
+**Required status checks.** Your PR must pass `<list required check names>` before merging. Run them locally before pushing (`<local commands>`) — every re-push to fix a failing required check costs CI minutes.
+
+**Things you must not do:**
+- Do not push to or force-push managed branches (`<list>`); they are protected.
+- Do not create version tags (`v1.2.3`, etc.) or any tag matching the project's release namespace. Only Flywheel's GitHub App may mint them.
+- Do not edit a PR's title or body after Flywheel has rewritten them — push a new commit with the corrected conventional-commit message instead.
+- Do not open promotion PRs by hand. If a promotion PR is missing or stale, the upstream merge probably hasn't landed yet.
+
+**If your PR was labeled `flywheel:needs-review` and you expected `flywheel:auto-merge`:** the title's commit type is not in the target branch's `auto_merge` list, or you used a breaking variant (`feat!`) when only the non-breaking variant (`feat`) is allowed. Check `.flywheel.yml`.
+````
+
+Worked example using the three-stage promotion config from §2 (`develop` → `staging` → `main`), with `Quality` registered as the required check:
+
+- `<DEFAULT_TARGET_BRANCH>` → `develop` (first branch of the only stream)
+- `<list other managed branches>` → `staging, main`
+- `<copy auto_merge list from .flywheel.yml>` → `fix, fix!, feat, chore, refactor, perf, style, test, docs`
+- `<list required check names>` → `Quality`
+- `<local commands>` → `npm test && npm run lint` (whatever your `quality.yml` runs)
+
+If your repo already has a `CLAUDE.md` or equivalent, append the snippet under a new section heading rather than replacing existing content — the instructions are additive and don't conflict with typical "how to navigate this codebase" guidance.
+
+## 7. Verify
 
 Run the doctor script — it validates everything the prior steps configured without needing a real PR:
 
@@ -314,7 +368,7 @@ Merge the PR. On the resulting push, confirm:
 - A GitHub Release is published.
 - Your `build.yml` fires.
 
-## 7. Troubleshooting
+## 8. Troubleshooting
 
 **PR title wasn't rewritten.** Open the `Flywheel — PR` workflow run and look at the `conduct` job log. Common causes: the PR is still a draft (`flywheel-pr.yml` skips drafts), the target branch isn't listed in any stream in `.flywheel.yml`, or the title isn't a recognized Conventional Commit type.
 
