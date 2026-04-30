@@ -7,7 +7,7 @@ Step-by-step guide to wiring Flywheel into your repository.
 - A GitHub repository where you have admin access (required to create secrets, branch rulesets, and enable merge queue).
 - GitHub Actions enabled.
 - Familiarity with [Conventional Commits](https://www.conventionalcommits.org/) — Flywheel rewrites every PR title against this grammar.
-- Optional: GitHub merge queue enabled on managed branches. Flywheel does not require it, but if multiple PRs target the same branch concurrently (typical with agent swarms), the queue serializes them safely.
+- **Strongly recommended:** GitHub merge queue enabled on managed branches. Flywheel works without it, but agent-swarm repos with high PR volume pay a steep GHA-minute tax on `pull_request: synchronize` retriggers without the queue's `merge_group:` batching. See [Cost control under high PR volume](#cost-control-under-high-pr-volume) in §5.
 
 ## Quick start (one command)
 
@@ -274,6 +274,15 @@ jobs:
 2. **Merge queue** on managed branches. Stricter branches (`main`) use group size 1; `develop`-style branches can batch up to 5.
 3. **Protect `v*` tag namespace** — only the bot may create or delete version tags. Prevents agents from minting arbitrary version tags. The App is added as a bypass actor here too so it can mint the release tag.
 4. **Branch naming (optional)** — require feature branches to match `(feat|fix|chore|refactor|perf|style|test|docs|build|ci|revert)/.*`.
+
+### Cost control under high PR volume
+
+Flywheel is designed for repos where agent swarms produce dozens or hundreds of open PRs concurrently. A few configuration knobs matter more than they would in a low-throughput repo:
+
+- **Treat the merge queue as mandatory, not optional.** When PRs are required to be up-to-date with their base before merging, the merge queue's `merge_group:` events run required checks **once per merged batch** instead of once per PR. With group size 5 on a `develop` branch, that's up to a 5× reduction in quality-check minutes. Without the queue, every merge to base triggers `pull_request: synchronize` on rebase candidates and you pay for each individually.
+- **Do NOT enable "Always suggest updating pull request branches"** (Settings → General → Pull Requests). This setting auto-rebases every open PR every time the base advances. With 100 open PRs, every merge fires 100 `synchronize` events, each running every `pull_request:`-subscribed workflow. Let the merge queue freshen branches at queue time instead — it's the same correctness guarantee at a tiny fraction of the GHA-minute cost.
+- **Don't subscribe heavy workflows to `pull_request: synchronize` if you can avoid it.** Lint and unit tests are fine — they're seconds, not minutes. Reserve full integration / e2e suites for `merge_group:` only. Adopters who put expensive workflows on both triggers pay double.
+- **Use `concurrency: cancel-in-progress: true` on PR-triggered workflows** so rapid edits collapse to one surviving run per PR. The Flywheel templates already do this; mirror it for your own workflows.
 
 The first and third rulesets can be applied in one command. **Pass `--app-id` — it's mandatory**, not optional:
 

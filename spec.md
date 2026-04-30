@@ -52,6 +52,8 @@ Handles version computation, changelog generation, git tagging, and GitHub Relea
 
 Serializes parallel PRs without manual rebasing. When multiple agent-opened PRs target the same branch, the merge queue tests each against the state that will exist when it is their turn. Flywheel enables auto-merge into the queue; it never bypasses it.
 
+The queue is also Flywheel's primary cost-control mechanism in high-PR-volume repos. Required checks subscribed to `merge_group:` run **once per merged batch** rather than per-PR. Without the queue, every base-branch advance fires `pull_request: synchronize` on rebase candidates, multiplying GHA-minute spend. Adopters with agent swarms should treat the queue as mandatory and avoid GitHub's "Always suggest updating pull request branches" setting (which auto-rebases all open PRs on every base advance, defeating the queue's batching).
+
 ### 4. User-defined build and publish workflows
 
 Plain GitHub Actions workflows in the adopting repo. Not called by Flywheel — they react to events Flywheel produces:
