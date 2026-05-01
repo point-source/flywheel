@@ -136,7 +136,7 @@ fi
 # can still pass when invoked with App credentials.
 bold "Repo secrets"
 if secrets_json="$(gh api "repos/$REPO/actions/secrets" 2>/dev/null)"; then
-  for name in APP_ID APP_PRIVATE_KEY; do
+  for name in FLYWHEEL_GH_APP_ID FLYWHEEL_GH_APP_PRIVATE_KEY; do
     if echo "$secrets_json" | jq -e --arg n "$name" '.secrets[] | select(.name == $n)' >/dev/null; then
       ok "$name set"
     else
@@ -147,7 +147,7 @@ if secrets_json="$(gh api "repos/$REPO/actions/secrets" 2>/dev/null)"; then
     warn "GH_PAT secret present — Flywheel does not use it; remove if it's left over from an older setup"
   fi
 else
-  warn "could not list repo secrets — verify APP_ID and APP_PRIVATE_KEY are set in repo Settings → Secrets and variables → Actions (App tokens cannot list secrets)"
+  warn "could not list repo secrets — verify FLYWHEEL_GH_APP_ID and FLYWHEEL_GH_APP_PRIVATE_KEY are set in repo Settings → Secrets and variables → Actions (App tokens cannot list secrets)"
 fi
 
 # 4. Repo settings: allow_auto_merge.

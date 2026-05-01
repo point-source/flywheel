@@ -6,8 +6,8 @@ This file documents the one-time steps required to operate the Flywheel reposito
 
 Flywheel uses a GitHub App installation token. Personal Access Tokens are not supported.
 
-- `APP_ID` — numeric ID of the GitHub App installed on this repo.
-- `APP_PRIVATE_KEY` — PEM-format private key for that App.
+- `FLYWHEEL_GH_APP_ID` — numeric ID of the GitHub App installed on this repo.
+- `FLYWHEEL_GH_APP_PRIVATE_KEY` — PEM-format private key for that App.
 
 The App needs:
 

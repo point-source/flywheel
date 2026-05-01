@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { runPushFlow } from "../src/push-flow.js";
+import { getUpstreamBranches, runPushFlow } from "../src/push-flow.js";
 import type { FlywheelConfig } from "../src/types.js";
 
 const config: FlywheelConfig = {
@@ -73,5 +73,42 @@ describe("runPushFlow", () => {
     const rc = JSON.parse(writes[0]!.contents);
     expect(rc.tagFormat).toBe("customer-acme/v${version}");
     expect(rc.branches).toEqual([{ name: "customer-acme" }]);
+  });
+});
+
+describe("getUpstreamBranches", () => {
+  const threeStage: FlywheelConfig = {
+    streams: [
+      {
+        name: "main-line",
+        branches: [
+          { name: "develop", prerelease: "dev", auto_merge: ["fix"] },
+          { name: "staging", prerelease: "rc", auto_merge: ["fix"] },
+          { name: "main", auto_merge: [] },
+        ],
+      },
+    ],
+    merge_strategy: "squash",
+    initial_version: "0.1.0",
+  };
+
+  it("terminal branch → returns all earlier branches in stream order", () => {
+    expect(getUpstreamBranches(threeStage, "main")).toEqual(["develop", "staging"]);
+  });
+
+  it("middle branch → returns only branches earlier than itself", () => {
+    expect(getUpstreamBranches(threeStage, "staging")).toEqual(["develop"]);
+  });
+
+  it("first branch in stream → returns empty (no upstream)", () => {
+    expect(getUpstreamBranches(threeStage, "develop")).toEqual([]);
+  });
+
+  it("single-branch stream → returns empty", () => {
+    expect(getUpstreamBranches(config, "customer-acme")).toEqual([]);
+  });
+
+  it("unmanaged branch → returns empty", () => {
+    expect(getUpstreamBranches(config, "feature/sandbox")).toEqual([]);
   });
 });

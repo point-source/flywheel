@@ -85,6 +85,8 @@ flywheel-push.yml              flywheel-push.yml
   ├── write .releaserc.json      ├── compute pending commits (commit-message-based)
   ├── npx semantic-release       ├── upsert promotion PR to next branch in stream
   ├── tag + GitHub Release       └── label + enable auto-merge if eligible
+  └── back-merge tag + chore(release)
+      into upstream branches in the stream
         │
         ▼
 release: published
@@ -116,7 +118,7 @@ Flywheel needs a token with:
 | Checks: r/w    | Posting the `flywheel/conventional-commit` check               |
 | Metadata: read | Required for any token interacting with a repo                 |
 
-Use a GitHub App installation token, minted at the start of each workflow via [`actions/create-github-app-token`](https://github.com/actions/create-github-app-token) from `APP_ID` + `APP_PRIVATE_KEY` repo secrets. Personal Access Tokens are not supported — they don't reliably propagate the cross-workflow trigger semantics Flywheel relies on. `secrets.GITHUB_TOKEN` is similarly insufficient: it cannot trigger downstream workflows from PRs it creates.
+Use a GitHub App installation token, minted at the start of each workflow via [`actions/create-github-app-token`](https://github.com/actions/create-github-app-token) from `FLYWHEEL_GH_APP_ID` + `FLYWHEEL_GH_APP_PRIVATE_KEY` repo secrets. Personal Access Tokens are not supported — they don't reliably propagate the cross-workflow trigger semantics Flywheel relies on. `secrets.GITHUB_TOKEN` is similarly insufficient: it cannot trigger downstream workflows from PRs it creates.
 
 ## Inputs and outputs
 
@@ -125,9 +127,11 @@ Use a GitHub App installation token, minted at the start of each workflow via [`
 | `event`  | yes      | `pull_request` or `push`                               |
 | `token`  | yes      | A token with the scopes above                          |
 
-| Output           | Description                                                              |
-| ---------------- | ------------------------------------------------------------------------ |
-| `managed_branch` | `'true'` if the pushed/targeted branch is in a stream; `'false'` otherwise |
+| Output                | Description                                                                                                                                          |
+| --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `token`               | Minted installation token (masked). Pass to downstream steps that need it (e.g. `semantic-release`).                                                  |
+| `managed_branch`      | `'true'` if the pushed/targeted branch is in a stream; `'false'` otherwise.                                                                          |
+| `back_merge_targets`  | Comma-separated list of upstream branches in the same stream that should receive a back-merge after this branch releases. Empty for single-branch streams or when the branch is the head of its stream. |
 
 ## Conventional commit types
 
