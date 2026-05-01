@@ -1,3 +1,20 @@
+# [2.0.0](https://github.com/point-source/flywheel/compare/v1.0.0...v2.0.0) (2026-05-01)
+
+
+* feat!: release v2.0.0 ([#24](https://github.com/point-source/flywheel/issues/24)) ([38481fb](https://github.com/point-source/flywheel/commit/38481fbe3b3c840093892831d423109a1f530590))
+
+
+### BREAKING CHANGES
+
+* Adopter repos must rename two GitHub repo secrets:
+  APP_ID            -> FLYWHEEL_GH_APP_ID
+  APP_PRIVATE_KEY   -> FLYWHEEL_GH_APP_PRIVATE_KEY
+Re-running scripts/init.sh creates the new names; old secrets can be
+deleted manually afterward. Action input names (app-id, app-private-key)
+are unchanged.
+
+Co-authored-by: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
 # 1.0.0 (2026-04-30)
 
 
