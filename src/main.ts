@@ -8,7 +8,7 @@ import { mintInstallationToken } from "./auth.js";
 import { loadConfig } from "./config.js";
 import { createGitHubClient, type PullRequest } from "./github.js";
 import { runPrFlow } from "./pr-flow.js";
-import { runPushFlow } from "./push-flow.js";
+import { getUpstreamBranches, runPushFlow } from "./push-flow.js";
 import { runPromotion } from "./promotion.js";
 import { findMissingPermissions, formatMissingPermissionsError } from "./preflight.js";
 
@@ -99,6 +99,7 @@ async function run(): Promise<void> {
       log: { info: (msg) => core.info(msg) },
     });
     core.setOutput("managed_branch", outcome.kind === "release" ? "true" : "false");
+    core.setOutput("back_merge_targets", getUpstreamBranches(config, branchRef).join(","));
 
     // Promotion PR upsert is independent of the release flow per spec §Event chain.
     await runPromotion({

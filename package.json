@@ -15,16 +15,16 @@
     "verify-dist": "node scripts/build.mjs && git diff --exit-code -- dist/"
   },
   "dependencies": {
-    "@actions/core": "^1.11.1",
-    "@actions/github": "^6.0.0",
+    "@actions/core": "^3.0.1",
+    "@actions/github": "^9.1.1",
     "@octokit/auth-app": "^8.2.0",
-    "js-yaml": "^4.1.0"
+    "js-yaml": "^4.1.1"
   },
   "devDependencies": {
     "@types/js-yaml": "^4.0.9",
-    "@types/node": "^24.0.0",
-    "esbuild": "^0.25.0",
-    "typescript": "^5.7.0",
-    "vitest": "^3.0.0"
+    "@types/node": "^24.12.2",
+    "esbuild": "^0.28.0",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.5"
   }
 }

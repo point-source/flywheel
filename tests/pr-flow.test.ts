@@ -222,6 +222,36 @@ describe("runPrFlow", () => {
     expect(gh.autoMergeDisabledFor).toEqual([]);
   });
 
+  it("label flip with stale pr.labels: input pr does NOT include needs-review but real state does → still removes it", async () => {
+    // Regression: GitHub's labels endpoint can serve a slightly outdated
+    // read after a recent write. Previously runPrFlow gated the
+    // removeLabel call on `pr.labels.includes(...)`; if the input pr was
+    // stale, the gate was false and the wrong label stuck forever.
+    const gh = createFakeGh({
+      pullCommits: { 7: [makeCommit("a", "fix: actually a fix")] },
+      // Real state on the server: needs-review IS attached.
+      prLabels: { 7: [FLYWHEEL_NEEDS_REVIEW_LABEL] },
+    });
+    const { log } = silentLogger();
+
+    await runPrFlow({
+      // Input pr: stale read — labels missing the needs-review entry.
+      pr: makePR({ title: "fix: actually a fix", labels: [] }),
+      config: baseConfig,
+      gh,
+      log,
+    });
+
+    expect(gh.prLabels[7]).toContain(FLYWHEEL_AUTO_MERGE_LABEL);
+    expect(gh.prLabels[7]).not.toContain(FLYWHEEL_NEEDS_REVIEW_LABEL);
+    // Confirm removeLabel was actually issued (not skipped by stale gate).
+    const removeCalls = gh.calls.filter(
+      (c) => c.method === "removeLabel"
+        && (c.args as { label: string }).label === FLYWHEEL_NEEDS_REVIEW_LABEL,
+    );
+    expect(removeCalls).toHaveLength(1);
+  });
+
   it("idempotent across two consecutive runs against the same fakeGh — final state matches first run, no extra updatePR", async () => {
     const gh = createFakeGh({
       pullCommits: { 7: [makeCommit("a", "fix(auth): handle token refresh race condition")] },
@@ -251,8 +281,14 @@ describe("runPrFlow", () => {
     expect(gh.prBodies[7] ?? writtenBody).toBe(writtenBody);
     // Body-rewrite idempotency: updatePR only fired on run 1.
     expect(gh.calls.filter((c) => c.method === "updatePR")).toHaveLength(1);
-    // Never tried to remove the auto-merge label or disable auto-merge.
-    expect(gh.calls.filter((c) => c.method === "removeLabel")).toEqual([]);
+    // The eligible path always issues removeLabel(NEEDS_REVIEW) defensively
+    // (404-tolerant) to avoid stale-read bugs. Never removes AUTO_MERGE
+    // or disables auto-merge on the eligible path.
+    const removeAutoMergeCalls = gh.calls.filter(
+      (c) => c.method === "removeLabel"
+        && (c.args as { label: string }).label === FLYWHEEL_AUTO_MERGE_LABEL,
+    );
+    expect(removeAutoMergeCalls).toEqual([]);
     expect(gh.autoMergeDisabledFor).toEqual([]);
   });
 
