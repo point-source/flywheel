@@ -16,8 +16,8 @@ jobs:
   conduct:
     uses: point-source/flywheel/.github/workflows/pr.yml@v1
     secrets:
-      app-id: ${{ secrets.APP_ID }}
-      app-private-key: ${{ secrets.APP_PRIVATE_KEY }}
+      app-id: ${{ secrets.FLYWHEEL_GH_APP_ID }}
+      app-private-key: ${{ secrets.FLYWHEEL_GH_APP_PRIVATE_KEY }}
 ```
 
 ### Why investigate

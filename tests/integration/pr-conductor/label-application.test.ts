@@ -82,21 +82,8 @@ describe.skipIf(!hasSandboxToken)("integration: label application", () => {
     const pr2 = await fetchPR(handle.number);
     await runPrFlow({ pr: pr2, config: sandboxConfig, gh: sandboxGh(), log });
 
-    // GitHub's read-after-write consistency on issue labels can lag a few
-    // hundred ms — especially when a retitle write is still propagating from
-    // moments before. Poll the labels endpoint until both add and remove are
-    // visible, rather than reading once and racing the propagation.
-    await expect
-      .poll(
-        async () => {
-          const updated = await fetchPR(handle.number);
-          return {
-            hasAutoMerge: updated.labels.includes(FLYWHEEL_AUTO_MERGE_LABEL),
-            hasNeedsReview: updated.labels.includes(FLYWHEEL_NEEDS_REVIEW_LABEL),
-          };
-        },
-        { timeout: 5000, interval: 500 },
-      )
-      .toEqual({ hasAutoMerge: true, hasNeedsReview: false });
+    const afterFlip = await fetchPR(handle.number);
+    expect(afterFlip.labels).toContain(FLYWHEEL_AUTO_MERGE_LABEL);
+    expect(afterFlip.labels).not.toContain(FLYWHEEL_NEEDS_REVIEW_LABEL);
   });
 });

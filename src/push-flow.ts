@@ -52,6 +52,21 @@ export function findStreamForBranch(
   return null;
 }
 
+// Branches earlier in the stream than `branchRef`. After a release lands on
+// `branchRef`, the chore(release) commit + tag must be merged back into each
+// upstream so semantic-release on those branches sees the tag in its ancestry
+// and the CHANGELOG stays in sync.
+export function getUpstreamBranches(
+  config: FlywheelConfig,
+  branchRef: string,
+): string[] {
+  const stream = findStreamForBranch(config, branchRef);
+  if (!stream) return [];
+  const idx = stream.branches.findIndex((b) => b.name === branchRef);
+  if (idx <= 0) return [];
+  return stream.branches.slice(0, idx).map((b) => b.name);
+}
+
 async function defaultWriter(path: string, contents: string): Promise<void> {
   await writeFile(path, contents, "utf8");
 }

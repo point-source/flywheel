@@ -69,23 +69,51 @@ fi
 
 branches=()
 if [[ -n "$yml" ]]; then
-  if branch_list="$(python3 - "$yml" <<'PYEOF' 2>/dev/null
-import sys, yaml
-with open(sys.argv[1]) as f:
-    data = yaml.safe_load(f)
-for s in data['flywheel']['streams']:
-    for b in s['branches']:
-        print(b['name'])
-PYEOF
-)"; then
-    while IFS= read -r b; do [[ -n "$b" ]] && branches+=("$b"); done <<< "$branch_list"
-    if [[ "${#branches[@]}" -eq 0 ]]; then
-      fail ".flywheel.yml has no branches"
-    else
-      ok "${#branches[@]} managed branch(es): ${branches[*]}"
+  # Locate the linter sibling. When doctor.sh is invoked via curl|bash
+  # there are no on-disk siblings; fall back to fetching the linter from
+  # the same v1 source.
+  doctor_src="${BASH_SOURCE[0]:-}"
+  doctor_dir=""
+  if [[ -n "$doctor_src" ]]; then
+    doctor_dir="$(cd "$(dirname "$doctor_src")" 2>/dev/null && pwd || true)"
+  fi
+  linter=""
+  if [[ -n "$doctor_dir" && -f "$doctor_dir/lint-flywheel-config.py" ]]; then
+    linter="$doctor_dir/lint-flywheel-config.py"
+  else
+    linter="$(mktemp)"
+    if ! curl -fsSL "https://raw.githubusercontent.com/point-source/flywheel/v1/scripts/lint-flywheel-config.py" -o "$linter" 2>/dev/null; then
+      linter=""
+    fi
+  fi
+
+  if [[ -z "$linter" ]]; then
+    fail ".flywheel.yml linter unavailable — could not locate or fetch lint-flywheel-config.py"
+  elif validation="$(python3 "$linter" "$yml" 2>/dev/null)"; then
+    have_branches_line=0
+    while IFS= read -r line; do
+      case "$line" in
+        "BRANCHES "*)
+          have_branches_line=1
+          rest="${line#BRANCHES }"
+          # shellcheck disable=SC2206
+          branches=($rest)
+          ;;
+        "RESULT OK "*)   ok   "${line#RESULT OK }"   ;;
+        "RESULT FAIL "*) fail "${line#RESULT FAIL }" ;;
+        "RESULT WARN "*) warn "${line#RESULT WARN }" ;;
+        "RESULT NOTE "*) printf '  \033[36mi\033[0m %s\n' "${line#RESULT NOTE }" ;;
+      esac
+    done <<< "$validation"
+    if [[ $have_branches_line -eq 1 ]]; then
+      if [[ "${#branches[@]}" -eq 0 ]]; then
+        fail ".flywheel.yml has no branches"
+      else
+        ok "${#branches[@]} managed branch(es): ${branches[*]}"
+      fi
     fi
   else
-    fail ".flywheel.yml does not parse as YAML or is missing flywheel.streams[].branches[].name"
+    fail ".flywheel.yml linter crashed — is PyYAML installed? (pip3 install --user pyyaml)"
   fi
 fi
 
@@ -108,7 +136,7 @@ fi
 # can still pass when invoked with App credentials.
 bold "Repo secrets"
 if secrets_json="$(gh api "repos/$REPO/actions/secrets" 2>/dev/null)"; then
-  for name in APP_ID APP_PRIVATE_KEY; do
+  for name in FLYWHEEL_GH_APP_ID FLYWHEEL_GH_APP_PRIVATE_KEY; do
     if echo "$secrets_json" | jq -e --arg n "$name" '.secrets[] | select(.name == $n)' >/dev/null; then
       ok "$name set"
     else
@@ -119,7 +147,7 @@ if secrets_json="$(gh api "repos/$REPO/actions/secrets" 2>/dev/null)"; then
     warn "GH_PAT secret present — Flywheel does not use it; remove if it's left over from an older setup"
   fi
 else
-  warn "could not list repo secrets — verify APP_ID and APP_PRIVATE_KEY are set in repo Settings → Secrets and variables → Actions (App tokens cannot list secrets)"
+  warn "could not list repo secrets — verify FLYWHEEL_GH_APP_ID and FLYWHEEL_GH_APP_PRIVATE_KEY are set in repo Settings → Secrets and variables → Actions (App tokens cannot list secrets)"
 fi
 
 # 4. Repo settings: allow_auto_merge.
