@@ -95,9 +95,11 @@ semantic-release fires                                  pr-conductor fires
   ├── compute version from landed commits                 ├── if absent → exit (no promotion PR)
   ├── generate CHANGELOG.md fragment                      ├── collect commits not yet in target
   ├── create git tag  e.g. v1.2.0-dev.3                  ├── determine most impactful commit type
-  └── create GitHub Release                               ├── check type against target's auto_merge
-        │                                                 ├── eligible   → create/update PR + flywheel:auto-merge
-        ▼                                                 └── ineligible → create/update PR + flywheel:needs-review
+  ├── create GitHub Release                               ├── check type against target's auto_merge
+  └── back-merge tag + chore(release) commit              ├── eligible   → create/update PR + flywheel:auto-merge
+      into upstream branches in the same stream           └── ineligible → create/update PR + flywheel:needs-review
+        │
+        ▼
 on: release published
   └── user build workflow fires independently
         │
@@ -107,6 +109,8 @@ on: workflow_run build completed
 ```
 
 **Important:** The release flow and the promotion PR flow are independent reactions to the same push event. A branch that is last in its stream (the terminal branch) still releases — being last means no promotion PR is created, not that no release occurs. Releases happen on every push to any managed branch where semantic-release computes a new version. A single-branch stream releases immediately on every qualifying push with no promotion step.
+
+**Back-merge.** Whenever a release lands on a non-head branch in its stream (e.g. `main` in a `develop → staging → main` stream), Flywheel back-merges the new tag and the `chore(release)` commit into every upstream branch (`staging`, `develop`) before the workflow exits. This keeps the release tag in each upstream branch's ancestry — required for semantic-release on those branches to compute the next prerelease version correctly — and keeps `CHANGELOG.md` in sync. The back-merge commit is marked `[skip ci]` so it doesn't retrigger the pipeline. The App must be a bypass actor on each upstream branch's ruleset (already required by Flywheel's spec for the release push itself); without it, the back-merge push is rejected by the linear-history rule. Single-branch streams have no upstream branches and skip this step.
 
 ---
 
@@ -513,6 +517,36 @@ jobs:
             semantic-release
         env:
           GITHUB_TOKEN: ${{ steps.flywheel.outputs.token }}
+      - name: Back-merge release into upstream branches
+        if: |
+          steps.flywheel.outputs.managed_branch == 'true' &&
+          steps.flywheel.outputs.back_merge_targets != ''
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ steps.flywheel.outputs.token }}
+          BACK_MERGE_TARGETS: ${{ steps.flywheel.outputs.back_merge_targets }}
+          RELEASED_BRANCH: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          new_tags="$(git tag --points-at HEAD)"
+          if [[ -z "$new_tags" ]]; then
+            echo "::notice::No tag at HEAD — semantic-release did not publish; skipping back-merge."
+            exit 0
+          fi
+          new_tag="$(echo "$new_tags" | head -n1)"
+          git config user.name  'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          IFS=',' read -ra UPSTREAMS <<< "$BACK_MERGE_TARGETS"
+          for upstream in "${UPSTREAMS[@]}"; do
+            git fetch origin "$upstream:$upstream"
+            git checkout "$upstream"
+            if git merge --ff-only "$RELEASED_BRANCH" 2>/dev/null; then
+              echo "Fast-forwarded $upstream to $RELEASED_BRANCH."
+            else
+              git merge --no-ff -m "chore: back-merge $new_tag from $RELEASED_BRANCH into $upstream [skip ci]" "$RELEASED_BRANCH"
+            fi
+            git push origin "$upstream"
+          done
 ```
 
 `pr-conductor` sets `managed_branch` output to `true` when the pushed branch is found in a stream in `.flywheel.yml`, and writes `.releaserc.json` to the workspace. If the branch is not managed, it sets `managed_branch` to `false` and exits without writing any files — the semantic-release step is skipped entirely.

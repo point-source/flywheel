@@ -31490,6 +31490,13 @@ function findStreamForBranch(config, branchRef) {
   }
   return null;
 }
+function getUpstreamBranches(config, branchRef) {
+  const stream = findStreamForBranch(config, branchRef);
+  if (!stream) return [];
+  const idx = stream.branches.findIndex((b) => b.name === branchRef);
+  if (idx <= 0) return [];
+  return stream.branches.slice(0, idx).map((b) => b.name);
+}
 async function defaultWriter(path, contents) {
   await (0, import_promises.writeFile)(path, contents, "utf8");
 }
@@ -31820,6 +31827,7 @@ async function run() {
       log: { info: (msg) => core2.info(msg) }
     });
     core2.setOutput("managed_branch", outcome.kind === "release" ? "true" : "false");
+    core2.setOutput("back_merge_targets", getUpstreamBranches(config, branchRef).join(","));
     await runPromotion({
       branchRef,
       config,

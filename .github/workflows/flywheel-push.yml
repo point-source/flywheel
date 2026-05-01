@@ -38,3 +38,41 @@ jobs:
             semantic-release
         env:
           GITHUB_TOKEN: ${{ steps.flywheel.outputs.token }}
+      - name: Back-merge release into upstream branches
+        # Only runs when this push triggered a release (a tag was created at
+        # HEAD by semantic-release) and the stream has upstream branches.
+        # Brings the chore(release) commit + tag into each upstream's ancestry
+        # so semantic-release sees the latest tag and the CHANGELOG stays in
+        # sync. The merge commit carries [skip ci] so the resulting push to
+        # the upstream branch does not retrigger this workflow.
+        if: |
+          steps.flywheel.outputs.managed_branch == 'true' &&
+          steps.flywheel.outputs.back_merge_targets != ''
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ steps.flywheel.outputs.token }}
+          BACK_MERGE_TARGETS: ${{ steps.flywheel.outputs.back_merge_targets }}
+          RELEASED_BRANCH: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          new_tags="$(git tag --points-at HEAD)"
+          if [[ -z "$new_tags" ]]; then
+            echo "::notice::No tag at HEAD — semantic-release did not publish a release. Skipping back-merge."
+            exit 0
+          fi
+          new_tag="$(echo "$new_tags" | head -n1)"
+          git config user.name  'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          IFS=',' read -ra UPSTREAMS <<< "$BACK_MERGE_TARGETS"
+          for upstream in "${UPSTREAMS[@]}"; do
+            echo "::group::Back-merge $RELEASED_BRANCH ($new_tag) → $upstream"
+            git fetch origin "$upstream:$upstream"
+            git checkout "$upstream"
+            if git merge --ff-only "$RELEASED_BRANCH" 2>/dev/null; then
+              echo "Fast-forwarded $upstream to $RELEASED_BRANCH."
+            else
+              git merge --no-ff -m "chore: back-merge $new_tag from $RELEASED_BRANCH into $upstream [skip ci]" "$RELEASED_BRANCH"
+            fi
+            git push origin "$upstream"
+            echo "::endgroup::"
+          done

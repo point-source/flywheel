@@ -181,6 +181,41 @@ jobs:
             semantic-release
         env:
           GITHUB_TOKEN: ${{ steps.flywheel.outputs.token }}
+      - name: Back-merge release into upstream branches
+        # When a release lands on a non-head branch (e.g. main in a develop →
+        # staging → main stream), back-merge the new tag and chore(release)
+        # commit into each upstream branch so semantic-release on those
+        # branches sees the tag in its ancestry. Single-branch streams skip
+        # this step (back_merge_targets is empty).
+        if: |
+          steps.flywheel.outputs.managed_branch == 'true' &&
+          steps.flywheel.outputs.back_merge_targets != ''
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ steps.flywheel.outputs.token }}
+          BACK_MERGE_TARGETS: ${{ steps.flywheel.outputs.back_merge_targets }}
+          RELEASED_BRANCH: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          new_tags="$(git tag --points-at HEAD)"
+          if [[ -z "$new_tags" ]]; then
+            echo "::notice::No tag at HEAD — semantic-release did not publish; skipping back-merge."
+            exit 0
+          fi
+          new_tag="$(echo "$new_tags" | head -n1)"
+          git config user.name  'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          IFS=',' read -ra UPSTREAMS <<< "$BACK_MERGE_TARGETS"
+          for upstream in "${UPSTREAMS[@]}"; do
+            git fetch origin "$upstream:$upstream"
+            git checkout "$upstream"
+            if git merge --ff-only "$RELEASED_BRANCH" 2>/dev/null; then
+              echo "Fast-forwarded $upstream to $RELEASED_BRANCH."
+            else
+              git merge --no-ff -m "chore: back-merge $new_tag from $RELEASED_BRANCH into $upstream [skip ci]" "$RELEASED_BRANCH"
+            fi
+            git push origin "$upstream"
+          done
 ```
 
 Both files are also available verbatim under [`scripts/templates/`](../scripts/templates/) in the Flywheel repo — `init.sh` writes them for you in the quick-start path.
