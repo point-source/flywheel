@@ -97,9 +97,13 @@ export async function runPrFlow({ pr, config, gh, log }: PrFlowDeps): Promise<Pr
 
   if (eligible) {
     await gh.addLabels(pr.number, [FLYWHEEL_AUTO_MERGE_LABEL]);
-    if (pr.labels.includes(FLYWHEEL_NEEDS_REVIEW_LABEL)) {
-      await gh.removeLabel(pr.number, FLYWHEEL_NEEDS_REVIEW_LABEL);
-    }
+    // Always issue the opposite-label removal — pr.labels can be a stale
+    // read (GitHub's labels endpoint serves slightly outdated state when a
+    // recent write hasn't fully propagated). Skipping based on a stale
+    // includes() check leaves the wrong label permanently attached.
+    // removeLabel is 404-tolerant so this is a no-op when the label
+    // isn't actually present.
+    await gh.removeLabel(pr.number, FLYWHEEL_NEEDS_REVIEW_LABEL);
     const method = mergeMethod(config);
     const result = await gh.enableAutoMerge(pr.nodeId, method);
     if (result.ok) {
@@ -146,10 +150,12 @@ export async function runPrFlow({ pr, config, gh, log }: PrFlowDeps): Promise<Pr
   }
 
   await gh.addLabels(pr.number, [FLYWHEEL_NEEDS_REVIEW_LABEL]);
-  if (pr.labels.includes(FLYWHEEL_AUTO_MERGE_LABEL)) {
-    await gh.removeLabel(pr.number, FLYWHEEL_AUTO_MERGE_LABEL);
-    await gh.disableAutoMerge(pr.nodeId);
-  }
+  // See parallel comment on the eligible path above: pr.labels can be
+  // a stale read; gate-skipping the cleanup leaves stuck labels.
+  // removeLabel is 404-tolerant and disableAutoMerge swallows
+  // "not enabled" errors, so both are safe to call unconditionally.
+  await gh.removeLabel(pr.number, FLYWHEEL_AUTO_MERGE_LABEL);
+  await gh.disableAutoMerge(pr.nodeId);
   log.info(`PR #${pr.number}: ${matchKey} not in auto_merge list for ${branch.name} → needs review.`);
   return {
     kind: "labeled",
