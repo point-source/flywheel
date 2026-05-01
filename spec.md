@@ -422,7 +422,7 @@ A GitHub App with:
 - Checks: read and write (post the `flywheel/conventional-commit` check)
 - Metadata: read (always required)
 
-Store the App credentials as `APP_ID` + `APP_PRIVATE_KEY` repo secrets and pass them straight into the Flywheel action via the `app-id` and `app-private-key` inputs. The action mints its own installation token internally, validates that the granted permissions match the list above, and exposes the token as a step output for downstream steps that need it (e.g. semantic-release). Adopters do **not** add a separate `actions/create-github-app-token` step.
+Store the App credentials as `FLYWHEEL_GH_APP_ID` + `FLYWHEEL_GH_APP_PRIVATE_KEY` repo secrets and pass them straight into the Flywheel action via the `app-id` and `app-private-key` inputs. The action mints its own installation token internally, validates that the granted permissions match the list above, and exposes the token as a step output for downstream steps that need it (e.g. semantic-release). Adopters do **not** add a separate `actions/create-github-app-token` step.
 
 Personal Access Tokens are not supported — they don't reliably propagate the cross-workflow trigger semantics Flywheel relies on (in particular, native auto-merge enable and downstream workflow firing on bot-created PRs).
 
@@ -464,8 +464,8 @@ jobs:
       - uses: point-source/flywheel@v1
         with:
           event: pull_request
-          app-id: ${{ secrets.APP_ID }}
-          app-private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          app-id: ${{ secrets.FLYWHEEL_GH_APP_ID }}
+          app-private-key: ${{ secrets.FLYWHEEL_GH_APP_PRIVATE_KEY }}
 ```
 
 ### `flywheel-push.yml` (copy as-is)
@@ -494,8 +494,8 @@ jobs:
         id: flywheel
         with:
           event: push
-          app-id: ${{ secrets.APP_ID }}
-          app-private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          app-id: ${{ secrets.FLYWHEEL_GH_APP_ID }}
+          app-private-key: ${{ secrets.FLYWHEEL_GH_APP_PRIVATE_KEY }}
       - name: Run semantic-release
         # Only runs when pr-conductor confirms this is a managed branch and
         # has written a .releaserc.json. Unmanaged branch pushes exit cleanly.
@@ -532,8 +532,8 @@ jobs:
       - uses: actions/create-github-app-token@v1
         id: app-token
         with:
-          app-id: ${{ secrets.APP_ID }}
-          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          app-id: ${{ secrets.FLYWHEEL_GH_APP_ID }}
+          private-key: ${{ secrets.FLYWHEEL_GH_APP_PRIVATE_KEY }}
       - name: Build
         run: ./your-build-script.sh
         env:

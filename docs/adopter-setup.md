@@ -41,8 +41,8 @@ If you'd rather create the App by hand: follow GitHub's [Creating a GitHub App](
 
 Install the App on your repo. Then store its credentials as repo secrets:
 
-- `APP_ID` — the numeric App ID (visible on the App's settings page).
-- `APP_PRIVATE_KEY` — the PEM-format private key downloaded from the App settings.
+- `FLYWHEEL_GH_APP_ID` — the numeric App ID (visible on the App's settings page).
+- `FLYWHEEL_GH_APP_PRIVATE_KEY` — the PEM-format private key downloaded from the App settings.
 
 Pass these straight into the Flywheel action via the `app-id` and `app-private-key` inputs (see the workflow YAML in §3). The action mints its own short-lived installation token internally and validates that the App's granted permissions match the list above — if anything is missing it fails fast with a friendly error pointing you at the App settings. You do not need a separate `actions/create-github-app-token` step.
 
@@ -134,8 +134,8 @@ jobs:
       - uses: point-source/flywheel@v1
         with:
           event: pull_request
-          app-id: ${{ secrets.APP_ID }}
-          app-private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          app-id: ${{ secrets.FLYWHEEL_GH_APP_ID }}
+          app-private-key: ${{ secrets.FLYWHEEL_GH_APP_PRIVATE_KEY }}
 ```
 
 Create `.github/workflows/flywheel-push.yml`:
@@ -164,8 +164,8 @@ jobs:
         id: flywheel
         with:
           event: push
-          app-id: ${{ secrets.APP_ID }}
-          app-private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          app-id: ${{ secrets.FLYWHEEL_GH_APP_ID }}
+          app-private-key: ${{ secrets.FLYWHEEL_GH_APP_PRIVATE_KEY }}
       - name: Run semantic-release
         if: steps.flywheel.outputs.managed_branch == 'true'
         # Plugins must be co-installed; npx will not resolve them from the
@@ -209,8 +209,8 @@ jobs:
       - uses: actions/create-github-app-token@v1
         id: app-token
         with:
-          app-id: ${{ secrets.APP_ID }}
-          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          app-id: ${{ secrets.FLYWHEEL_GH_APP_ID }}
+          private-key: ${{ secrets.FLYWHEEL_GH_APP_PRIVATE_KEY }}
       - name: Upload artifact
         uses: softprops/action-gh-release@v2
         with:
@@ -354,7 +354,7 @@ Run the doctor script — it validates everything the prior steps configured wit
 curl -fsSL https://raw.githubusercontent.com/point-source/flywheel/v1/scripts/doctor.sh | bash
 ```
 
-`doctor.sh` confirms `.flywheel.yml` parses, every managed branch exists, `APP_ID` + `APP_PRIVATE_KEY` are set, `Allow auto-merge` is on, both Flywheel workflow files exist with App-token plumbing, a ruleset covers each managed branch, and the `v*` tag namespace is protected. Anything red is annotated with the script you should run to fix it.
+`doctor.sh` confirms `.flywheel.yml` parses, every managed branch exists, `FLYWHEEL_GH_APP_ID` + `FLYWHEEL_GH_APP_PRIVATE_KEY` are set, `Allow auto-merge` is on, both Flywheel workflow files exist with App-token plumbing, a ruleset covers each managed branch, and the `v*` tag namespace is protected. Anything red is annotated with the script you should run to fix it.
 
 Then open a small PR titled `chore: smoke test`. Confirm:
 

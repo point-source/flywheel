@@ -9,10 +9,10 @@ inputs:
     description: "Event to handle: 'pull_request' or 'push'."
     required: true
   app-id:
-    description: "GitHub App ID (numeric). Typically supplied via secrets.APP_ID."
+    description: "GitHub App ID (numeric). Typically supplied via secrets.FLYWHEEL_GH_APP_ID."
     required: true
   app-private-key:
-    description: "GitHub App private key in PEM format. Typically supplied via secrets.APP_PRIVATE_KEY."
+    description: "GitHub App private key in PEM format. Typically supplied via secrets.FLYWHEEL_GH_APP_PRIVATE_KEY."
     required: true
 outputs:
   token:
