@@ -628,7 +628,7 @@ The check name registered in branch protection must match the job name exactly (
 
 ### Ruleset 1 — Protect managed branches
 
-Target all branches listed in `.flywheel.yml`. Enable: require PRs, require status checks (add your quality check names), block force push, block deletion, require linear history. **Bypass actor: the Flywheel GitHub App, in `bypass_mode: always` — required.** Without this, semantic-release's push of the version commit and tag back to a managed branch is rejected by the "changes must be made through a pull request" rule and every release fails with `EGITNOPERMISSION`. `scripts/apply-rulesets.sh --app-id <id>` writes this for you.
+Target all branches listed in `.flywheel.yml`. Enable: require PRs, require status checks (add your quality check names), block force push, block deletion, require linear history. **Bypass actor: the Flywheel GitHub App, in `bypass_mode: always` — required.** Without this, two pushes are rejected: semantic-release's `chore(release)` commit + tag (rejected by "changes must be made through a pull request" → `EGITNOPERMISSION`) and the back-merge merge commit into upstream branches (rejected by linear-history). `scripts/apply-rulesets.sh --app-id <id>` writes this for you and applies it to every managed branch in the stream.
 
 ### Ruleset 2 — Merge queue
 
