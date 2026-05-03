@@ -16,7 +16,7 @@ Non-bumping types (`chore`, `style`, `test`, `docs`, `ci`, `build`, `refactor`) 
 
 ## Major-tag floating
 
-The `release-major-tag.yml` workflow runs on `release: published` and re-points the floating major tag (`v1`, `v2`, …) to the new release SHA. This is the standard marketplace pattern — adopters reference `point-source/flywheel@v1` and get the latest 1.x release on every workflow run.
+The `release-major-tag.yml` workflow runs on `release: published` and re-points the floating major tag (`v1`, `v2`, …) to the new release SHA. This is the standard marketplace pattern — adopters reference `point-source/flywheel@v2` and get the latest 2.x release on every workflow run.
 
 You should not need to touch this. It runs automatically. The only manual case is the **first** release, before the workflow exists or before `v1` exists at all — see "First-release bootstrap" below.
 
@@ -34,7 +34,7 @@ The first release of Flywheel cannot use the marketplace listing because the lis
    ```
 
 4. **Submit to the marketplace** via the GitHub UI on the v1.0.0 release page. Required: `action.yml` with `name`, `description`, `branding` (already present).
-5. **Open a follow-up PR** flipping `flywheel-pr.yml` and `flywheel-push.yml` from `uses: ./` to `uses: point-source/flywheel@v1`. From here on, flywheel consumes itself from the marketplace, and the `release-major-tag.yml` workflow keeps `v1` floating automatically.
+5. **Open a follow-up PR** flipping `flywheel-pr.yml` and `flywheel-push.yml` from `uses: ./` to `uses: point-source/flywheel@v2`. From here on, flywheel consumes itself from the marketplace, and the `release-major-tag.yml` workflow keeps `v1` floating automatically.
 
 ## Versioning across streams
 
