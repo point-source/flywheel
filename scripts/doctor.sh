@@ -82,7 +82,7 @@ if [[ -n "$yml" ]]; then
     linter="$doctor_dir/lint-flywheel-config.py"
   else
     linter="$(mktemp)"
-    if ! curl -fsSL "https://raw.githubusercontent.com/point-source/flywheel/v1/scripts/lint-flywheel-config.py" -o "$linter" 2>/dev/null; then
+    if ! curl -fsSL "https://raw.githubusercontent.com/point-source/flywheel/main/scripts/lint-flywheel-config.py" -o "$linter" 2>/dev/null; then
       linter=""
     fi
   fi

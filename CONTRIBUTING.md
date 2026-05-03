@@ -112,7 +112,7 @@ When your change could meaningfully break adopters (schema changes, validation s
    ```
 3. Copy `flywheel-pr.yml` / `flywheel-push.yml` from [`docs/adopter-setup.md`](./docs/adopter-setup.md), but replace
    ```yaml
-   uses: point-source/flywheel@v1
+   uses: point-source/flywheel@v2
    ```
    with a reference to your fork on the branch you're testing:
    ```yaml
