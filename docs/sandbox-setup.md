@@ -93,15 +93,14 @@ the sandbox repo must carry its own `flywheel-pr.yml` and `flywheel-push.yml`
 workflows, pinned to `point-source/flywheel@develop` (Layer 3 validates
 already-merged code).
 
-The adopter templates ship as the canonical source — repin and copy:
+The adopter templates ship as the canonical source. Run `init.sh` with
+`--version develop` so the placeholder gets pinned to the develop branch
+instead of the latest released major:
 
 ```bash
 # From a clone of point-source/flywheel-sandbox (on a feature branch):
-cp /path/to/flywheel/scripts/templates/flywheel-pr.yml .github/workflows/
-cp /path/to/flywheel/scripts/templates/flywheel-push.yml .github/workflows/
-sed -i '' 's|point-source/flywheel@v1|point-source/flywheel@develop|' \
-  .github/workflows/flywheel-{pr,push}.yml
-git add .github/workflows && git commit -m "ci: install flywheel workflows for Layer 3"
+/path/to/flywheel/scripts/init.sh --version develop --skip-secrets --skip-rulesets
+git add .flywheel.yml .github/workflows && git commit -m "ci: install flywheel workflows for Layer 3"
 git push origin <branch>
 # Then merge to e2e-main, and forward to e2e-staging, e2e-develop, e2e-customer-acme.
 # pull_request events read workflows from the BASE branch — every managed
