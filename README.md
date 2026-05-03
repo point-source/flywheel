@@ -20,13 +20,13 @@ What Flywheel does **not** own: your quality checks, your build, your publish. Y
 Run from your repo, with `gh auth login` already done:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/point-source/flywheel/v1/scripts/init.sh | bash
+curl -fsSL https://raw.githubusercontent.com/point-source/flywheel/main/scripts/init.sh | bash
 ```
 
 `init.sh` picks a `.flywheel.yml` preset, writes both Flywheel workflow files, prompts for the GitHub App credentials, and (optionally) applies the recommended branch + tag rulesets. Validate any time with:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/point-source/flywheel/v1/scripts/doctor.sh | bash
+curl -fsSL https://raw.githubusercontent.com/point-source/flywheel/main/scripts/doctor.sh | bash
 ```
 
 The hand-rolled equivalent — four files in your repo:

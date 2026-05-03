@@ -9,7 +9,11 @@
 #      Optionally adds a GitHub App as a bypass actor so the bot can mint tags.
 #
 # Usage:
-#   ./scripts/apply-rulesets.sh <owner/repo> [--required-checks "Quality,Build"] [--app-id 12345]
+#   ./scripts/apply-rulesets.sh <owner/repo> [--config <path>] [--required-checks "Quality,Build"] [--app-id 12345]
+#
+# --config defaults to ./.flywheel.yml. Use it to apply rulesets that match
+# a config that hasn't been merged to the current working tree yet (e.g.
+# point at a sibling worktree or a checked-out copy of develop's config).
 #
 # Dependencies: gh, jq, python3 with PyYAML (preinstalled on macOS; yamllint
 # pulls it in too).
@@ -17,15 +21,17 @@
 set -euo pipefail
 
 REPO=""
+CONFIG_PATH=".flywheel.yml"
 REQUIRED_CHECKS=""
 APP_ID="${APP_ID:-}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --config) CONFIG_PATH="$2"; shift 2 ;;
     --required-checks) REQUIRED_CHECKS="$2"; shift 2 ;;
     --app-id) APP_ID="$2"; shift 2 ;;
     -h|--help)
-      sed -n '2,18p' "$0"
+      sed -n '2,22p' "$0"
       exit 0
       ;;
     *)
@@ -57,16 +63,16 @@ python3 -c "import yaml" 2>/dev/null || {
   exit 1
 }
 
-if [[ ! -f .flywheel.yml ]]; then
-  echo "error: .flywheel.yml not found in current directory" >&2
+if [[ ! -f "$CONFIG_PATH" ]]; then
+  echo "error: config file not found: $CONFIG_PATH" >&2
   exit 1
 fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-branch_refs_json="$(python3 - <<'PYEOF'
-import json, yaml
-with open('.flywheel.yml') as f:
+branch_refs_json="$(CONFIG_PATH="$CONFIG_PATH" python3 - <<'PYEOF'
+import json, os, yaml
+with open(os.environ['CONFIG_PATH']) as f:
     data = yaml.safe_load(f)
 print(json.dumps([f'refs/heads/{b["name"]}' for s in data['flywheel']['streams'] for b in s['branches']]))
 PYEOF
@@ -77,6 +83,23 @@ if [[ "$branch_count" -eq 0 ]]; then
   echo "error: no branches found in .flywheel.yml" >&2
   exit 1
 fi
+
+# apply_ruleset: idempotent create-or-replace by ruleset name. Re-running
+# this script after .flywheel.yml changes (e.g. adding a branch) must update
+# the existing ruleset rather than stack a duplicate — PUT replaces the entire
+# config, so we DELETE-then-POST to avoid surprising merges of manual edits.
+apply_ruleset() {
+  local payload="$1"
+  local name
+  name="$(echo "$payload" | jq -r .name)"
+  local existing_id
+  existing_id="$(gh api "repos/$REPO/rulesets" --jq ".[] | select(.name == \"$name\") | .id" | head -n1)"
+  if [[ -n "$existing_id" ]]; then
+    echo "Replacing existing '$name' ruleset (id $existing_id)..."
+    gh api -X DELETE "repos/$REPO/rulesets/$existing_id" --silent
+  fi
+  echo "$payload" | gh api -X POST "/repos/$REPO/rulesets" --input -
+}
 
 echo "Applying managed-branches ruleset to $branch_count branch(es) in $REPO..."
 
@@ -93,14 +116,15 @@ if [[ -n "$REQUIRED_CHECKS" ]]; then
 fi
 
 # Without a bypass entry the App cannot push semantic-release's version
-# commit/tag back to a managed branch (PR-only rule).
+# commit/tag back to a managed branch (PR-only rule), and the back-merge
+# step's merge commit into upstream branches is rejected by linear-history.
 if [[ -n "$APP_ID" ]]; then
   managed_payload="$(echo "$managed_payload" | jq \
     --arg app_id "$APP_ID" \
     '.bypass_actors = [{"actor_id": ($app_id | tonumber), "actor_type": "Integration", "bypass_mode": "always"}]')"
 fi
 
-echo "$managed_payload" | gh api -X POST "/repos/$REPO/rulesets" --input -
+apply_ruleset "$managed_payload"
 
 echo "Applying tag-namespace ruleset to $REPO..."
 
@@ -111,6 +135,6 @@ if [[ -n "$APP_ID" ]]; then
     '.bypass_actors = [{"actor_id": ($app_id | tonumber), "actor_type": "Integration", "bypass_mode": "always"}]')"
 fi
 
-echo "$tag_payload" | gh api -X POST "/repos/$REPO/rulesets" --input -
+apply_ruleset "$tag_payload"
 
 echo "Done. Verify with: gh api repos/$REPO/rulesets"
