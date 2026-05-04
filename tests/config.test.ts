@@ -49,6 +49,32 @@ describe("loadConfig", () => {
     ).toBe(true);
   });
 
+  it("flags duplicate prerelease label across branches", () => {
+    const result = loadConfig(fx("flywheel.dup-prerelease.yml"));
+    expect(result.config).toBeNull();
+    expect(
+      result.errors.some((e) => e.includes('prerelease label "dev" used by multiple branches')),
+    ).toBe(true);
+  });
+
+  it("flags duplicate stream names", () => {
+    const yamlText = `
+flywheel:
+  streams:
+    - name: dup
+      branches:
+        - name: a
+          auto_merge: []
+    - name: dup
+      branches:
+        - name: b
+          auto_merge: []
+`;
+    const result = loadConfig(yamlText);
+    expect(result.config).toBeNull();
+    expect(result.errors.some((e) => e.includes('duplicate stream name: "dup"'))).toBe(true);
+  });
+
   it("flags unrecognized auto_merge entries (rule 4)", () => {
     const result = loadConfig(fx("flywheel.bad-type.yml"));
     expect(result.config).toBeNull();

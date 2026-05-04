@@ -27983,6 +27983,15 @@ function parseSemanticReleasePlugins(value, errors) {
   return value;
 }
 function validateStreams(streams, errors, notices) {
+  const streamNameCounts = /* @__PURE__ */ new Map();
+  for (const s of streams) {
+    streamNameCounts.set(s.name, (streamNameCounts.get(s.name) ?? 0) + 1);
+  }
+  for (const [name, count] of streamNameCounts) {
+    if (count > 1) {
+      errors.push(`duplicate stream name: "${name}".`);
+    }
+  }
   const branchOwners = /* @__PURE__ */ new Map();
   for (const s of streams) {
     for (const b of s.branches) {
@@ -27995,6 +28004,23 @@ function validateStreams(streams, errors, notices) {
     if (owners.length > 1) {
       errors.push(
         `branch "${branch}" appears in multiple streams (${owners.join(", ")}). Each branch may belong to exactly one stream.`
+      );
+    }
+  }
+  const prereleaseOwners = /* @__PURE__ */ new Map();
+  for (const s of streams) {
+    for (const b of s.branches) {
+      if (typeof b.prerelease === "string") {
+        const spots = prereleaseOwners.get(b.prerelease) ?? [];
+        spots.push(`${s.name}/${b.name}`);
+        prereleaseOwners.set(b.prerelease, spots);
+      }
+    }
+  }
+  for (const [label, spots] of prereleaseOwners) {
+    if (spots.length > 1) {
+      errors.push(
+        `prerelease label "${label}" used by multiple branches (${spots.join(", ")}) \u2014 tags would collide.`
       );
     }
   }

@@ -22,7 +22,10 @@ VALID_TYPES = {
     "style", "test", "docs", "build", "ci", "revert",
 }
 VALID_AUTO_MERGE_KEYS = VALID_TYPES | {f"{t}!" for t in VALID_TYPES}
-VALID_MERGE_STRATEGIES = {"squash", "merge", "rebase"}
+VALID_MERGE_STRATEGIES = {"squash", "rebase"}
+VALID_TOP_LEVEL_KEYS = {"streams", "merge_strategy", "initial_version", "semantic_release_plugins"}
+VALID_STREAM_KEYS = {"name", "branches"}
+VALID_BRANCH_KEYS = {"name", "prerelease", "auto_merge"}
 SEMVER_RE = re.compile(r"^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$")
 
 
@@ -50,6 +53,9 @@ def main():
         return
 
     root = data["flywheel"]
+    for k in root:
+        if k not in VALID_TOP_LEVEL_KEYS:
+            emit("FAIL", f"flywheel.{k}: unknown key — allowed: {', '.join(sorted(VALID_TOP_LEVEL_KEYS))}")
     streams = root.get("streams") or []
     if not streams:
         emit("FAIL", ".flywheel.yml has no streams[]")
@@ -60,15 +66,25 @@ def main():
     branch_to_streams = {}
     prerelease_to_branches = {}
     stream_names = []
+    production_terminal_streams = []
 
     for s_idx, s in enumerate(streams):
+        if isinstance(s, dict):
+            for k in s:
+                if k not in VALID_STREAM_KEYS:
+                    emit("FAIL", f"stream #{s_idx}.{k}: unknown key — allowed: {', '.join(sorted(VALID_STREAM_KEYS))}")
         sname = s.get("name") or f"<unnamed stream #{s_idx}>"
         stream_names.append(sname)
         sbranches = s.get("branches") or []
         if not sbranches:
             emit("FAIL", f"stream {sname!r} has no branches")
             continue
+        production_in_stream = []
         for b_idx, b in enumerate(sbranches):
+            if isinstance(b, dict):
+                for k in b:
+                    if k not in VALID_BRANCH_KEYS:
+                        emit("FAIL", f"stream {sname!r} branch #{b_idx}.{k}: unknown key — allowed: {', '.join(sorted(VALID_BRANCH_KEYS))} (did you mean 'auto_merge' instead of 'auto-merge'?)")
             bname = b.get("name")
             if not bname:
                 emit("FAIL", f"stream {sname!r} branch #{b_idx} missing 'name'")
@@ -78,6 +94,8 @@ def main():
             prerelease = b.get("prerelease")
             if prerelease:
                 prerelease_to_branches.setdefault(prerelease, []).append((sname, bname))
+            else:
+                production_in_stream.append(bname)
             am = b.get("auto_merge", [])
             if not isinstance(am, list):
                 emit("FAIL", f"branch {bname!r} auto_merge must be a list")
@@ -87,6 +105,14 @@ def main():
                         emit("FAIL", f"branch {bname!r} auto_merge contains unrecognized type {entry!r}")
             if b_idx == len(sbranches) - 1 and len(sbranches) > 1:
                 emit("NOTE", f"branch {bname!r} is the terminal branch of stream {sname!r} (releases on push, no auto-promotion)")
+        if len(production_in_stream) > 1:
+            emit("FAIL", f"stream {sname!r}: multiple branches without a prerelease identifier ({', '.join(production_in_stream)}) — only the last branch in a stream should be the production release branch")
+        terminal = sbranches[-1] if sbranches else None
+        if terminal and not terminal.get("prerelease"):
+            production_terminal_streams.append(sname)
+
+    if len(production_terminal_streams) > 1:
+        emit("FAIL", f"multiple streams have a terminal production branch (no prerelease): {', '.join(production_terminal_streams)} — tag collision is unavoidable in a single repo, give all but one stream a prerelease identifier on its terminal branch")
 
     seen = set()
     for n in stream_names:
