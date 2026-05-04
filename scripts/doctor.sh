@@ -150,13 +150,18 @@ else
   warn "could not list repo secrets — verify FLYWHEEL_GH_APP_ID and FLYWHEEL_GH_APP_PRIVATE_KEY are set in repo Settings → Secrets and variables → Actions (App tokens cannot list secrets)"
 fi
 
-# 4. Repo settings: allow_auto_merge.
+# 4. Repo settings: allow_auto_merge, delete_branch_on_merge.
 bold "Repo settings"
-if allow_auto_merge="$(gh api "repos/$REPO" -q .allow_auto_merge 2>/dev/null)"; then
-  if [[ "$allow_auto_merge" == "true" ]]; then
+if repo_settings="$(gh api "repos/$REPO" 2>/dev/null)"; then
+  if [[ "$(echo "$repo_settings" | jq -r .allow_auto_merge)" == "true" ]]; then
     ok "allow_auto_merge enabled"
   else
     fail "allow_auto_merge disabled — enable in Settings → General → Pull Requests → Allow auto-merge"
+  fi
+  if [[ "$(echo "$repo_settings" | jq -r .delete_branch_on_merge)" == "true" ]]; then
+    ok "delete_branch_on_merge enabled (head branches auto-delete on merge)"
+  else
+    warn "delete_branch_on_merge disabled — recommended on to enforce one-PR-per-branch (Settings → General → 'Automatically delete head branches', or: gh api -X PATCH repos/$REPO -f delete_branch_on_merge=true)"
   fi
 else
   fail "could not read repo settings"

@@ -370,6 +370,14 @@ jobs:
 3. **Protect `v*` tag namespace** — only the bot may create or delete version tags. Prevents agents from minting arbitrary version tags. The App is added as a bypass actor here too so it can mint the release tag.
 4. **Branch naming (optional)** — require feature branches to match `(feat|fix|chore|refactor|perf|style|test|docs|build|ci|revert)/.*`.
 
+### Auto-delete merged branches
+
+Independent of rulesets but worth setting at the same time: enable Settings → General → Pull Requests → "Automatically delete head branches" (the underlying repo property is `delete_branch_on_merge`). With it on, the source branch disappears the moment the PR merges — enforcing a one-PR-per-branch workflow and eliminating the "I'll just push more commits to my old branch" trap. Reusing a merged branch causes phantom rebase conflicts because the squashed commit on the target has a different patch-id than the original commits, even though the content is identical. `init.sh` flips this for you. Manually:
+
+```bash
+gh api -X PATCH repos/<owner>/<repo> -f delete_branch_on_merge=true
+```
+
 ### Cost control under high PR volume
 
 Flywheel is designed for repos where agent swarms produce dozens or hundreds of open PRs concurrently. A few configuration knobs matter more than they would in a low-throughput repo:
@@ -430,11 +438,16 @@ This repo uses [Flywheel](https://github.com/point-source/flywheel) to orchestra
 
 **Required status checks.** Your PR must pass `<list required check names>` before merging. Run them locally before pushing (`<local commands>`) — every re-push to fix a failing required check costs CI minutes.
 
+**Open PRs only when ready to merge.** A branch is your private work-in-progress; a PR is a request to merge. Iterate on the branch beforehand; open the PR when the work is done. Once open and eligible, Flywheel auto-merges as soon as required checks pass.
+
+**One PR per branch; the branch dies on merge.** After your PR (or any PR carrying your commits — e.g. a maintainer's squashed cleanup) lands on the target branch, the branch is done. Cut a new branch off the latest base for your next change. With `delete_branch_on_merge` enabled (recommended; see [§5](#auto-delete-merged-branches)), the remote branch disappears automatically; reusing a stale local copy causes phantom rebase conflicts because the squashed upstream commit has a different patch-id than your originals.
+
 **Things you must not do:**
 - Do not push to or force-push managed branches (`<list>`); they are protected.
 - Do not create version tags (`v1.2.3`, etc.) or any tag matching the project's release namespace. Only Flywheel's GitHub App may mint them.
 - Do not edit a PR's title or body after Flywheel has rewritten them — push a new commit with the corrected conventional-commit message instead.
 - Do not open promotion PRs by hand. If a promotion PR is missing or stale, the upstream merge probably hasn't landed yet.
+- Do not reuse a branch after its commits have landed on the target branch (see "One PR per branch" above).
 
 **If your PR was labeled `flywheel:needs-review` and you expected `flywheel:auto-merge`:** the title's commit type is not in the target branch's `auto_merge` list, or you used a breaking variant (`feat!`) when only the non-breaking variant (`feat`) is allowed. Check `.flywheel.yml`.
 ````
