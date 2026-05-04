@@ -1,3 +1,16 @@
+# [2.1.0-dev.1](https://github.com/point-source/flywheel/compare/v2.0.0...v2.1.0-dev.1) (2026-05-04)
+
+
+### Bug Fixes
+
+* **scripts:** address review findings on PR [#27](https://github.com/point-source/flywheel/issues/27) ([#31](https://github.com/point-source/flywheel/issues/31)) ([34a8b07](https://github.com/point-source/flywheel/commit/34a8b076f5105f62e31c4f5e07f09aa65d0a5d5d))
+
+
+### Features
+
+* **config:** add develop to main-line stream as prerelease channel ([#25](https://github.com/point-source/flywheel/issues/25)) ([b19d1d7](https://github.com/point-source/flywheel/commit/b19d1d700ad20121549f409a5fa33190dc6053c8))
+* **scripts:** adopter setup DX cleanups ([#27](https://github.com/point-source/flywheel/issues/27)) ([90f7438](https://github.com/point-source/flywheel/commit/90f74382c9f99529aef98c61a319c96c7c2f6c09))
+
 # [2.0.0](https://github.com/point-source/flywheel/compare/v1.0.0...v2.0.0) (2026-05-01)
 
 
