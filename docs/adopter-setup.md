@@ -387,13 +387,21 @@ scripts/apply-rulesets.sh <owner/repo> --required-checks "Quality" --app-id <you
 
 (Or via `curl -fsSL https://raw.githubusercontent.com/point-source/flywheel/main/scripts/apply-rulesets.sh | bash -s -- <owner/repo>` if you don't have the Flywheel repo checked out.)
 
-## 6. Brief your AI coding agents
+## 6. Brief your contributors (human and AI)
 
-Skip this section if no AI agents (Claude Code, Cursor, Copilot, Codex, internal swarms) open PRs in this repo.
+The rules in this section apply to **everyone opening PRs against your repo** — human contributors and AI agents (Claude Code, Cursor, Copilot, Codex, internal swarms) alike. Flywheel doesn't care who authored a PR; it only cares whether the PR title is a Conventional Commit, whether it targets the right branch, and whether the commit type is auto-mergeable. Document the rules once, in a form both audiences can find.
 
-If they do, they will produce more compliant PRs if you tell them about Flywheel's rules in their instruction file — typically `CLAUDE.md`, `AGENTS.md`, or `.cursorrules` at the repo root. Without this, agents reliably invent branch names, write free-form PR titles, target the wrong branch, or try to mint their own version tags — and Flywheel dutifully labels every one of those PRs `flywheel:needs-review` until a human untangles it. With dozens or hundreds of concurrent agent-driven PRs, those wasted round-trips also burn GitHub Actions minutes (see [§5 Cost control under high PR volume](#cost-control-under-high-pr-volume)).
+Two failure modes if you don't:
 
-Paste the snippet below into your agent instruction file (rename / reformat as your tool expects). The bracketed placeholders split into two groups — three are mechanically derivable from `.flywheel.yml`, two require values that live outside Flywheel's config:
+- **Humans** figure it out from the `flywheel:needs-review` label or a maintainer comment, but every back-and-forth costs a round-trip and a fresh CI run.
+- **AI agents** fail more visibly and at higher volume — they invent branch names, write free-form PR titles, target the wrong branch, or try to mint version tags. With dozens or hundreds of concurrent agent-driven PRs, the wasted CI minutes add up fast (see [§5 Cost control under high PR volume](#cost-control-under-high-pr-volume)).
+
+**Where to put the rules.** Pick one of:
+
+- **Singular source (recommended).** Put the rules in `CONTRIBUTING.md` and have `CLAUDE.md` (or `AGENTS.md`, or `.cursorrules`) be a one-line pointer: *"Read CONTRIBUTING.md before opening a PR."* AI tooling reads the agent file, follows the link, and gets the same rules humans get. One place to keep current.
+- **Both files, both literal.** If your tooling can't follow links from agent files, paste the same snippet into `CONTRIBUTING.md` and `CLAUDE.md` / `AGENTS.md`. Workable but invites drift — pick one as authoritative and add a comment in the other saying so.
+
+Paste the snippet below into the file you've chosen as the source of truth. The bracketed placeholders split into two groups — three are mechanically derivable from `.flywheel.yml`, two require values that live outside Flywheel's config:
 
 | Placeholder | Source | How to fill it in |
 | --- | --- | --- |
@@ -439,7 +447,7 @@ Worked example using the three-stage promotion config from §2 (`develop` → `s
 - `<list required check names>` → `Quality`
 - `<local commands>` → `npm test && npm run lint` (whatever your `quality.yml` runs)
 
-If your repo already has a `CLAUDE.md` or equivalent, append the snippet under a new section heading rather than replacing existing content — the instructions are additive and don't conflict with typical "how to navigate this codebase" guidance.
+If your repo already has a `CONTRIBUTING.md`, `CLAUDE.md`, `AGENTS.md`, or equivalent, append the snippet under a new section heading rather than replacing existing content — the instructions are additive and don't conflict with typical "how to navigate this codebase" guidance.
 
 ## 7. Verify
 
