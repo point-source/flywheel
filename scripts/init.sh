@@ -95,13 +95,14 @@ fi
 # Templates contain `point-source/flywheel@__FLYWHEEL_VERSION__`; resolve
 # the placeholder to the latest released major (e.g. v3 from v3.2.1) so
 # adopters' workflows pin to a stable major. `--version` overrides for
-# sandbox/E2E pinning to a branch like `develop`. Falling back to `main`
-# (rather than a hardcoded major) keeps this maintenance-free across
-# future major releases — the latest-release API is the source of truth.
+# sandbox/E2E pinning (e.g. --version develop). Fail closed if the API
+# is unreachable — silently falling back to a branch like `main` would
+# move adopters onto unreleased code without their consent.
 if [[ -z "$FLYWHEEL_VERSION" ]]; then
   if ! FLYWHEEL_VERSION="$(gh api repos/point-source/flywheel/releases/latest --jq '.tag_name | split(".")[0]' 2>/dev/null)" || [[ -z "$FLYWHEEL_VERSION" ]]; then
-    FLYWHEEL_VERSION="main"
-    echo "  could not resolve latest Flywheel release — falling back to '$FLYWHEEL_VERSION' for template version pin."
+    echo "error: could not resolve latest Flywheel release via the GitHub API." >&2
+    echo "  Pass --version <ref> explicitly (e.g. --version v2 to pin to the v2 major)." >&2
+    exit 1
   fi
 fi
 echo "  templates will pin to: point-source/flywheel@${FLYWHEEL_VERSION}"

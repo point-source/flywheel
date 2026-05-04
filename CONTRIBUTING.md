@@ -36,8 +36,8 @@ src/                    TypeScript source (target ~400-500 lines total)
 
 tests/                  vitest unit tests (mirror src/)
 test-fixtures/          .flywheel.yml fixtures, one per scenario
-scripts/build.mjs       esbuild → dist/index.js
-dist/index.js           committed bundle GitHub executes (see below)
+scripts/build.mjs       esbuild → dist/index.cjs
+dist/index.cjs           committed bundle GitHub executes (see below)
 .github/workflows/      this repo's own Flywheel + verify-dist workflows
 .flywheel.yml           dogfood config (single stream, single branch: main)
 spec.md                 authoritative spec
@@ -49,11 +49,11 @@ testing_strategy.md     target three-layer test architecture (see Status note be
 ```bash
 npm run test:watch       # fast feedback while editing
 npm run typecheck        # strict TS check
-npm run build            # esbuild bundle → dist/index.js
+npm run build            # esbuild bundle → dist/index.cjs
 npm run verify-dist      # rebuild + fail if dist/ drifts (same check CI runs)
 ```
 
-**`dist/index.js` is committed.** GitHub Actions executes the bundle directly; there is no install step at action runtime. The `Verify dist` workflow (`.github/workflows/verify-dist.yml`) runs `npm run build` on every PR and fails if the resulting `dist/` doesn't match what you committed. Always `npm run build` and stage `dist/index.js` before opening a PR.
+**`dist/index.cjs` is committed.** GitHub Actions executes the bundle directly; there is no install step at action runtime. The `Verify dist` workflow (`.github/workflows/verify-dist.yml`) runs `npm run build` on every PR and fails if the resulting `dist/` doesn't match what you committed. Always `npm run build` and stage `dist/index.cjs` before opening a PR.
 
 ## Adding a `.flywheel.yml` validation case
 
@@ -89,7 +89,7 @@ The repo is itself a Flywheel adopter. Open a PR against `main` and your change 
 2. `gh pr create --title "chore: smoke test my change"` (or use the GitHub UI).
 3. Watch the PR's checks:
    - **`Flywheel — PR`** should rewrite your title (it's already a clean conventional commit, so the diff may be cosmetic) and apply `flywheel:auto-merge` or `flywheel:needs-review`.
-   - **`Verify dist`** should pass — if it doesn't, you forgot to `npm run build` and commit `dist/index.js`.
+   - **`Verify dist`** should pass — if it doesn't, you forgot to `npm run build` and commit `dist/index.cjs`.
 4. After merge, watch the push to `main`: `Flywheel — Push` runs `npx semantic-release@24` and (if your commit qualifies) cuts a tag and GitHub Release.
 
 Caveat: a change to event-handler logic only takes effect once `dist/` reflects it on the branch the workflow checks out. The `flywheel-pr.yml` step `uses: ./` (local checkout), so the bundled `dist/` from your branch is what runs — no extra step needed beyond `npm run build`.
@@ -118,7 +118,7 @@ When your change could meaningfully break adopters (schema changes, validation s
    ```yaml
    uses: <your-handle>/flywheel@<your-branch>
    ```
-   Push your branch (with a freshly built `dist/index.js`) so GitHub Actions can resolve the ref.
+   Push your branch (with a freshly built `dist/index.cjs`) so GitHub Actions can resolve the ref.
 4. Configure App-token secrets (`FLYWHEEL_GH_APP_ID` + `FLYWHEEL_GH_APP_PRIVATE_KEY`) using either `scripts/init.sh` from your sandbox repo or the manual steps in [`docs/adopter-setup.md`](./docs/adopter-setup.md#1-create-a-github-app).
 5. Open a PR with title `chore: smoke test` and confirm the rewrite + label + auto-merge behaviour.
 6. Merge it. Confirm the push triggers `semantic-release` and produces a tag + GitHub Release.
@@ -129,7 +129,7 @@ Before opening a PR:
 
 - [ ] `npm run typecheck` is clean
 - [ ] `npm test` is clean
-- [ ] `npm run verify-dist` is clean (i.e. you ran `npm run build` and committed `dist/index.js`)
+- [ ] `npm run verify-dist` is clean (i.e. you ran `npm run build` and committed `dist/index.cjs`)
 - [ ] PR title is a Conventional Commit; breaking change is signalled with `!` if appropriate
 - [ ] If you added a validation rule, you added a fixture in `test-fixtures/` and a test in `tests/config.test.ts`
 
