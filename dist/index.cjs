@@ -28069,12 +28069,12 @@ function createGitHubClient(token, repoFullName) {
     async enableAutoMerge(pullRequestId, mergeMethod2) {
       try {
         await octokit.graphql(
-          `mutation Enable($id: ID!, $method: PullRequestMergeMethod!) {
-            enablePullRequestAutoMerge(input: { pullRequestId: $id, mergeMethod: $method }) {
+          `mutation Enable($id: ID!, $mergeMethod: PullRequestMergeMethod!) {
+            enablePullRequestAutoMerge(input: { pullRequestId: $id, mergeMethod: $mergeMethod }) {
               pullRequest { id }
             }
           }`,
-          { id: pullRequestId, method: mergeMethod2 }
+          { id: pullRequestId, mergeMethod: mergeMethod2 }
         );
         return { ok: true };
       } catch (err) {
