@@ -5,4 +5,3 @@ flywheel:
         - name: main
           auto_merge: [fix, chore, docs]
   merge_strategy: squash
-  initial_version: 0.1.0

@@ -55,7 +55,6 @@ flywheel:
         - name: main
           auto_merge: []
   merge_strategy: squash
-  initial_version: 0.1.0
 ```
 
 See **[docs/adopter-setup.md](./docs/adopter-setup.md)** for the full setup walkthrough including the workflow templates, branch protection rulesets, and required secret scopes.

@@ -6,8 +6,6 @@ import { ALLOWED_AUTO_MERGE_ENTRIES } from "./conventional.js";
 const TOP_LEVEL_KEYS = new Set([
   "streams",
   "merge_strategy",
-  "initial_version",
-  "semantic_release_plugins",
 ]);
 
 const BRANCH_KEYS = new Set(["name", "prerelease", "auto_merge"]);
@@ -56,11 +54,6 @@ export function loadConfig(yamlText: string): ConfigLoadResult {
 
   const streams = parseStreams(root.streams, errors);
   const mergeStrategy = parseMergeStrategy(root.merge_strategy, errors);
-  const initialVersion = parseInitialVersion(root.initial_version, errors);
-  const semanticReleasePlugins = parseSemanticReleasePlugins(
-    root.semantic_release_plugins,
-    errors,
-  );
 
   if (streams && streams.length > 0) {
     validateStreams(streams, errors, notices);
@@ -74,10 +67,6 @@ export function loadConfig(yamlText: string): ConfigLoadResult {
     config: {
       streams: streams!,
       merge_strategy: mergeStrategy,
-      initial_version: initialVersion,
-      ...(semanticReleasePlugins
-        ? { semantic_release_plugins: semanticReleasePlugins }
-        : {}),
     },
     errors,
     warnings,
@@ -208,34 +197,22 @@ function parseMergeStrategy(value: unknown, errors: string[]) {
   return value as "squash" | "rebase";
 }
 
-function parseInitialVersion(value: unknown, errors: string[]): string {
-  if (value === undefined) return "0.1.0";
-  if (typeof value !== "string" || !/^\d+\.\d+\.\d+$/.test(value)) {
-    errors.push(
-      `flywheel.initial_version: must be a semver string like "0.1.0" (got ${JSON.stringify(value)}).`,
-    );
-    return "0.1.0";
-  }
-  return value;
-}
-
-function parseSemanticReleasePlugins(
-  value: unknown,
-  errors: string[],
-): unknown[] | undefined {
-  if (value === undefined) return undefined;
-  if (!Array.isArray(value)) {
-    errors.push("flywheel.semantic_release_plugins: must be a list if present.");
-    return undefined;
-  }
-  return value;
-}
-
 function validateStreams(
   streams: Stream[],
   errors: string[],
   notices: string[],
 ): void {
+  // Rule 0: duplicate stream name.
+  const streamNameCounts = new Map<string, number>();
+  for (const s of streams) {
+    streamNameCounts.set(s.name, (streamNameCounts.get(s.name) ?? 0) + 1);
+  }
+  for (const [name, count] of streamNameCounts) {
+    if (count > 1) {
+      errors.push(`duplicate stream name: "${name}".`);
+    }
+  }
+
   // Rule 1: branch in >1 stream.
   const branchOwners = new Map<string, string[]>();
   for (const s of streams) {
@@ -250,6 +227,25 @@ function validateStreams(
       errors.push(
         `branch "${branch}" appears in multiple streams (${owners.join(", ")}). ` +
           "Each branch may belong to exactly one stream.",
+      );
+    }
+  }
+
+  // Rule 1b: same prerelease label used by >1 branch — tags would collide.
+  const prereleaseOwners = new Map<string, string[]>();
+  for (const s of streams) {
+    for (const b of s.branches) {
+      if (typeof b.prerelease === "string") {
+        const spots = prereleaseOwners.get(b.prerelease) ?? [];
+        spots.push(`${s.name}/${b.name}`);
+        prereleaseOwners.set(b.prerelease, spots);
+      }
+    }
+  }
+  for (const [label, spots] of prereleaseOwners) {
+    if (spots.length > 1) {
+      errors.push(
+        `prerelease label "${label}" used by multiple branches (${spots.join(", ")}) — tags would collide.`,
       );
     }
   }

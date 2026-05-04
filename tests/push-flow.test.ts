@@ -18,7 +18,6 @@ const config: FlywheelConfig = {
     },
   ],
   merge_strategy: "squash",
-  initial_version: "0.1.0",
 };
 
 describe("runPushFlow", () => {
@@ -89,8 +88,7 @@ describe("getUpstreamBranches", () => {
       },
     ],
     merge_strategy: "squash",
-    initial_version: "0.1.0",
-  };
+    };
 
   it("terminal branch → returns all earlier branches in stream order", () => {
     expect(getUpstreamBranches(threeStage, "main")).toEqual(["develop", "staging"]);

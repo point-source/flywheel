@@ -11,4 +11,3 @@ flywheel:
         - name: main
           auto_merge: []
   merge_strategy: squash
-  initial_version: 0.1.0

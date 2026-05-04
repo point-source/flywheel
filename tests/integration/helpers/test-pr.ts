@@ -110,3 +110,29 @@ export async function fetchPRRaw(number: number) {
   });
   return res.data;
 }
+
+// GitHub's read API can lag a PR write by a few seconds (eventual consistency
+// across read replicas). Tests that mutate a PR and then read it back must
+// either wait or risk a stale read. waitForPR polls fetchPR up to 30s,
+// returning the first value that satisfies `predicate`. The bound is
+// deliberately well under any reasonable CI step timeout — if it fires, the
+// problem is a real bug, not GitHub being slow.
+export async function waitForPR(
+  number: number,
+  predicate: (pr: import("../../../src/github.js").PullRequest) => boolean,
+  description: string,
+  { timeoutMs = 30_000, pollMs = 500 }: { timeoutMs?: number; pollMs?: number } = {},
+): Promise<import("../../../src/github.js").PullRequest> {
+  const deadline = Date.now() + timeoutMs;
+  let pr = await fetchPR(number);
+  while (!predicate(pr)) {
+    if (Date.now() > deadline) {
+      throw new Error(
+        `Timed out after ${timeoutMs}ms waiting for PR #${number}: ${description}`,
+      );
+    }
+    await new Promise((resolve) => setTimeout(resolve, pollMs));
+    pr = await fetchPR(number);
+  }
+  return pr;
+}

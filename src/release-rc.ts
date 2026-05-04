@@ -28,8 +28,7 @@ export function generateReleaseRc(
   const branches = targetStream.branches.map((b) =>
     mapBranch(b, targetStream.branches.length === 1),
   );
-  const plugins = mergePlugins(config.semantic_release_plugins);
-  return { tagFormat, branches, plugins };
+  return { tagFormat, branches, plugins: [...DEFAULT_PLUGINS] };
 }
 
 export function chooseTagFormat(target: Stream, allStreams: Stream[]): string {
@@ -69,9 +68,4 @@ function mapBranch(branch: Branch, isOnlyBranchInStream: boolean): SemanticRelea
   }
 
   return { name: branch.name };
-}
-
-function mergePlugins(extra: unknown[] | undefined): unknown[] {
-  if (!extra || extra.length === 0) return [...DEFAULT_PLUGINS];
-  return [...DEFAULT_PLUGINS, ...extra];
 }
