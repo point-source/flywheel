@@ -86,8 +86,11 @@ fi
 
 # apply_ruleset: idempotent create-or-replace by ruleset name. Re-running
 # this script after .flywheel.yml changes (e.g. adding a branch) must update
-# the existing ruleset rather than stack a duplicate — PUT replaces the entire
-# config, so we DELETE-then-POST to avoid surprising merges of manual edits.
+# the existing ruleset rather than stack a duplicate. PUT updates the
+# ruleset in place — atomic, preserves the ruleset ID (and the
+# https://github.com/.../rules/<id> URLs that reference it), and never
+# leaves the repo briefly unprotected the way DELETE-then-POST would if
+# the POST failed.
 apply_ruleset() {
   local payload="$1"
   local name
@@ -95,10 +98,11 @@ apply_ruleset() {
   local existing_id
   existing_id="$(gh api "repos/$REPO/rulesets" --jq ".[] | select(.name == \"$name\") | .id" | head -n1)"
   if [[ -n "$existing_id" ]]; then
-    echo "Replacing existing '$name' ruleset (id $existing_id)..."
-    gh api -X DELETE "repos/$REPO/rulesets/$existing_id" --silent
+    echo "Updating existing '$name' ruleset (id $existing_id) in place..."
+    echo "$payload" | gh api -X PUT "/repos/$REPO/rulesets/$existing_id" --input -
+  else
+    echo "$payload" | gh api -X POST "/repos/$REPO/rulesets" --input -
   fi
-  echo "$payload" | gh api -X POST "/repos/$REPO/rulesets" --input -
 }
 
 echo "Applying managed-branches ruleset to $branch_count branch(es) in $REPO..."
