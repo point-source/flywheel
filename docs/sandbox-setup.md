@@ -128,7 +128,7 @@ create the version tag itself.
 `scripts/templates/flywheel-push.yml` carries two adopter-relevant
 details that aren't obvious — keep them when copying:
 
-- `actions/checkout@v4` is invoked with `persist-credentials: false`.
+- `actions/checkout@v6` is invoked with `persist-credentials: false`.
   Without this flag, checkout writes the workflow's default
   `GITHUB_TOKEN` into `http.<url>.extraheader`, which shadows the App
   installation token semantic-release embeds in its push URL — the push

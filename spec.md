@@ -464,7 +464,7 @@ jobs:
       (github.event.action != 'edited' || github.event.sender.type == 'User')
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: point-source/flywheel@v2
         with:
           event: pull_request
@@ -486,7 +486,7 @@ jobs:
   release:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
           # Don't persist the workflow's default GITHUB_TOKEN as a git
@@ -562,7 +562,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: actions/create-github-app-token@v1
         id: app-token
         with:
@@ -620,7 +620,7 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - run: ./your-test-script.sh
 ```
 
