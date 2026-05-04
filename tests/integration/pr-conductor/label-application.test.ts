@@ -14,7 +14,7 @@ import {
   sandboxOctokit,
 } from "../helpers/sandbox-client.js";
 import { sandboxConfig } from "../helpers/sandbox-config.js";
-import { createTestPR, fetchPR, uniqueBranch } from "../helpers/test-pr.js";
+import { createTestPR, fetchPR, uniqueBranch, waitForPR } from "../helpers/test-pr.js";
 import { registerForTeardown, runTeardown } from "../helpers/teardown.js";
 
 describe.skipIf(!hasSandboxToken)("integration: label application", () => {
@@ -79,7 +79,11 @@ describe.skipIf(!hasSandboxToken)("integration: label application", () => {
       title: "fix: actually a fix",
     });
 
-    const pr2 = await fetchPR(handle.number);
+    const pr2 = await waitForPR(
+      handle.number,
+      (p) => p.title.startsWith("fix:"),
+      "title to update from feat: to fix:",
+    );
     await runPrFlow({ pr: pr2, config: sandboxConfig, gh: sandboxGh(), log });
 
     const afterFlip = await fetchPR(handle.number);

@@ -60,7 +60,6 @@ flywheel:
         - name: main
           auto_merge: [fix, chore, docs]
   merge_strategy: squash
-  initial_version: 0.1.0
 ```
 
 A single-branch stream releases on every qualifying push and creates no promotion PRs. This is the simplest valid configuration.
@@ -81,7 +80,6 @@ flywheel:
         - name: main
           auto_merge: []   # all PRs require human approval
   merge_strategy: squash
-  initial_version: 0.1.0
 ```
 
 A multi-stream example with a customer variant:
@@ -102,7 +100,6 @@ flywheel:
           prerelease: acme
           auto_merge: [fix, fix!, chore]
   merge_strategy: squash
-  initial_version: 0.1.0
 ```
 
 ## 3. Add the Flywheel workflows

@@ -27791,9 +27791,7 @@ function isBumping(type2, breaking) {
 // src/config.ts
 var TOP_LEVEL_KEYS = /* @__PURE__ */ new Set([
   "streams",
-  "merge_strategy",
-  "initial_version",
-  "semantic_release_plugins"
+  "merge_strategy"
 ]);
 var BRANCH_KEYS = /* @__PURE__ */ new Set(["name", "prerelease", "auto_merge"]);
 var STREAM_KEYS = /* @__PURE__ */ new Set(["name", "branches"]);
@@ -27828,11 +27826,6 @@ function loadConfig(yamlText) {
   }
   const streams = parseStreams(root.streams, errors);
   const mergeStrategy = parseMergeStrategy(root.merge_strategy, errors);
-  const initialVersion = parseInitialVersion(root.initial_version, errors);
-  const semanticReleasePlugins = parseSemanticReleasePlugins(
-    root.semantic_release_plugins,
-    errors
-  );
   if (streams && streams.length > 0) {
     validateStreams(streams, errors, notices);
   }
@@ -27842,9 +27835,7 @@ function loadConfig(yamlText) {
   return {
     config: {
       streams,
-      merge_strategy: mergeStrategy,
-      initial_version: initialVersion,
-      ...semanticReleasePlugins ? { semantic_release_plugins: semanticReleasePlugins } : {}
+      merge_strategy: mergeStrategy
     },
     errors,
     warnings,
@@ -27964,25 +27955,16 @@ function parseMergeStrategy(value, errors) {
   }
   return value;
 }
-function parseInitialVersion(value, errors) {
-  if (value === void 0) return "0.1.0";
-  if (typeof value !== "string" || !/^\d+\.\d+\.\d+$/.test(value)) {
-    errors.push(
-      `flywheel.initial_version: must be a semver string like "0.1.0" (got ${JSON.stringify(value)}).`
-    );
-    return "0.1.0";
-  }
-  return value;
-}
-function parseSemanticReleasePlugins(value, errors) {
-  if (value === void 0) return void 0;
-  if (!Array.isArray(value)) {
-    errors.push("flywheel.semantic_release_plugins: must be a list if present.");
-    return void 0;
-  }
-  return value;
-}
 function validateStreams(streams, errors, notices) {
+  const streamNameCounts = /* @__PURE__ */ new Map();
+  for (const s of streams) {
+    streamNameCounts.set(s.name, (streamNameCounts.get(s.name) ?? 0) + 1);
+  }
+  for (const [name, count] of streamNameCounts) {
+    if (count > 1) {
+      errors.push(`duplicate stream name: "${name}".`);
+    }
+  }
   const branchOwners = /* @__PURE__ */ new Map();
   for (const s of streams) {
     for (const b of s.branches) {
@@ -27995,6 +27977,23 @@ function validateStreams(streams, errors, notices) {
     if (owners.length > 1) {
       errors.push(
         `branch "${branch}" appears in multiple streams (${owners.join(", ")}). Each branch may belong to exactly one stream.`
+      );
+    }
+  }
+  const prereleaseOwners = /* @__PURE__ */ new Map();
+  for (const s of streams) {
+    for (const b of s.branches) {
+      if (typeof b.prerelease === "string") {
+        const spots = prereleaseOwners.get(b.prerelease) ?? [];
+        spots.push(`${s.name}/${b.name}`);
+        prereleaseOwners.set(b.prerelease, spots);
+      }
+    }
+  }
+  for (const [label, spots] of prereleaseOwners) {
+    if (spots.length > 1) {
+      errors.push(
+        `prerelease label "${label}" used by multiple branches (${spots.join(", ")}) \u2014 tags would collide.`
       );
     }
   }
@@ -28374,8 +28373,7 @@ function generateReleaseRc(targetStream, config) {
   const branches = targetStream.branches.map(
     (b) => mapBranch(b, targetStream.branches.length === 1)
   );
-  const plugins = mergePlugins(config.semantic_release_plugins);
-  return { tagFormat, branches, plugins };
+  return { tagFormat, branches, plugins: [...DEFAULT_PLUGINS] };
 }
 function chooseTagFormat(target, allStreams) {
   const primary = pickPrimaryStream(allStreams);
@@ -28400,10 +28398,6 @@ function mapBranch(branch, isOnlyBranchInStream) {
     return { name: branch.name, prerelease: id, channel: id };
   }
   return { name: branch.name };
-}
-function mergePlugins(extra) {
-  if (!extra || extra.length === 0) return [...DEFAULT_PLUGINS];
-  return [...DEFAULT_PLUGINS, ...extra];
 }
 
 // src/push-flow.ts
