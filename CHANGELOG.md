@@ -1,3 +1,10 @@
+# [2.1.0-dev.2](https://github.com/point-source/flywheel/compare/v2.1.0-dev.1...v2.1.0-dev.2) (2026-05-04)
+
+
+### Bug Fixes
+
+* **github:** rename $method GraphQL var; bump actions/checkout to v6 ([#32](https://github.com/point-source/flywheel/issues/32)) ([83947ce](https://github.com/point-source/flywheel/commit/83947ce615ad98db921cad656f494607764cf12a))
+
 # [2.1.0-dev.1](https://github.com/point-source/flywheel/compare/v2.0.0...v2.1.0-dev.1) (2026-05-04)
 
 
