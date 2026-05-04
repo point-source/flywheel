@@ -9,7 +9,8 @@ flywheel:
         # so its tag ancestry stays in sync and the next dev cycle
         # computes versions from the most recent release.
         - name: develop
-          prerelease: dev
+          release: prerelease
+          suffix: dev
           auto_merge:
             - feat
             - fix
@@ -23,6 +24,7 @@ flywheel:
             - ci
             - build
         - name: main
+          release: production
           auto_merge:
             - feat
             - fix

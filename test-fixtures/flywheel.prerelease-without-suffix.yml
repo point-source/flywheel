@@ -3,7 +3,7 @@ flywheel:
     - name: main-line
       branches:
         - name: develop
-          release: production
+          release: prerelease
           auto_merge: [fix]
         - name: main
           release: production

@@ -3,10 +3,12 @@ flywheel:
     - name: stream-a
       branches:
         - name: shared
-          prerelease: a
+          release: prerelease
+          suffix: a
           auto_merge: [fix]
     - name: stream-b
       branches:
         - name: shared
-          prerelease: b
+          release: prerelease
+          suffix: b
           auto_merge: [fix]

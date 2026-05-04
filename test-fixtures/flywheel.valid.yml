@@ -3,7 +3,7 @@ flywheel:
     - name: main-line
       branches:
         - name: develop
-          prerelease: dev
+          release: none
           auto_merge:
             - fix
             - fix!
@@ -15,7 +15,8 @@ flywheel:
             - test
             - docs
         - name: staging
-          prerelease: rc
+          release: prerelease
+          suffix: rc
           auto_merge:
             - fix
             - chore
@@ -23,11 +24,13 @@ flywheel:
             - test
             - docs
         - name: main
+          release: production
           auto_merge: []
     - name: customer-acme
       branches:
         - name: customer-acme
-          prerelease: acme
+          release: prerelease
+          suffix: acme
           auto_merge:
             - fix
             - fix!

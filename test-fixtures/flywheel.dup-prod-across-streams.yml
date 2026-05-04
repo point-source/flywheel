@@ -3,8 +3,10 @@ flywheel:
     - name: stream-a
       branches:
         - name: main-a
+          release: production
           auto_merge: []
     - name: stream-b
       branches:
         - name: main-b
+          release: production
           auto_merge: []

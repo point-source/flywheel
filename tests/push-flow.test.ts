@@ -8,13 +8,15 @@ const config: FlywheelConfig = {
     {
       name: "main-line",
       branches: [
-        { name: "develop", prerelease: "dev", auto_merge: ["fix"] },
-        { name: "main", auto_merge: [] },
+        { name: "develop", release: "prerelease", suffix: "dev", auto_merge: ["fix"] },
+        { name: "main", release: "production", auto_merge: [] },
       ],
     },
     {
       name: "customer-acme",
-      branches: [{ name: "customer-acme", prerelease: "acme", auto_merge: ["fix"] }],
+      branches: [
+        { name: "customer-acme", release: "prerelease", suffix: "acme", auto_merge: ["fix"] },
+      ],
     },
   ],
   merge_strategy: "squash",
@@ -73,6 +75,34 @@ describe("runPushFlow", () => {
     expect(rc.tagFormat).toBe("customer-acme/v${version}");
     expect(rc.branches).toEqual([{ name: "customer-acme" }]);
   });
+
+  it("release: none branch → promote-only outcome, no .releaserc written", async () => {
+    const promoteOnlyConfig: FlywheelConfig = {
+      streams: [
+        {
+          name: "main-line",
+          branches: [
+            { name: "develop", release: "none", auto_merge: ["fix"] },
+            { name: "staging", release: "prerelease", suffix: "rc", auto_merge: ["fix"] },
+            { name: "main", release: "production", auto_merge: [] },
+          ],
+        },
+      ],
+      merge_strategy: "squash",
+    };
+    const writes: Array<{ path: string; contents: string }> = [];
+    const outcome = await runPushFlow({
+      branchRef: "develop",
+      config: promoteOnlyConfig,
+      workspace: "/ws",
+      log: { info: () => undefined },
+      writer: async (path, contents) => {
+        writes.push({ path, contents });
+      },
+    });
+    expect(outcome.kind).toBe("promote-only");
+    expect(writes).toEqual([]);
+  });
 });
 
 describe("getUpstreamBranches", () => {
@@ -81,14 +111,14 @@ describe("getUpstreamBranches", () => {
       {
         name: "main-line",
         branches: [
-          { name: "develop", prerelease: "dev", auto_merge: ["fix"] },
-          { name: "staging", prerelease: "rc", auto_merge: ["fix"] },
-          { name: "main", auto_merge: [] },
+          { name: "develop", release: "prerelease", suffix: "dev", auto_merge: ["fix"] },
+          { name: "staging", release: "prerelease", suffix: "rc", auto_merge: ["fix"] },
+          { name: "main", release: "production", auto_merge: [] },
         ],
       },
     ],
     merge_strategy: "squash",
-    };
+  };
 
   it("terminal branch → returns all earlier branches in stream order", () => {
     expect(getUpstreamBranches(threeStage, "main")).toEqual(["develop", "staging"]);

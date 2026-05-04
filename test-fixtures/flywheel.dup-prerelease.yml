@@ -3,12 +3,15 @@ flywheel:
     - name: stream-a
       branches:
         - name: branch-a
-          prerelease: dev
+          release: prerelease
+          suffix: dev
           auto_merge: [fix]
         - name: main-a
+          release: production
           auto_merge: []
     - name: stream-b
       branches:
         - name: branch-b
-          prerelease: dev
+          release: prerelease
+          suffix: dev
           auto_merge: [fix]
