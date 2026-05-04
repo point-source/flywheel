@@ -179,9 +179,6 @@ flywheel:
   # requires linear history, which is incompatible with merge commits.
   # If you need merge commits, disable the linear history ruleset requirement.
   merge_strategy: squash
-
-  # Initial version if no tags exist in the repo.
-  initial_version: 0.1.0
 ```
 
 ### Branch config fields

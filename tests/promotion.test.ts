@@ -34,7 +34,6 @@ const config: FlywheelConfig = {
     },
   ],
   merge_strategy: "squash",
-  initial_version: "0.1.0",
 };
 
 const date = (iso: string) => iso;

@@ -24,7 +24,6 @@ const baseConfig: FlywheelConfig = {
     },
   ],
   merge_strategy: "squash",
-  initial_version: "0.1.0",
 };
 
 function makePR(overrides: Partial<PullRequest> = {}): PullRequest {

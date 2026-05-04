@@ -27791,8 +27791,7 @@ function isBumping(type2, breaking) {
 // src/config.ts
 var TOP_LEVEL_KEYS = /* @__PURE__ */ new Set([
   "streams",
-  "merge_strategy",
-  "initial_version"
+  "merge_strategy"
 ]);
 var BRANCH_KEYS = /* @__PURE__ */ new Set(["name", "prerelease", "auto_merge"]);
 var STREAM_KEYS = /* @__PURE__ */ new Set(["name", "branches"]);
@@ -27827,7 +27826,6 @@ function loadConfig(yamlText) {
   }
   const streams = parseStreams(root.streams, errors);
   const mergeStrategy = parseMergeStrategy(root.merge_strategy, errors);
-  const initialVersion = parseInitialVersion(root.initial_version, errors);
   if (streams && streams.length > 0) {
     validateStreams(streams, errors, notices);
   }
@@ -27837,8 +27835,7 @@ function loadConfig(yamlText) {
   return {
     config: {
       streams,
-      merge_strategy: mergeStrategy,
-      initial_version: initialVersion
+      merge_strategy: mergeStrategy
     },
     errors,
     warnings,
@@ -27955,16 +27952,6 @@ function parseMergeStrategy(value, errors) {
       `flywheel.merge_strategy: must be "squash" or "rebase" (got ${JSON.stringify(value)}).`
     );
     return "squash";
-  }
-  return value;
-}
-function parseInitialVersion(value, errors) {
-  if (value === void 0) return "0.1.0";
-  if (typeof value !== "string" || !/^\d+\.\d+\.\d+$/.test(value)) {
-    errors.push(
-      `flywheel.initial_version: must be a semver string like "0.1.0" (got ${JSON.stringify(value)}).`
-    );
-    return "0.1.0";
   }
   return value;
 }

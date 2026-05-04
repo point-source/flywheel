@@ -6,7 +6,6 @@ import { ALLOWED_AUTO_MERGE_ENTRIES } from "./conventional.js";
 const TOP_LEVEL_KEYS = new Set([
   "streams",
   "merge_strategy",
-  "initial_version",
 ]);
 
 const BRANCH_KEYS = new Set(["name", "prerelease", "auto_merge"]);
@@ -55,7 +54,6 @@ export function loadConfig(yamlText: string): ConfigLoadResult {
 
   const streams = parseStreams(root.streams, errors);
   const mergeStrategy = parseMergeStrategy(root.merge_strategy, errors);
-  const initialVersion = parseInitialVersion(root.initial_version, errors);
 
   if (streams && streams.length > 0) {
     validateStreams(streams, errors, notices);
@@ -69,7 +67,6 @@ export function loadConfig(yamlText: string): ConfigLoadResult {
     config: {
       streams: streams!,
       merge_strategy: mergeStrategy,
-      initial_version: initialVersion,
     },
     errors,
     warnings,
@@ -198,17 +195,6 @@ function parseMergeStrategy(value: unknown, errors: string[]) {
     return "squash" as const;
   }
   return value as "squash" | "rebase";
-}
-
-function parseInitialVersion(value: unknown, errors: string[]): string {
-  if (value === undefined) return "0.1.0";
-  if (typeof value !== "string" || !/^\d+\.\d+\.\d+$/.test(value)) {
-    errors.push(
-      `flywheel.initial_version: must be a semver string like "0.1.0" (got ${JSON.stringify(value)}).`,
-    );
-    return "0.1.0";
-  }
-  return value;
 }
 
 function validateStreams(

@@ -5,7 +5,6 @@ import type { FlywheelConfig } from "../src/types.js";
 
 const baseRc = {
   merge_strategy: "squash" as const,
-  initial_version: "0.1.0",
 };
 
 describe("generateReleaseRc", () => {

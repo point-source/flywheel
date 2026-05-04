@@ -22,7 +22,6 @@ describe("loadConfig", () => {
     ]);
     expect(result.config!.streams[0]!.branches[2]!.prerelease).toBeUndefined();
     expect(result.config!.merge_strategy).toBe("squash");
-    expect(result.config!.initial_version).toBe("0.1.0");
   });
 
   it("flags branch in multiple streams (rule 1)", () => {

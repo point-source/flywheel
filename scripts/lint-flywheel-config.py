@@ -12,7 +12,6 @@
 # result to its own colored output / fail-count. Always exits 0 — the
 # wrapper inspects RESULT FAIL lines to decide overall pass/fail. A
 # nonzero exit only indicates the script itself crashed.
-import re
 import sys
 
 import yaml
@@ -23,10 +22,9 @@ VALID_TYPES = {
 }
 VALID_AUTO_MERGE_KEYS = VALID_TYPES | {f"{t}!" for t in VALID_TYPES}
 VALID_MERGE_STRATEGIES = {"squash", "rebase"}
-VALID_TOP_LEVEL_KEYS = {"streams", "merge_strategy", "initial_version"}
+VALID_TOP_LEVEL_KEYS = {"streams", "merge_strategy"}
 VALID_STREAM_KEYS = {"name", "branches"}
 VALID_BRANCH_KEYS = {"name", "prerelease", "auto_merge"}
-SEMVER_RE = re.compile(r"^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$")
 
 
 def emit(status, msg):
@@ -134,12 +132,6 @@ def main():
         emit("WARN", "merge_strategy not set — explicit is safer")
     elif ms not in VALID_MERGE_STRATEGIES:
         emit("FAIL", f"merge_strategy {ms!r} invalid — must be one of {', '.join(sorted(VALID_MERGE_STRATEGIES))}")
-
-    iv = root.get("initial_version")
-    if iv is None:
-        emit("WARN", "initial_version not set — Flywheel will default to 0.1.0")
-    elif not isinstance(iv, str) or not SEMVER_RE.match(iv):
-        emit("FAIL", f"initial_version {iv!r} is not valid semver (e.g. '0.1.0')")
 
     print("BRANCHES " + " ".join(all_branches))
 

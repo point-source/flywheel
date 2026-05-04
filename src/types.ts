@@ -16,7 +16,6 @@ export interface Stream {
 export interface FlywheelConfig {
   streams: Stream[];
   merge_strategy: MergeStrategy;
-  initial_version: string;
 }
 
 export interface ParsedTitle {

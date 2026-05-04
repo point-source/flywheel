@@ -33,4 +33,3 @@ flywheel:
             - fix!
             - chore
   merge_strategy: squash
-  initial_version: 0.1.0

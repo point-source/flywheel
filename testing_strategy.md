@@ -155,7 +155,6 @@ flywheel:
           auto_merge: [fix, chore, perf, style, test]
 
   merge_strategy: squash
-  initial_version: 0.1.0
 ```
 
 Long-lived branches: `e2e-main`, `e2e-staging`, `e2e-develop`,
