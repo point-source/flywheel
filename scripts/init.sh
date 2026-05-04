@@ -279,7 +279,17 @@ else
   fi
 fi
 
-# 4. Optionally apply rulesets.
+# 4. Repo setting: auto-delete head branches on merge. Enforces the
+# one-PR-per-branch workflow Flywheel assumes — without it, contributors
+# can accidentally reuse a merged branch and hit phantom rebase conflicts
+# against the squashed upstream commit.
+if gh api -X PATCH "repos/$REPO" -f delete_branch_on_merge=true >/dev/null 2>&1; then
+  echo "  enabled delete_branch_on_merge (head branches auto-delete on PR merge)."
+else
+  echo "  warning: could not set delete_branch_on_merge — set manually in Settings → General → Pull Requests, or check your gh permissions." >&2
+fi
+
+# 5. Optionally apply rulesets.
 if [[ "$SKIP_RULESETS" -eq 0 && -x "${SCRIPT_DIR:-}/apply-rulesets.sh" ]]; then
   if [[ "$INTERACTIVE" -eq 1 ]]; then
     read -r -u 3 -p "  Apply branch + tag protection rulesets now? [y/N] " yn

@@ -85,11 +85,16 @@ Recognized types: `feat`, `fix`, `chore`, `refactor`, `perf`, `style`, `test`, `
 
 **Auto-merge eligibility.** Both `develop` and `main` auto-merge `feat`, `fix`, `fix!`, `chore`, `refactor`, `perf`, `style`, `test`, `docs`, `ci`, `build`. They deliberately **exclude `feat!`** — major bumps require human review on this repo.
 
+**Open PRs only when ready to merge.** A branch is your private work-in-progress; a PR is a request to merge. There is no "draft" intermediate state in this workflow. Iterate on the branch (push, run checks locally, etc.); when the work is ready, push and open the PR. Once open, Flywheel will rewrite the title, label it, and — if eligible — auto-merge as soon as required checks pass.
+
+**One PR per branch; the branch dies on merge.** After your PR merges (or after any PR carrying your commits merges — e.g. a maintainer squashed them into a cleanup PR) the branch is done. Cut a new branch off the latest `develop` for your next change. The repo has `delete_branch_on_merge` enabled so the remote branch disappears automatically; if you still have it locally, delete it (`git branch -D <name>`) before starting new work. Reusing a merged branch causes phantom rebase conflicts because the squashed upstream commit has a different patch-id than your originals.
+
 **Things you must not do:**
 - Do not push to or force-push `develop` or `main` directly; both are protected and only Flywheel's GitHub App is on the bypass list.
 - Do not create version tags (`v1.2.3`, `v*-dev.N`, etc.) by hand. Only Flywheel's GitHub App may mint them.
 - Do not edit a PR's title or body after Flywheel has rewritten them — push a new commit with the corrected conventional-commit message instead.
 - Do not open `develop → main` promotion PRs by hand. If one is missing or stale, the upstream merge probably hasn't landed yet, or the pending commits are all non-bumping types.
+- Do not reuse a branch after its commits have landed on `develop` (see "One PR per branch" above).
 
 ## Manual end-to-end validation
 
