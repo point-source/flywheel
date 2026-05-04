@@ -34,11 +34,11 @@ The first release of Flywheel cannot use the marketplace listing because the lis
    ```
 
 4. **Submit to the marketplace** via the GitHub UI on the v1.0.0 release page. Required: `action.yml` with `name`, `description`, `branding` (already present).
-5. **Open a follow-up PR** flipping `flywheel-pr.yml` and `flywheel-push.yml` from `uses: ./` to `uses: point-source/flywheel@v2`. From here on, flywheel consumes itself from the marketplace, and the `release-major-tag.yml` workflow keeps `v1` floating automatically.
+5. **Open a follow-up PR** flipping `flywheel-pr.yml` and `flywheel-push.yml` from `uses: ./` to `uses: point-source/flywheel@v1`. From here on, flywheel consumes itself from the marketplace, and the `release-major-tag.yml` workflow keeps the floating major tag updated automatically.
 
 ## Versioning across streams
 
-Flywheel currently has a single stream (`main-line`) with a single branch (`main`). If a customer-variant stream is ever added, its tags would be prefixed (e.g. `customer-acme/v1.2.3`) and the major-float workflow handles both formats — see the regex in `.github/workflows/release-major-tag.yml`.
+Flywheel currently has a single stream (`main-line`) with `develop → main` — develop cuts `v*-dev.N` prereleases; main cuts the real release and back-merges the chore(release) commit + tag back to develop. If a customer-variant stream is ever added, its tags would be prefixed (e.g. `customer-acme/v1.2.3`) and the major-float workflow handles both formats — see the regex in `.github/workflows/release-major-tag.yml`.
 
 ## Rolling back
 

@@ -108,7 +108,7 @@ workflow_run: build completed
 
 ## Permissions
 
-Flywheel needs a token with:
+Flywheel mints its own installation token from the GitHub App credentials you supply via the `app-id` / `app-private-key` inputs. The App needs these scopes:
 
 | Scope          | Purpose                                                        |
 | -------------- | -------------------------------------------------------------- |
@@ -118,14 +118,15 @@ Flywheel needs a token with:
 | Checks: r/w    | Posting the `flywheel/conventional-commit` check               |
 | Metadata: read | Required for any token interacting with a repo                 |
 
-Use a GitHub App installation token, minted at the start of each workflow via [`actions/create-github-app-token`](https://github.com/actions/create-github-app-token) from `FLYWHEEL_GH_APP_ID` + `FLYWHEEL_GH_APP_PRIVATE_KEY` repo secrets. Personal Access Tokens are not supported — they don't reliably propagate the cross-workflow trigger semantics Flywheel relies on. `secrets.GITHUB_TOKEN` is similarly insufficient: it cannot trigger downstream workflows from PRs it creates.
+Adopters store the App credentials as `FLYWHEEL_GH_APP_ID` + `FLYWHEEL_GH_APP_PRIVATE_KEY` repo secrets and pass them straight into the action — no separate `actions/create-github-app-token` step. Personal Access Tokens are not supported (they don't reliably propagate the cross-workflow trigger semantics Flywheel relies on); `secrets.GITHUB_TOKEN` is similarly insufficient (it cannot trigger downstream workflows from PRs it creates).
 
 ## Inputs and outputs
 
-| Input    | Required | Description                                            |
-| -------- | -------- | ------------------------------------------------------ |
-| `event`  | yes      | `pull_request` or `push`                               |
-| `token`  | yes      | A token with the scopes above                          |
+| Input             | Required | Description                                                |
+| ----------------- | -------- | ---------------------------------------------------------- |
+| `event`           | yes      | `pull_request` or `push`                                   |
+| `app-id`          | yes      | GitHub App ID; typically `secrets.FLYWHEEL_GH_APP_ID`      |
+| `app-private-key` | yes      | App private key (PEM); typically `secrets.FLYWHEEL_GH_APP_PRIVATE_KEY` |
 
 | Output                | Description                                                                                                                                          |
 | --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -167,7 +168,7 @@ npm run build
 npm run verify-dist   # rebuilds and fails if dist/ drifts from source
 ```
 
-Source is TypeScript under `src/`; the bundled `dist/index.js` is committed and is what GitHub executes. The `verify-dist` workflow ensures the bundle stays in sync.
+Source is TypeScript under `src/`; the bundled `dist/index.cjs` is committed and is what GitHub executes. The `verify-dist` workflow ensures the bundle stays in sync.
 
 See [CONTRIBUTING.md](./CONTRIBUTING.md) for the full contributor workflow, sandbox testing, and PR conventions.
 
