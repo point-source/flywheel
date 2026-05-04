@@ -1,3 +1,10 @@
+# [2.1.0-dev.3](https://github.com/point-source/flywheel/compare/v2.1.0-dev.2...v2.1.0-dev.3) (2026-05-04)
+
+
+### Bug Fixes
+
+* **config:** pre-v2.1.0 cleanup — close [#28](https://github.com/point-source/flywheel/issues/28), [#29](https://github.com/point-source/flywheel/issues/29), [#30](https://github.com/point-source/flywheel/issues/30), [#33](https://github.com/point-source/flywheel/issues/33) ([#34](https://github.com/point-source/flywheel/issues/34)) ([3a3ceb0](https://github.com/point-source/flywheel/commit/3a3ceb07a62cdbe84de5d4f8ffc1aa0ae3c2e928))
+
 # [2.1.0-dev.2](https://github.com/point-source/flywheel/compare/v2.1.0-dev.1...v2.1.0-dev.2) (2026-05-04)
 
 
