@@ -13,7 +13,7 @@ jobs:
         with:
           app-id: ${{ secrets.FLYWHEEL_GH_APP_ID }}
           private-key: ${{ secrets.FLYWHEEL_GH_APP_PRIVATE_KEY }}
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
           token: ${{ steps.app-token.outputs.token }}

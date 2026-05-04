@@ -22,7 +22,7 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       # Replace this with your real test invocation. If you have multiple
       # check types (lint, typecheck, unit, integration), it's fine to
       # split them into separate jobs in this same file — each becomes its
