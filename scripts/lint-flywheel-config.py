@@ -23,7 +23,7 @@ VALID_TYPES = {
 }
 VALID_AUTO_MERGE_KEYS = VALID_TYPES | {f"{t}!" for t in VALID_TYPES}
 VALID_MERGE_STRATEGIES = {"squash", "rebase"}
-VALID_TOP_LEVEL_KEYS = {"streams", "merge_strategy", "initial_version", "semantic_release_plugins"}
+VALID_TOP_LEVEL_KEYS = {"streams", "merge_strategy", "initial_version"}
 VALID_STREAM_KEYS = {"name", "branches"}
 VALID_BRANCH_KEYS = {"name", "prerelease", "auto_merge"}
 SEMVER_RE = re.compile(r"^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$")

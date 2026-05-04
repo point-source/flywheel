@@ -27792,8 +27792,7 @@ function isBumping(type2, breaking) {
 var TOP_LEVEL_KEYS = /* @__PURE__ */ new Set([
   "streams",
   "merge_strategy",
-  "initial_version",
-  "semantic_release_plugins"
+  "initial_version"
 ]);
 var BRANCH_KEYS = /* @__PURE__ */ new Set(["name", "prerelease", "auto_merge"]);
 var STREAM_KEYS = /* @__PURE__ */ new Set(["name", "branches"]);
@@ -27829,10 +27828,6 @@ function loadConfig(yamlText) {
   const streams = parseStreams(root.streams, errors);
   const mergeStrategy = parseMergeStrategy(root.merge_strategy, errors);
   const initialVersion = parseInitialVersion(root.initial_version, errors);
-  const semanticReleasePlugins = parseSemanticReleasePlugins(
-    root.semantic_release_plugins,
-    errors
-  );
   if (streams && streams.length > 0) {
     validateStreams(streams, errors, notices);
   }
@@ -27843,8 +27838,7 @@ function loadConfig(yamlText) {
     config: {
       streams,
       merge_strategy: mergeStrategy,
-      initial_version: initialVersion,
-      ...semanticReleasePlugins ? { semantic_release_plugins: semanticReleasePlugins } : {}
+      initial_version: initialVersion
     },
     errors,
     warnings,
@@ -27971,14 +27965,6 @@ function parseInitialVersion(value, errors) {
       `flywheel.initial_version: must be a semver string like "0.1.0" (got ${JSON.stringify(value)}).`
     );
     return "0.1.0";
-  }
-  return value;
-}
-function parseSemanticReleasePlugins(value, errors) {
-  if (value === void 0) return void 0;
-  if (!Array.isArray(value)) {
-    errors.push("flywheel.semantic_release_plugins: must be a list if present.");
-    return void 0;
   }
   return value;
 }
@@ -28400,8 +28386,7 @@ function generateReleaseRc(targetStream, config) {
   const branches = targetStream.branches.map(
     (b) => mapBranch(b, targetStream.branches.length === 1)
   );
-  const plugins = mergePlugins(config.semantic_release_plugins);
-  return { tagFormat, branches, plugins };
+  return { tagFormat, branches, plugins: [...DEFAULT_PLUGINS] };
 }
 function chooseTagFormat(target, allStreams) {
   const primary = pickPrimaryStream(allStreams);
@@ -28426,10 +28411,6 @@ function mapBranch(branch, isOnlyBranchInStream) {
     return { name: branch.name, prerelease: id, channel: id };
   }
   return { name: branch.name };
-}
-function mergePlugins(extra) {
-  if (!extra || extra.length === 0) return [...DEFAULT_PLUGINS];
-  return [...DEFAULT_PLUGINS, ...extra];
 }
 
 // src/push-flow.ts

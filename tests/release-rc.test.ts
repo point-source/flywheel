@@ -88,23 +88,6 @@ describe("generateReleaseRc", () => {
     ]);
   });
 
-  it("merges semantic_release_plugins from config without dropping defaults", () => {
-    const config: FlywheelConfig = {
-      ...baseRc,
-      streams: [
-        {
-          name: "only",
-          branches: [{ name: "main", auto_merge: [] }],
-        },
-      ],
-      semantic_release_plugins: ["@semantic-release/exec"],
-    };
-    const rc = generateReleaseRc(config.streams[0]!, config);
-    expect(rc.plugins).toContain("@semantic-release/exec");
-    expect(rc.plugins).toContain("@semantic-release/commit-analyzer");
-    expect(rc.plugins.length).toBe(6);
-  });
-
   it("branches array preserves declaration order", () => {
     const config: FlywheelConfig = {
       ...baseRc,

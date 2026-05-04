@@ -285,7 +285,7 @@ Non-bumping commits accumulate silently until a qualifying commit lands. They ar
 }
 ```
 
-No npm plugin. Adopters who need additional plugins (npm publish, pub.dev, etc.) add them to a `semantic_release_plugins` array in `.flywheel.yml` which gets merged into the generated config.
+No npm plugin. The plugin list is fixed; there is currently no way to extend it from `.flywheel.yml`.
 
 **Branch config:** For each stream, Flywheel generates a `branches` array in stream order. This ordered declaration anchors pre-release versions to the stream's shared version history:
 

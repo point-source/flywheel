@@ -7,7 +7,6 @@ const TOP_LEVEL_KEYS = new Set([
   "streams",
   "merge_strategy",
   "initial_version",
-  "semantic_release_plugins",
 ]);
 
 const BRANCH_KEYS = new Set(["name", "prerelease", "auto_merge"]);
@@ -57,10 +56,6 @@ export function loadConfig(yamlText: string): ConfigLoadResult {
   const streams = parseStreams(root.streams, errors);
   const mergeStrategy = parseMergeStrategy(root.merge_strategy, errors);
   const initialVersion = parseInitialVersion(root.initial_version, errors);
-  const semanticReleasePlugins = parseSemanticReleasePlugins(
-    root.semantic_release_plugins,
-    errors,
-  );
 
   if (streams && streams.length > 0) {
     validateStreams(streams, errors, notices);
@@ -75,9 +70,6 @@ export function loadConfig(yamlText: string): ConfigLoadResult {
       streams: streams!,
       merge_strategy: mergeStrategy,
       initial_version: initialVersion,
-      ...(semanticReleasePlugins
-        ? { semantic_release_plugins: semanticReleasePlugins }
-        : {}),
     },
     errors,
     warnings,
@@ -215,18 +207,6 @@ function parseInitialVersion(value: unknown, errors: string[]): string {
       `flywheel.initial_version: must be a semver string like "0.1.0" (got ${JSON.stringify(value)}).`,
     );
     return "0.1.0";
-  }
-  return value;
-}
-
-function parseSemanticReleasePlugins(
-  value: unknown,
-  errors: string[],
-): unknown[] | undefined {
-  if (value === undefined) return undefined;
-  if (!Array.isArray(value)) {
-    errors.push("flywheel.semantic_release_plugins: must be a list if present.");
-    return undefined;
   }
   return value;
 }
