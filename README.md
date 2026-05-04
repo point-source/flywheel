@@ -29,6 +29,8 @@ curl -fsSL https://raw.githubusercontent.com/point-source/flywheel/main/scripts/
 curl -fsSL https://raw.githubusercontent.com/point-source/flywheel/main/scripts/doctor.sh | bash
 ```
 
+> **Adopting into an existing repo** with prior version tags, release automation, or branch protection? Skip `init.sh` and start with [docs/adopter-setup.md §0](./docs/adopter-setup.md#0-adopting-flywheel-into-an-existing-project) — it covers the audit and cleanup steps the script doesn't.
+
 The hand-rolled equivalent — four files in your repo:
 
 ```

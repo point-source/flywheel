@@ -25,6 +25,63 @@ curl -fsSL https://raw.githubusercontent.com/point-source/flywheel/main/scripts/
 
 The rest of this document is the manual walkthrough — useful if you want to understand what `init.sh` writes, or if you're retrofitting an existing setup.
 
+## 0. Adopting Flywheel into an existing project
+
+Skip this section for greenfield repos. If your repo has any of: prior version tags, an existing release pipeline (release-please, manual `gh release create`, `npm publish` in CI, goreleaser, changesets), pre-existing branch protection rules, or many open PRs — work through the audit below before §1. Use the manual walkthrough for the rest of the doc rather than `init.sh`; the script doesn't audit existing state and will happily layer Flywheel on top of conflicts that surface later as failed releases.
+
+### 0.1 Audit existing version tags
+
+Flywheel's `tagFormat` is hard-coded to `v${version}` for the primary stream (see `src/release-rc.ts`); there is no override in `.flywheel.yml`. `semantic-release` walks `git tag` to find the highest version and computes the next one from there. Three states to handle:
+
+1. **Already publishing semver `v*` tags** (e.g. `v3.4.2`). Nothing to do. The first Flywheel release will be `v3.4.3`, `v3.5.0`, or `v4.0.0` depending on the highest-impact commit since the last tag.
+2. **Tags exist but lack the `v` prefix** (`3.4.2`, `1.0.0`). `semantic-release` won't recognize them as versions and will propose `v1.0.0` from scratch — likely colliding with whatever's downstream of those bare tags. Retag in place before adoption:
+   ```bash
+   for t in $(git tag | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$'); do
+     git tag "v$t" "$t" && git push origin "v$t"
+   done
+   ```
+   Leave the original tags in place unless you're sure nothing references them.
+3. **Tags use a non-semver scheme** (`release-2024-q4`, `stable-v1`, `v1`). `semantic-release` ignores them and proposes `v1.0.0`. Cut a baseline `v<MAJOR>.<MINOR>.<PATCH>` tag at the commit you want Flywheel to count from. For a project conceptually at version 3:
+   ```bash
+   git tag v3.0.0 <commit-sha-of-current-prod>
+   git push origin v3.0.0
+   ```
+
+Order matters: do this **before** §5's tag-namespace ruleset is applied. Once `v*` is protected, only the Flywheel App can create matching tags, and your manual `git push origin v*` will be rejected.
+
+### 0.2 Disable previous release automation
+
+If anything else in the repo creates tags or GitHub releases, remove or disable it before the first Flywheel push — otherwise you get racing tags and duplicate releases:
+
+- **release-please**: delete `release-please-config.json`, `.release-please-manifest.json`, and any `.github/workflows/release-please.yml`. Close the open release-please PR if one exists.
+- **Hand-rolled CI tagging** (`git tag`, `npm version`, `gh release create` in any workflow on `push: [main]` or `workflow_dispatch`). Remove the step or the workflow.
+- **goreleaser, changesets, auto, semantic-release driven by another workflow** — same story. One source of tags only.
+
+Quick sanity check after cleanup (should return nothing other than the new `flywheel-push.yml` you're about to add):
+
+```bash
+grep -rE '(git tag|gh release create|semantic-release|release-please|changesets)' .github/workflows/
+```
+
+### 0.3 Confirm bot identity can push to protected branches
+
+Two checks specific to repos that already have branch protection:
+
+- **Required signed commits / signed tags.** The App identity Flywheel uses doesn't sign. If "Require signed commits" is enabled on a managed branch, `semantic-release`'s release commit and tag are rejected. Either disable the rule on managed branches, or add the Flywheel App as a bypass actor for that specific rule.
+- **Existing protection rules without the App as bypass actor.** The App must be a bypass actor (`bypass_mode: always`) on PR-required, linear-history, no-force-push, and no-deletion rules — same as greenfield, except brownfield repos already have those rules and the App isn't on the list yet. Two options: (a) re-run `scripts/apply-rulesets.sh` with `--app-id <your-app-id>`, which replaces the ruleset with a Flywheel-shaped one (see §5); or (b) edit the existing ruleset in place via the GitHub UI and add the App under "Bypass list".
+
+Without this, expect `EGITNOPERMISSION` on the release push and a linear-history violation on the back-merge — see §8 troubleshooting.
+
+### 0.4 Audit recent commit history
+
+`semantic-release` looks at every commit between the last semver tag (after §0.1) and `HEAD` on the first push to a managed branch. If those commits are conventional (`feat:`, `fix:`, anything `!`-suffixed), they all roll into the first release — possibly producing a larger version bump than expected. If none of them are conventional, `semantic-release` finds nothing bumping and publishes no release on the first push (the next conventional commit produces it).
+
+If you need a release immediately and the recent history isn't conventional, the simplest path is to push a `fix:` or `feat:` commit after adoption rather than trying to retroactively interpret old commits.
+
+### 0.5 Open PRs at cutover
+
+Open PRs whose titles aren't conventional commits will be rewritten by Flywheel on their next `synchronize` event. Nothing breaks, but if you have many open PRs expect a wave of title-rewrite activity in the first day. No action required — included so it's not a surprise.
+
 ## 1. Create a GitHub App
 
 Flywheel uses a GitHub App installation token. Personal Access Tokens are not supported — they don't reliably propagate the cross-workflow trigger semantics Flywheel relies on (in particular, native auto-merge enable and downstream workflow firing on bot-created PRs).
@@ -45,6 +102,8 @@ Install the App on your repo. Then store its credentials as repo secrets:
 - `FLYWHEEL_GH_APP_PRIVATE_KEY` — the PEM-format private key downloaded from the App settings.
 
 Pass these straight into the Flywheel action via the `app-id` and `app-private-key` inputs (see the workflow YAML in §3). The action mints its own short-lived installation token internally and validates that the App's granted permissions match the list above — if anything is missing it fails fast with a friendly error pointing you at the App settings. You do not need a separate `actions/create-github-app-token` step.
+
+> **Existing project?** If your repo has secrets named `APP_ID` / `APP_PRIVATE_KEY` from a prior Flywheel v1 install, rename them to `FLYWHEEL_GH_APP_ID` / `FLYWHEEL_GH_APP_PRIVATE_KEY`. The action input names (`app-id`, `app-private-key`) are unchanged — see `CHANGELOG.md` v2.0.0.
 
 ## 2. Add `.flywheel.yml`
 
@@ -136,6 +195,8 @@ jobs:
 ```
 
 Create `.github/workflows/flywheel-push.yml`:
+
+> **Existing project?** If a workflow named `release.yml`, `release-please.yml`, or anything that runs `semantic-release` / `gh release create` already exists in `.github/workflows/`, delete it before adding `flywheel-push.yml` — see [§0.2](#02-disable-previous-release-automation). Two release pipelines on the same branch will race and double-tag.
 
 ```yaml
 name: Flywheel — Push
@@ -300,6 +361,8 @@ jobs:
       - run: ./your-test-script.sh
 ```
 
+> **Existing project?** If managed branches already have protection rules or rulesets, you have two options: (a) re-run `apply-rulesets.sh` (below), which replaces them with Flywheel-compatible rulesets that include the App as bypass actor; or (b) edit existing rules in place via the GitHub UI and add the Flywheel App to the bypass list with `bypass_mode: always`. See [§0.3](#03-confirm-bot-identity-can-push-to-protected-branches) for the full list of rules that need bypass.
+
 ### Recommended rulesets
 
 1. **Protect managed branches** — target every branch listed in `.flywheel.yml`. Require PRs, require status checks (your quality check names), block force push, block deletion, require linear history. **Bypass actor: your Flywheel GitHub App, in `bypass_mode: always` — required on every managed branch.** Without this, two pushes get rejected: `semantic-release`'s version commit + tag (PR-only rule → `EGITNOPERMISSION`) and the back-merge merge commit into upstream branches (linear-history rule). `scripts/apply-rulesets.sh --app-id <id>` configures this for the whole ruleset.
@@ -324,13 +387,21 @@ scripts/apply-rulesets.sh <owner/repo> --required-checks "Quality" --app-id <you
 
 (Or via `curl -fsSL https://raw.githubusercontent.com/point-source/flywheel/main/scripts/apply-rulesets.sh | bash -s -- <owner/repo>` if you don't have the Flywheel repo checked out.)
 
-## 6. Brief your AI coding agents
+## 6. Brief your contributors (human and AI)
 
-Skip this section if no AI agents (Claude Code, Cursor, Copilot, Codex, internal swarms) open PRs in this repo.
+The rules in this section apply to **everyone opening PRs against your repo** — human contributors and AI agents (Claude Code, Cursor, Copilot, Codex, internal swarms) alike. Flywheel doesn't care who authored a PR; it only cares whether the PR title is a Conventional Commit, whether it targets the right branch, and whether the commit type is auto-mergeable. Document the rules once, in a form both audiences can find.
 
-If they do, they will produce more compliant PRs if you tell them about Flywheel's rules in their instruction file — typically `CLAUDE.md`, `AGENTS.md`, or `.cursorrules` at the repo root. Without this, agents reliably invent branch names, write free-form PR titles, target the wrong branch, or try to mint their own version tags — and Flywheel dutifully labels every one of those PRs `flywheel:needs-review` until a human untangles it. With dozens or hundreds of concurrent agent-driven PRs, those wasted round-trips also burn GitHub Actions minutes (see [§5 Cost control under high PR volume](#cost-control-under-high-pr-volume)).
+Two failure modes if you don't:
 
-Paste the snippet below into your agent instruction file (rename / reformat as your tool expects). The bracketed placeholders split into two groups — three are mechanically derivable from `.flywheel.yml`, two require values that live outside Flywheel's config:
+- **Humans** figure it out from the `flywheel:needs-review` label or a maintainer comment, but every back-and-forth costs a round-trip and a fresh CI run.
+- **AI agents** fail more visibly and at higher volume — they invent branch names, write free-form PR titles, target the wrong branch, or try to mint version tags. With dozens or hundreds of concurrent agent-driven PRs, the wasted CI minutes add up fast (see [§5 Cost control under high PR volume](#cost-control-under-high-pr-volume)).
+
+**Where to put the rules.** Pick one of:
+
+- **Singular source (recommended).** Put the rules in `CONTRIBUTING.md` and have `CLAUDE.md` (or `AGENTS.md`, or `.cursorrules`) be a one-line pointer: *"Read CONTRIBUTING.md before opening a PR."* AI tooling reads the agent file, follows the link, and gets the same rules humans get. One place to keep current.
+- **Both files, both literal.** If your tooling can't follow links from agent files, paste the same snippet into `CONTRIBUTING.md` and `CLAUDE.md` / `AGENTS.md`. Workable but invites drift — pick one as authoritative and add a comment in the other saying so.
+
+Paste the snippet below into the file you've chosen as the source of truth. The bracketed placeholders split into two groups — three are mechanically derivable from `.flywheel.yml`, two require values that live outside Flywheel's config:
 
 | Placeholder | Source | How to fill it in |
 | --- | --- | --- |
@@ -376,7 +447,7 @@ Worked example using the three-stage promotion config from §2 (`develop` → `s
 - `<list required check names>` → `Quality`
 - `<local commands>` → `npm test && npm run lint` (whatever your `quality.yml` runs)
 
-If your repo already has a `CLAUDE.md` or equivalent, append the snippet under a new section heading rather than replacing existing content — the instructions are additive and don't conflict with typical "how to navigate this codebase" guidance.
+If your repo already has a `CONTRIBUTING.md`, `CLAUDE.md`, `AGENTS.md`, or equivalent, append the snippet under a new section heading rather than replacing existing content — the instructions are additive and don't conflict with typical "how to navigate this codebase" guidance.
 
 ## 7. Verify
 

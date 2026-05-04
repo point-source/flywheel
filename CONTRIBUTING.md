@@ -39,7 +39,7 @@ test-fixtures/          .flywheel.yml fixtures, one per scenario
 scripts/build.mjs       esbuild → dist/index.cjs
 dist/index.cjs           committed bundle GitHub executes (see below)
 .github/workflows/      this repo's own Flywheel + verify-dist workflows
-.flywheel.yml           dogfood config (single stream, single branch: main)
+.flywheel.yml           dogfood config (single stream, two branches: develop → main)
 spec.md                 authoritative spec
 testing_strategy.md     target three-layer test architecture (see Status note below)
 ```
@@ -65,17 +65,31 @@ Validation rules live in `src/config.ts` and are tested via `tests/config.test.t
 
 See the existing fixtures for examples — each one isolates a single failure mode.
 
-## PR title conventions
+## PR conventions
 
-Flywheel rewrites every PR title against the Conventional Commits grammar. Use:
+These rules apply to **everyone opening PRs against this repo** — human contributors and AI agents (Claude Code, Cursor, Copilot, Codex) alike. The same rule set is described generically in [docs/adopter-setup.md §6](./docs/adopter-setup.md#6-brief-your-contributors-human-and-ai); what follows is the dogfood version with this repo's actual values filled in. `CLAUDE.md` at the repo root is a thin pointer to this section, so keep it in sync if you restructure.
+
+**Target branch.** Open all PRs against `develop` — the prerelease channel and first branch in the only stream. Do **not** PR directly into `main`; the `develop → main` promotion is upserted automatically by `flywheel-push.yml`.
+
+**PR title format.** Must be a [Conventional Commit](https://www.conventionalcommits.org/):
 
 ```
 <type>[(<scope>)][!]: <description>
 ```
 
-Examples that work: `fix(promotion): handle empty diff`, `feat: support semantic_release_plugins`, `feat!: drop API v1`, `chore: bump deps`.
+Recognized types: `feat`, `fix`, `chore`, `refactor`, `perf`, `style`, `test`, `docs`, `build`, `ci`, `revert`. Append `!` for breaking changes. Examples that work: `fix(promotion): handle empty diff`, `feat: add stream validation`, `feat!: drop API v1`, `chore: bump deps`. Flywheel will rewrite a malformed title, but getting it right first time avoids a re-run.
 
-This repo's `.flywheel.yml` auto-merges `feat`, `fix`, `fix!`, `chore`, `refactor`, `perf`, `style`, `test`, `docs`, `ci`, `build`. It deliberately **excludes `feat!`** — major bumps require human review.
+**One logical change per PR.** Flywheel derives the version bump from the title, so squashing two unrelated `feat`s into one PR loses one of them in the release notes.
+
+**Branch naming.** Use `<type>/<short-kebab-description>` (e.g. `feat/stream-validation`, `fix/empty-diff-promotion`, `chore/address-open-issues`).
+
+**Auto-merge eligibility.** Both `develop` and `main` auto-merge `feat`, `fix`, `fix!`, `chore`, `refactor`, `perf`, `style`, `test`, `docs`, `ci`, `build`. They deliberately **exclude `feat!`** — major bumps require human review on this repo.
+
+**Things you must not do:**
+- Do not push to or force-push `develop` or `main` directly; both are protected and only Flywheel's GitHub App is on the bypass list.
+- Do not create version tags (`v1.2.3`, `v*-dev.N`, etc.) by hand. Only Flywheel's GitHub App may mint them.
+- Do not edit a PR's title or body after Flywheel has rewritten them — push a new commit with the corrected conventional-commit message instead.
+- Do not open `develop → main` promotion PRs by hand. If one is missing or stale, the upstream merge probably hasn't landed yet, or the pending commits are all non-bumping types.
 
 ## Manual end-to-end validation
 
@@ -83,14 +97,14 @@ Unit tests cover the logic; manual validation covers the wiring (Octokit calls, 
 
 ### Option A — Dogfood this repo (recommended for most changes)
 
-The repo is itself a Flywheel adopter. Open a PR against `main` and your change runs through the live `flywheel-pr.yml` and `flywheel-push.yml` workflows.
+The repo is itself a Flywheel adopter. Open a PR against `develop` (the prerelease channel — first branch in the only stream) and your change runs through the live `flywheel-pr.yml` and `flywheel-push.yml` workflows.
 
 1. Create a branch and push a small change.
-2. `gh pr create --title "chore: smoke test my change"` (or use the GitHub UI).
+2. `gh pr create --base develop --title "chore: smoke test my change"` (or use the GitHub UI; `develop` is the default base for this repo).
 3. Watch the PR's checks:
    - **`Flywheel — PR`** should rewrite your title (it's already a clean conventional commit, so the diff may be cosmetic) and apply `flywheel:auto-merge` or `flywheel:needs-review`.
    - **`Verify dist`** should pass — if it doesn't, you forgot to `npm run build` and commit `dist/index.cjs`.
-4. After merge, watch the push to `main`: `Flywheel — Push` runs `npx semantic-release@24` and (if your commit qualifies) cuts a tag and GitHub Release.
+4. After merge, watch the push to `develop`: `Flywheel — Push` runs `npx semantic-release@24` and (if your commit qualifies) cuts a `v*-dev.N` prerelease tag and GitHub Release. A promotion PR from `develop` into `main` opens once release-significant commits have accumulated; merging it cuts the real `vX.Y.Z` release on `main`, and the back-merge step replays that release commit + tag back into `develop`.
 
 Caveat: a change to event-handler logic only takes effect once `dist/` reflects it on the branch the workflow checks out. The `flywheel-pr.yml` step `uses: ./` (local checkout), so the bundled `dist/` from your branch is what runs — no extra step needed beyond `npm run build`.
 
