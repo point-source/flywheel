@@ -1,3 +1,10 @@
+# [2.1.0-dev.4](https://github.com/point-source/flywheel/compare/v2.1.0-dev.3...v2.1.0-dev.4) (2026-05-04)
+
+
+### Features
+
+* **scripts:** auto-delete merged branches and document branch lifecycle ([#36](https://github.com/point-source/flywheel/issues/36)) ([7797e41](https://github.com/point-source/flywheel/commit/7797e41a77d7c2558650def898b446c6e5fe835a))
+
 # [2.1.0-dev.3](https://github.com/point-source/flywheel/compare/v2.1.0-dev.2...v2.1.0-dev.3) (2026-05-04)
 
 
