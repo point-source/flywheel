@@ -278,6 +278,8 @@ jobs:
 
 Both files are also available verbatim under [`scripts/templates/`](../scripts/templates/) in the Flywheel repo — `init.sh` writes them for you in the quick-start path.
 
+> **Back-merge effect on upstream version files.** The back-merge step propagates each release tag's `chore(release)` commit into every upstream branch in the stream. For a `develop → staging → main` topology, a `staging` rc release lands a `chore(release): 1.1.0-rc.1` commit on `develop`. This is intentional — it puts the tag in `develop`'s ancestry so semantic-release's next walk computes the correct next version. Anyone reading `develop`'s version file transiently sees the rc version. There is no opt-out today.
+
 ## 4. Add your build and publish workflows
 
 These react to events Flywheel produces. Flywheel does not call them.
@@ -311,6 +313,8 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
 ```
+
+> **Token note.** The `actions/create-github-app-token` step above mints an App token for the upload. The default workflow `GITHUB_TOKEN` with `permissions: { contents: write }` is also sufficient for `gh release upload` (or `softprops/action-gh-release`) against an existing release — the tag-namespace ruleset only blocks `deletion`/`non_fast_forward` on the tag ref, not asset attachments to the release object. The App token is only required when you need to write directly to a protected ref (e.g. push a follow-up commit to a managed branch). Pick whichever fits your workflow.
 
 `publish.yml`:
 
@@ -365,7 +369,7 @@ jobs:
 
 ### Recommended rulesets
 
-1. **Protect managed branches** — target every branch listed in `.flywheel.yml`. Require PRs, require status checks (your quality check names), block force push, block deletion, require linear history. **Bypass actor: your Flywheel GitHub App, in `bypass_mode: always` — required on every managed branch.** Without this, two pushes get rejected: `semantic-release`'s version commit + tag (PR-only rule → `EGITNOPERMISSION`) and the back-merge merge commit into upstream branches (linear-history rule). `scripts/apply-rulesets.sh --app-id <id>` configures this for the whole ruleset.
+1. **Protect managed branches** — target every branch listed in `.flywheel.yml`. Require PRs, require status checks (your quality check names — Flywheel itself posts a check named `flywheel/conventional-commit` on every PR; include it in `--required-checks` to gate merges on conventional-commit compliance), block force push, block deletion, require linear history. **Bypass actor: your Flywheel GitHub App, in `bypass_mode: always` — required on every managed branch.** Without this, two pushes get rejected: `semantic-release`'s version commit + tag (PR-only rule → `EGITNOPERMISSION`) and the back-merge merge commit into upstream branches (linear-history rule). `scripts/apply-rulesets.sh --app-id <id>` configures this for the whole ruleset.
 2. **Merge queue** on managed branches. Stricter branches (`main`) use group size 1; `develop`-style branches can batch up to 5.
 3. **Protect `v*` tag namespace** — only the bot may create or delete version tags. Prevents agents from minting arbitrary version tags. The App is added as a bypass actor here too so it can mint the release tag.
 4. **Branch naming (optional)** — require feature branches to match `(feat|fix|chore|refactor|perf|style|test|docs|build|ci|revert)/.*`.
@@ -505,6 +509,13 @@ Merge the PR. On the resulting push, confirm:
 **Tag collision error from `semantic-release`.** Two streams produced the same tag string. Flywheel scopes tags per stream automatically (e.g. `customer-acme/v1.0.1` for non-primary streams), so if you see this, please file an issue with your `.flywheel.yml`.
 
 **PR opened by Flywheel doesn't trigger your quality checks.** Make sure your check workflows include `merge_group:` as well as `pull_request:` — without it, the merge queue stalls waiting for a check that never fires (see the snippet above).
+
+**`flywheel.initial_version: unknown key` from `doctor.sh` or `lint-flywheel-config.py`.** `initial_version` was supported in early Flywheel v1 docs but is no longer a config key. Set the baseline by tagging the commit you want releases to start from instead:
+```bash
+git tag v1.0.0 <sha>
+git push origin v1.0.0
+```
+Then remove the `initial_version` line from `.flywheel.yml`. See [§0.1](#01-audit-existing-version-tags) for the full audit if you have other legacy tags.
 
 **Back-merge step failed pushing to an upstream branch.** Two common causes:
 - The App isn't a bypass actor on the upstream branch's ruleset, so its merge commit is rejected by the linear-history rule. Re-run `scripts/apply-rulesets.sh <owner/repo> --app-id <id>` — it covers every managed branch in one go.
