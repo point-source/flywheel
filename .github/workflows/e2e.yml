@@ -6,7 +6,7 @@ on:
 
 concurrency:
   group: e2e-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   e2e:
@@ -30,6 +30,14 @@ jobs:
           private-key: ${{ secrets.FLYWHEEL_E2E_APP_PRIVATE_KEY }}
           owner: point-source
           repositories: flywheel-sandbox
+
+      # Close stranded open PRs from any prior cancelled run before mutating
+      # the sandbox. Required because cancel-in-progress: true above means an
+      # afterEach teardown can be killed mid-run, leaving open PRs behind.
+      - name: Sandbox presweep
+        env:
+          SANDBOX_GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: node scripts/sandbox-presweep.mjs
 
       # Overwrite the sandbox's workflow files + .flywheel.yml with the
       # versions on the SHA under test. Treats the sandbox as a fresh-install
