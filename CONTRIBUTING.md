@@ -89,6 +89,20 @@ Recognized types: `feat`, `fix`, `chore`, `refactor`, `perf`, `style`, `test`, `
 
 **One PR per branch; the branch dies on merge.** After your PR merges (or after any PR carrying your commits merges — e.g. a maintainer squashed them into a cleanup PR) the branch is done. Cut a new branch off the latest `develop` for your next change. The repo has `delete_branch_on_merge` enabled so the remote branch disappears automatically; if you still have it locally, delete it (`git branch -D <name>`) before starting new work. Reusing a merged branch causes phantom rebase conflicts because the squashed upstream commit has a different patch-id than your originals.
 
+**Automating the local cleanup.** Two one-time setup steps make the local-side hands-off:
+
+1. Turn on prune-on-fetch globally so deleted remotes drop out of `git branch -vv` automatically:
+   ```bash
+   git config --global fetch.prune true
+   ```
+   After this, every `git fetch` (and `git pull`) marks branches whose upstream was deleted with `[gone]`.
+
+2. After fetching, delete any local branch whose upstream is gone:
+   ```bash
+   git branch -vv | awk '/: gone]/ {print $1}' | xargs -r git branch -d
+   ```
+   Use `-d` (safe — refuses unmerged branches) rather than `-D`, so you don't lose work that hadn't actually been pushed/merged. Wrap it in a shell or `git` alias if you do this often. VS Code, JetBrains IDEs, and `gh` extensions also expose equivalent "delete merged/gone branches" UI — pick whichever fits your flow.
+
 **Things you must not do:**
 - Do not push to or force-push `develop` or `main` directly; both are protected and only Flywheel's GitHub App is on the bypass list.
 - Do not create version tags (`v1.2.3`, `v*-dev.N`, etc.) by hand. Only Flywheel's GitHub App may mint them.
