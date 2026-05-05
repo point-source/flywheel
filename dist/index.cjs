@@ -27793,12 +27793,6 @@ var TOP_LEVEL_KEYS = /* @__PURE__ */ new Set([
   "streams",
   "merge_strategy"
 ]);
-var LEGACY_TOP_LEVEL_KEYS = /* @__PURE__ */ new Map([
-  [
-    "initial_version",
-    "set the baseline by tagging instead: git tag v<X.Y.Z> <sha> && git push origin v<X.Y.Z> (see docs/adopter-setup.md \xA70.1, \xA78)"
-  ]
-]);
 var BRANCH_KEYS = /* @__PURE__ */ new Set(["name", "prerelease", "auto_merge"]);
 var STREAM_KEYS = /* @__PURE__ */ new Set(["name", "branches"]);
 var MERGE_STRATEGIES = /* @__PURE__ */ new Set(["squash", "rebase"]);
@@ -27824,11 +27818,7 @@ function loadConfig(yamlText) {
   }
   const root = raw.flywheel;
   for (const key of Object.keys(root)) {
-    if (TOP_LEVEL_KEYS.has(key)) continue;
-    const legacyHint = LEGACY_TOP_LEVEL_KEYS.get(key);
-    if (legacyHint) {
-      warnings.push(`flywheel.${key}: legacy v1 key, no longer used \u2014 ${legacyHint}`);
-    } else {
+    if (!TOP_LEVEL_KEYS.has(key)) {
       errors.push(
         `flywheel.${key}: unknown key. Allowed keys: ${[...TOP_LEVEL_KEYS].sort().join(", ")}.`
       );

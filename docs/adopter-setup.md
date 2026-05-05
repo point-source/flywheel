@@ -103,8 +103,6 @@ Install the App on your repo. Then store its credentials as repo secrets:
 
 Pass these straight into the Flywheel action via the `app-id` and `app-private-key` inputs (see the workflow YAML in §3). The action mints its own short-lived installation token internally and validates that the App's granted permissions match the list above — if anything is missing it fails fast with a friendly error pointing you at the App settings. You do not need a separate `actions/create-github-app-token` step.
 
-> **Existing project?** If your repo has secrets named `APP_ID` / `APP_PRIVATE_KEY` from a prior Flywheel v1 install, rename them to `FLYWHEEL_GH_APP_ID` / `FLYWHEEL_GH_APP_PRIVATE_KEY`. The action input names (`app-id`, `app-private-key`) are unchanged — see `CHANGELOG.md` v2.0.0.
-
 ## 2. Add `.flywheel.yml`
 
 Place at the root of your repo. Start from one of these.
@@ -509,13 +507,6 @@ Merge the PR. On the resulting push, confirm:
 **Tag collision error from `semantic-release`.** Two streams produced the same tag string. Flywheel scopes tags per stream automatically (e.g. `customer-acme/v1.0.1` for non-primary streams), so if you see this, please file an issue with your `.flywheel.yml`.
 
 **PR opened by Flywheel doesn't trigger your quality checks.** Make sure your check workflows include `merge_group:` as well as `pull_request:` — without it, the merge queue stalls waiting for a check that never fires (see the snippet above).
-
-**`flywheel.initial_version: unknown key` from `doctor.sh` or `lint-flywheel-config.py`.** `initial_version` was supported in early Flywheel v1 docs but is no longer a config key. Set the baseline by tagging the commit you want releases to start from instead:
-```bash
-git tag v1.0.0 <sha>
-git push origin v1.0.0
-```
-Then remove the `initial_version` line from `.flywheel.yml`. See [§0.1](#01-audit-existing-version-tags) for the full audit if you have other legacy tags.
 
 **Back-merge step failed pushing to an upstream branch.** Two common causes:
 - The App isn't a bypass actor on the upstream branch's ruleset, so its merge commit is rejected by the linear-history rule. Re-run `scripts/apply-rulesets.sh <owner/repo> --app-id <id>` — it covers every managed branch in one go.
