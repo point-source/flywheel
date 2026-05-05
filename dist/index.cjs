@@ -28391,6 +28391,11 @@ var DEFAULT_PLUGINS = [
   "@semantic-release/commit-analyzer",
   "@semantic-release/release-notes-generator",
   "@semantic-release/changelog",
+  // Loaded but no-op when adopters don't reference it. Available so a
+  // committed .releaserc.json (see push-flow's leave-alone-if-committed
+  // path) can use @semantic-release/exec for prepareCmd-style version-file
+  // updates without forking flywheel-push.yml.
+  "@semantic-release/exec",
   ["@semantic-release/git", { assets: ["CHANGELOG.md"] }],
   "@semantic-release/github"
 ];
@@ -28441,8 +28446,15 @@ async function runPushFlow(deps) {
     );
     return { kind: "promote-only", stream };
   }
-  const rc = generateReleaseRc(stream, deps.config);
   const rcPath = (0, import_node_path.join)(deps.workspace, ".releaserc.json");
+  const rcExists = deps.rcExists ?? defaultRcExists;
+  if (await rcExists(rcPath)) {
+    deps.log.info(
+      `push: ${rcPath} already committed \u2014 using adopter-provided config. branches/tagFormat must be kept in sync with .flywheel.yml manually.`
+    );
+    return { kind: "release", stream, rcPath };
+  }
+  const rc = generateReleaseRc(stream, deps.config);
   const writer = deps.writer ?? defaultWriter;
   await writer(rcPath, JSON.stringify(rc, null, 2));
   deps.log.info(
@@ -28467,6 +28479,14 @@ function getUpstreamBranches(config, branchRef) {
 }
 async function defaultWriter(path, contents) {
   await (0, import_promises.writeFile)(path, contents, "utf8");
+}
+async function defaultRcExists(path) {
+  try {
+    await (0, import_promises.access)(path);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 // src/promotion.ts

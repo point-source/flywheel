@@ -295,13 +295,16 @@ Non-bumping commits accumulate silently until a qualifying commit lands. They ar
     "@semantic-release/commit-analyzer",
     "@semantic-release/release-notes-generator",
     "@semantic-release/changelog",
+    "@semantic-release/exec",
     ["@semantic-release/git", { "assets": ["CHANGELOG.md"] }],
     "@semantic-release/github"
   ]
 }
 ```
 
-No npm plugin. The plugin list is fixed; there is currently no way to extend it from `.flywheel.yml`.
+No npm plugin. `@semantic-release/exec` is loaded but no-op when not referenced — it exists in the chain so adopters who commit their own `.releaserc.json` (see **Committed `.releaserc.json` precedence** below) can use `prepareCmd` for non-Node version files (e.g. `pubspec.yaml`, `Cargo.toml`) without forking `flywheel-push.yml`. The plugin list is otherwise fixed; there is currently no way to extend it from `.flywheel.yml`.
+
+**Committed `.releaserc.json` precedence:** Flywheel writes `.releaserc.json` to the workspace before semantic-release runs only when the file is *not* already committed in the repo. If the adopter committed their own `.releaserc.json`, Flywheel logs a notice and leaves it alone — the adopter's file wins. Trade-off: the adopter is responsible for keeping the committed file's `branches` and `tagFormat` in sync with `.flywheel.yml`. Only `.releaserc.json` is honored — `.releaserc.js`, `.releaserc.yml`, and `release.config.js` are not.
 
 **Branch config:** For each stream, Flywheel generates a `branches` array in stream order. This ordered declaration anchors pre-release versions to the stream's shared version history:
 
@@ -530,6 +533,7 @@ jobs:
             -p @semantic-release/commit-analyzer \
             -p @semantic-release/release-notes-generator \
             -p @semantic-release/changelog \
+            -p @semantic-release/exec \
             -p @semantic-release/git \
             -p @semantic-release/github \
             semantic-release
