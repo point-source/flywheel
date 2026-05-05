@@ -1,3 +1,10 @@
+# [2.1.0-dev.12](https://github.com/point-source/flywheel/compare/v2.1.0-dev.11...v2.1.0-dev.12) (2026-05-05)
+
+
+### Bug Fixes
+
+* **doctor:** hard-fail listing errors; add --skip-credentials ([#54](https://github.com/point-source/flywheel/issues/54)) ([3963225](https://github.com/point-source/flywheel/commit/3963225462a479762538d594a934dffcdb39c93d)), closes [#52](https://github.com/point-source/flywheel/issues/52) [#26](https://github.com/point-source/flywheel/issues/26)
+
 # [2.1.0-dev.11](https://github.com/point-source/flywheel/compare/v2.1.0-dev.10...v2.1.0-dev.11) (2026-05-05)
 
 
