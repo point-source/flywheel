@@ -8,6 +8,20 @@ const baseRc = {
 };
 
 describe("generateReleaseRc", () => {
+  it("default plugin chain includes @semantic-release/exec for committed-rc adopters", () => {
+    const config: FlywheelConfig = {
+      ...baseRc,
+      streams: [
+        {
+          name: "main-line",
+          branches: [{ name: "main", release: "production", auto_merge: [] }],
+        },
+      ],
+    };
+    const rc = generateReleaseRc(config.streams[0]!, config);
+    expect(rc.plugins).toContain("@semantic-release/exec");
+  });
+
   it("primary stream (terminal release: production) gets v${version}", () => {
     const config: FlywheelConfig = {
       ...baseRc,
@@ -107,6 +121,7 @@ describe("generateReleaseRc", () => {
       "@semantic-release/commit-analyzer",
       "@semantic-release/release-notes-generator",
       "@semantic-release/changelog",
+      "@semantic-release/exec",
       ["@semantic-release/git", { assets: ["CHANGELOG.md"] }],
       "@semantic-release/github",
     ]);

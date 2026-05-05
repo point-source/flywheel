@@ -16,6 +16,11 @@ const DEFAULT_PLUGINS: unknown[] = [
   "@semantic-release/commit-analyzer",
   "@semantic-release/release-notes-generator",
   "@semantic-release/changelog",
+  // Loaded but no-op when adopters don't reference it. Available so a
+  // committed .releaserc.json (see push-flow's leave-alone-if-committed
+  // path) can use @semantic-release/exec for prepareCmd-style version-file
+  // updates without forking flywheel-push.yml.
+  "@semantic-release/exec",
   ["@semantic-release/git", { assets: ["CHANGELOG.md"] }],
   "@semantic-release/github",
 ];
