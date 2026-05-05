@@ -15,6 +15,9 @@
 #   --skip-secrets        do not prompt for FLYWHEEL_GH_APP_ID / FLYWHEEL_GH_APP_PRIVATE_KEY
 #   --skip-rulesets       do not offer to run apply-rulesets.sh
 #   --required-checks "Quality,Build"   passed through to apply-rulesets.sh
+#   --force               overwrite flywheel-pr.yml / flywheel-push.yml even
+#                         if they already exist (for upgrading workflows
+#                         when a new Flywheel version changes the templates).
 #   --version <ref>       Flywheel ref baked into the workflow templates'
 #                         `uses: point-source/flywheel@<ref>`. Defaults to
 #                         the latest released major (e.g. `v2`); pass any
@@ -30,6 +33,7 @@ PRESET=""
 SKIP_SECRETS=0
 SKIP_RULESETS=0
 REQUIRED_CHECKS=""
+FORCE=0
 FLYWHEEL_VERSION=""
 # Hoisted out of create_app_via_manifest / prompt_existing_app_credentials
 # so apply-rulesets.sh receives --app-id (App must be a bypass actor on the
@@ -43,8 +47,9 @@ while [[ $# -gt 0 ]]; do
     --skip-secrets) SKIP_SECRETS=1; shift ;;
     --skip-rulesets) SKIP_RULESETS=1; shift ;;
     --required-checks) REQUIRED_CHECKS="$2"; shift 2 ;;
+    --force) FORCE=1; shift ;;
     --version) FLYWHEEL_VERSION="$2"; shift 2 ;;
-    -h|--help) sed -n '2,26p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,29p' "$0"; exit 0 ;;
     *) echo "Unknown argument: $1" >&2; exit 2 ;;
   esac
 done
@@ -154,14 +159,23 @@ else
   echo "  wrote .flywheel.yml ($PRESET preset)"
 fi
 
-# 2. Write workflow files (skip each if it already exists).
+# 2. Write workflow files (skip each if it already exists; --force overwrites).
 mkdir -p .github/workflows
 for wf in flywheel-pr.yml flywheel-push.yml; do
-  if [[ -f ".github/workflows/$wf" ]]; then
-    echo "  .github/workflows/$wf already exists — leaving it alone."
+  dest=".github/workflows/$wf"
+  if [[ -f "$dest" && "$FORCE" -eq 0 ]]; then
+    # Surface version drift so adopters know whether their existing template
+    # is current. The placeholder `point-source/flywheel@<ref>` is always
+    # present in flywheel-managed templates.
+    existing_ref="$(grep -m1 -oE 'point-source/flywheel@[^ ]+' "$dest" 2>/dev/null | head -n1 | cut -d@ -f2 || true)"
+    if [[ -n "$existing_ref" && "$existing_ref" != "$FLYWHEEL_VERSION" ]]; then
+      echo "  $dest already exists (pinned @${existing_ref}; templates here pin @${FLYWHEEL_VERSION}) — pass --force to overwrite."
+    else
+      echo "  $dest already exists — leaving it alone (use --force to overwrite)."
+    fi
   else
-    fetch_template "$wf" ".github/workflows/$wf"
-    echo "  wrote .github/workflows/$wf"
+    fetch_template "$wf" "$dest"
+    echo "  wrote $dest"
   fi
 done
 
@@ -304,6 +318,34 @@ if [[ "$SKIP_RULESETS" -eq 0 && -x "${SCRIPT_DIR:-}/apply-rulesets.sh" ]]; then
     yn="N"
   fi
   if [[ "${yn:-N}" =~ ^[Yy]$ ]]; then
+    # Offer to detect required checks from local quality workflows if the
+    # adopter didn't pass --required-checks. Without this, interactive runs
+    # default to no required checks and adopters have to re-run apply-rulesets.sh
+    # later to wire them up. Heuristic: any non-flywheel workflow that triggers
+    # on pull_request is a candidate. Note the GitHub check context name is
+    # usually "<workflow name> / <job name>" — adopter may need to refine after
+    # the first PR run shows the actual context names.
+    if [[ -z "$REQUIRED_CHECKS" && "$INTERACTIVE" -eq 1 ]]; then
+      candidates=()
+      for path in .github/workflows/*.yml .github/workflows/*.yaml; do
+        [[ -f "$path" ]] || continue
+        base="$(basename "$path")"
+        case "$base" in flywheel-*.yml|flywheel-*.yaml) continue ;; esac
+        if grep -qE '^[[:space:]]*pull_request:' "$path"; then
+          n="$(grep -m1 -E '^name:' "$path" | sed -E 's/^name:[[:space:]]*//;s/^["'"'"']//;s/["'"'"']$//')"
+          candidates+=("${n:-$base}")
+        fi
+      done
+      # Always offer flywheel/conventional-commit as a recommended check.
+      if [[ ${#candidates[@]} -gt 0 ]]; then
+        echo "  Detected pull_request workflows: ${candidates[*]}"
+        echo "  Recommended also: flywheel/conventional-commit"
+        read -r -u 3 -p "  Required-check names (comma-separated, blank to skip): " REQUIRED_CHECKS
+      else
+        echo "  No non-flywheel pull_request workflows detected."
+        read -r -u 3 -p "  Required-check names (comma-separated, blank to skip): " REQUIRED_CHECKS
+      fi
+    fi
     args=("$REPO")
     [[ -n "$REQUIRED_CHECKS" ]] && args+=(--required-checks "$REQUIRED_CHECKS")
     # TODO: when re-running init.sh against a repo with pre-existing
