@@ -2,9 +2,12 @@ export type IncrementType = "major" | "minor" | "patch" | "none";
 
 export type MergeStrategy = "squash" | "rebase";
 
+export type ReleaseMode = "none" | "prerelease" | "production";
+
 export interface Branch {
   name: string;
-  prerelease?: string | false;
+  release: ReleaseMode;
+  suffix?: string;
   auto_merge: string[];
 }
 

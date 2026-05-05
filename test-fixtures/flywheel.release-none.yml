@@ -3,14 +3,12 @@ flywheel:
     - name: main-line
       branches:
         - name: develop
-          release: prerelease
-          suffix: dev
-          auto_merge: [fix, fix!, feat, chore, refactor, perf, style, test, docs]
+          release: none
+          auto_merge: [feat, fix, chore]
         - name: staging
           release: prerelease
           suffix: rc
-          auto_merge: [fix, chore, style, test, docs]
+          auto_merge: [fix, chore]
         - name: main
           release: production
           auto_merge: []
-  merge_strategy: squash

@@ -3,4 +3,5 @@ flywheel:
     - name: main-line
       branches:
         - name: main
+          release: production
           auto-merge: [fix]

@@ -76,8 +76,17 @@ function configForStream(sourceBranch: string): FlywheelConfig {
       {
         name: `integration-promote-${sourceBranch}`,
         branches: [
-          { name: sourceBranch, prerelease: "promo", auto_merge: ["fix", "feat", "chore"] },
-          { name: INTEGRATION_BASE, auto_merge: ["fix", "chore", "perf", "style", "test"] },
+          {
+            name: sourceBranch,
+            release: "prerelease",
+            suffix: "promo",
+            auto_merge: ["fix", "feat", "chore"],
+          },
+          {
+            name: INTEGRATION_BASE,
+            release: "production",
+            auto_merge: ["fix", "chore", "perf", "style", "test"],
+          },
         ],
       },
     ],
@@ -134,8 +143,13 @@ describe.skipIf(!hasSandboxToken)("integration: promotion PR upsert", () => {
         {
           name: `integration-promote-${sourceBranch}`,
           branches: [
-            { name: sourceBranch, prerelease: "promo", auto_merge: ["fix", "chore"] },
-            { name: INTEGRATION_BASE, auto_merge: ["fix"] },
+            {
+              name: sourceBranch,
+              release: "prerelease",
+              suffix: "promo",
+              auto_merge: ["fix", "chore"],
+            },
+            { name: INTEGRATION_BASE, release: "production", auto_merge: ["fix"] },
           ],
         },
       ],

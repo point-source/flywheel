@@ -131,10 +131,17 @@ flywheel:
     - name: main-line
       branches:
         - name: develop
-          # Optional. Semver pre-release identifier.
-          # Absent or false = production release (no suffix).
-          # Must be unique across streams if using a shared publish destination.
-          prerelease: dev
+          # Required. One of: none | prerelease | production.
+          #   none       — branch is in the promotion chain but does NOT run
+          #                semantic-release (no tag, no GitHub Release).
+          #   prerelease — branch releases a prerelease tag; requires `suffix`.
+          #   production — branch releases a production tag (no suffix).
+          release: prerelease
+
+          # Required iff release: prerelease. Semver pre-release identifier
+          # (becomes the `-<suffix>.N` part of the version). Must be unique
+          # across all prerelease branches in the repo.
+          suffix: dev
 
           # Required. Commit types that auto-merge into this branch without human review.
           # Use conventional commit type, optionally suffixed with ! for breaking changes.
@@ -152,7 +159,8 @@ flywheel:
             - docs
 
         - name: staging
-          prerelease: rc
+          release: prerelease
+          suffix: rc
           auto_merge:
             - fix
             - chore
@@ -161,14 +169,15 @@ flywheel:
             - docs
 
         - name: main
-          # prerelease absent = production release, no suffix
+          release: production
           auto_merge: [] # all PRs require human approval
 
     # A second stream for a customer variant — independent version history
     - name: customer-acme
       branches:
         - name: customer-acme
-          prerelease: acme
+          release: prerelease
+          suffix: acme
           auto_merge:
             - fix
             - fix!
@@ -183,11 +192,18 @@ flywheel:
 
 ### Branch config fields
 
-| Field        | Required | Default | Description                                                                                  |
-| ------------ | -------- | ------- | -------------------------------------------------------------------------------------------- |
-| `name`       | Yes      | —       | Git branch name                                                                              |
-| `prerelease` | No       | `false` | Semver pre-release identifier, or `false` / absent for production release                    |
-| `auto_merge` | Yes      | —       | List of commit types (with optional `!`) that auto-merge. Empty list = all need human review |
+| Field        | Required           | Default | Description                                                                                                |
+| ------------ | ------------------ | ------- | ---------------------------------------------------------------------------------------------------------- |
+| `name`       | Yes                | —       | Git branch name                                                                                            |
+| `release`    | Yes                | —       | One of `none`, `prerelease`, `production` — see release modes below                                        |
+| `suffix`     | If `prerelease`    | —       | Semver pre-release identifier (e.g. `dev`, `rc`). Required iff `release: prerelease`; forbidden otherwise. |
+| `auto_merge` | Yes                | —       | List of commit types (with optional `!`) that auto-merge. Empty list = all need human review               |
+
+#### Release modes
+
+- **`none`** — the branch is in the promotion chain (auto-promotion PRs are still upserted to and from it) but pushes do **not** run semantic-release. No tag is created, no GitHub Release is published, no `.releaserc.json` is written. Use this when an integration branch should accumulate work and auto-promote without producing its own release artifacts. The terminal branch of a stream cannot be `release: none` (validation error).
+- **`prerelease`** — pushes release a prerelease tag using `suffix` as the identifier (e.g. `v1.3.0-dev.4`). Each `suffix` must be unique across all prerelease branches in the repo (otherwise tags collide).
+- **`production`** — pushes release a production tag (e.g. `v1.3.0`). At most one production branch is allowed per stream, and it must be the terminal branch.
 
 ### Valid `auto_merge` entries
 
@@ -203,8 +219,11 @@ A `fix!` entry matches PRs of type `fix` with a breaking change — indicated by
 `pr-conductor` validates `.flywheel.yml` on every run and posts a failing check with a descriptive error if:
 
 - A branch appears in more than one stream — each branch may belong to exactly one stream.
-- More than one branch within the same stream has `prerelease: false` or absent — only the last branch in a stream should be the production release branch.
-- More than one stream has a terminal branch (last branch) with `prerelease: false` and the streams share a publish destination — version collision is likely. A warning (not an error) is emitted with guidance to use distinct `prerelease` identifiers.
+- More than one branch within the same stream has `release: production` — only the last branch in a stream should be the production release branch.
+- More than one stream has a terminal branch (last branch) with `release: production` — tag collision is unavoidable in a single repo. Give all but one stream a prerelease terminal branch.
+- The terminal branch of a stream has `release: none` — the terminal branch must be `release: prerelease` or `release: production`, otherwise the stream never produces a release.
+- A `suffix` is set without `release: prerelease`, or `release: prerelease` is set without a `suffix`.
+- The same `suffix` is used by more than one prerelease branch — tags would collide.
 - An `auto_merge` entry is not a recognized conventional commit type (with or without `!`).
 - A stream contains only one branch — a single-branch stream is valid (immediate release, no promotion) but `pr-conductor` emits an info notice so the user can confirm this is intentional.
 
@@ -229,11 +248,11 @@ main-line stream:      v1.0.1          (tagFormat: v${version})
 customer-acme stream:  customer-acme/v1.0.1   (tagFormat: customer-acme/v${version})
 ```
 
-The first (or only) stream with a terminal `prerelease: false` branch uses the default `v${version}` tag format. All other streams use a prefixed format derived from their stream name. Flywheel generates this automatically — adopters do not configure `tagFormat` directly.
+The first (or only) stream with a terminal `release: production` branch uses the default `v${version}` tag format. All other streams use a prefixed format derived from their stream name. Flywheel generates this automatically — adopters do not configure `tagFormat` directly.
 
 This means the "harmless collision" framing in earlier versions of this spec was incorrect. There is no safe scenario where two streams in the same repo produce the same tag string. The tag format scoping is mandatory and non-optional.
 
-Flywheel emits a validation **error** (not warning) if multiple streams have terminal branches with `prerelease: false` and no tag format disambiguation can be inferred. In practice this means: at most one stream may have the "primary" `v${version}` tag format. All other streams are automatically prefixed.
+Flywheel emits a validation **error** (not warning) if multiple streams have terminal branches with `release: production` and no tag format disambiguation can be inferred. In practice this means: at most one stream may have the "primary" `v${version}` tag format. All other streams are automatically prefixed.
 
 ### JIT computation
 
@@ -251,7 +270,7 @@ main     →  1.3.0
 
 This is enforced by declaring stream branches to semantic-release as an ordered sequence. semantic-release computes pre-release versions relative to the stream's production branch tag history, not independently per branch. The version drift problem (`develop` at `23.4.3-dev.1` while `main` is at `3.6.5`) is structurally impossible within a stream.
 
-The pre-release identifier comes from the `prerelease` field in `.flywheel.yml`. The counter increments automatically via semantic-release's tag inspection.
+The pre-release identifier comes from the `suffix` field in `.flywheel.yml` (set when `release: prerelease`). The counter increments automatically via semantic-release's tag inspection.
 
 ### Increment rules
 
@@ -297,7 +316,7 @@ No npm plugin. The plugin list is fixed; there is currently no way to extend it 
 }
 ```
 
-**Tag format scoping:** Each stream gets a unique `tagFormat` to prevent repo-global tag collisions. The primary stream (first stream defined, or only stream with `prerelease: false` terminal branch) uses `v${version}`. All other streams use `{stream-name}/v${version}`:
+**Tag format scoping:** Each stream gets a unique `tagFormat` to prevent repo-global tag collisions. The primary stream (first stream defined, or only stream with `release: production` terminal branch) uses `v${version}`. All other streams use `{stream-name}/v${version}`:
 
 ```json
 {
@@ -306,7 +325,9 @@ No npm plugin. The plugin list is fixed; there is currently no way to extend it 
 }
 ```
 
-**Single-branch streams:** semantic-release requires at least one non-pre-release branch in its config (`ERELEASEBRANCHES` error otherwise). A stream whose only branch has a `prerelease` identifier (e.g. `customer-acme` with `prerelease: acme`) is treated by Flywheel as a release branch — the `prerelease` field in `.flywheel.yml` controls the tag format prefix, not semantic-release's `prerelease` flag. The branch is declared as a normal release branch with a scoped tag format.
+**Single-branch streams:** semantic-release requires at least one non-pre-release branch in its config (`ERELEASEBRANCHES` error otherwise). A stream whose only branch is `release: prerelease` (e.g. `customer-acme` with `suffix: acme`) is treated by Flywheel as a release branch — the `suffix` field in `.flywheel.yml` controls the tag format prefix, not semantic-release's `prerelease` flag. The branch is declared as a normal release branch with a scoped tag format.
+
+**`release: none` branches:** branches with `release: none` are filtered out of the generated `.releaserc.json` `branches` array entirely. They don't appear in any stream's release config and pushes to them skip the semantic-release step (no `.releaserc.json` is written). They still participate in promotion PRs as a normal stream member, and they still receive back-merges from downstream releases (so `CHANGELOG.md` stays in sync).
 
 For repositories with multiple streams, `pr-conductor` detects which stream the current branch belongs to and generates the appropriate `.releaserc.json` scoped to that stream. Each stream runs semantic-release independently.
 
@@ -689,7 +710,7 @@ TypeScript, compiled to a single bundled JavaScript file for distribution. Publi
 ## Open questions / deferred decisions
 
 - **Monorepo support:** Multiple independently versioned packages in one repo. The stream model maps directly — each package gets its own stream with an optional `path` field scoping it to a subdirectory. semantic-release manifest mode is the underlying mechanism. Deferred to v2 but the config structure is designed to accommodate it without breaking changes: `path` is simply added as an optional stream-level field.
-- **Cross-stream version collision:** Documented above as a known property of independent streams. Validation warns when multiple streams have `prerelease: false` terminal branches. Deeper tooling (e.g. a publish destination uniqueness check) is out of scope for v1.
+- **Cross-stream version collision:** Documented above as a known property of independent streams. Validation errors when multiple streams have `release: production` terminal branches. Deeper tooling (e.g. a publish destination uniqueness check) is out of scope for v1.
 - **Commit message validation on feature branches:** Flywheel validates PR titles (which become squash commit messages). Individual commit messages on feature branches are not validated. A `commitlint` pre-commit hook or push-triggered check in the adopting repo fills this gap if needed.
 - **Notification hooks:** Out of scope for v1. Implement as steps in user-defined `publish.yml`.
 - **TypeScript compilation:** `pr-conductor` is authored in TypeScript and compiled to a bundled `dist/index.cjs` via `esbuild` before release. The `runs.using: node24` runtime in `action.yml` executes the bundle directly. The compiled output is committed alongside the source so marketplace consumers don't need a build step; a `verify-dist` CI job checks for drift between source and bundle on every PR.

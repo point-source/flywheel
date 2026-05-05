@@ -24,7 +24,8 @@ VALID_AUTO_MERGE_KEYS = VALID_TYPES | {f"{t}!" for t in VALID_TYPES}
 VALID_MERGE_STRATEGIES = {"squash", "rebase"}
 VALID_TOP_LEVEL_KEYS = {"streams", "merge_strategy"}
 VALID_STREAM_KEYS = {"name", "branches"}
-VALID_BRANCH_KEYS = {"name", "prerelease", "auto_merge"}
+VALID_BRANCH_KEYS = {"name", "release", "suffix", "auto_merge"}
+VALID_RELEASE_MODES = {"none", "prerelease", "production"}
 
 
 def emit(status, msg):
@@ -62,7 +63,7 @@ def main():
 
     all_branches = []
     branch_to_streams = {}
-    prerelease_to_branches = {}
+    suffix_to_branches = {}
     stream_names = []
     production_terminal_streams = []
 
@@ -89,11 +90,25 @@ def main():
                 continue
             all_branches.append(bname)
             branch_to_streams.setdefault(bname, []).append(sname)
-            prerelease = b.get("prerelease")
-            if prerelease:
-                prerelease_to_branches.setdefault(prerelease, []).append((sname, bname))
+            release = b.get("release")
+            suffix = b.get("suffix")
+            if release is None:
+                emit("FAIL", f"branch {bname!r}: release is required — allowed: {', '.join(sorted(VALID_RELEASE_MODES))}")
+            elif release not in VALID_RELEASE_MODES:
+                emit("FAIL", f"branch {bname!r}: release {release!r} invalid — must be one of {', '.join(sorted(VALID_RELEASE_MODES))}")
             else:
-                production_in_stream.append(bname)
+                if release == "prerelease":
+                    if suffix is None:
+                        emit("FAIL", f"branch {bname!r}: suffix is required when release is 'prerelease'")
+                    elif not isinstance(suffix, str) or not suffix:
+                        emit("FAIL", f"branch {bname!r}: suffix must be a non-empty string identifier (e.g. 'dev')")
+                    else:
+                        suffix_to_branches.setdefault(suffix, []).append((sname, bname))
+                else:
+                    if suffix is not None:
+                        emit("FAIL", f"branch {bname!r}: suffix is only valid when release is 'prerelease' (got release: {release!r})")
+                    if release == "production":
+                        production_in_stream.append(bname)
             am = b.get("auto_merge", [])
             if not isinstance(am, list):
                 emit("FAIL", f"branch {bname!r} auto_merge must be a list")
@@ -104,13 +119,18 @@ def main():
             if b_idx == len(sbranches) - 1 and len(sbranches) > 1:
                 emit("NOTE", f"branch {bname!r} is the terminal branch of stream {sname!r} (releases on push, no auto-promotion)")
         if len(production_in_stream) > 1:
-            emit("FAIL", f"stream {sname!r}: multiple branches without a prerelease identifier ({', '.join(production_in_stream)}) — only the last branch in a stream should be the production release branch")
+            emit("FAIL", f"stream {sname!r}: multiple production branches ({', '.join(production_in_stream)}) — only the last branch in a stream should be the production release branch")
         terminal = sbranches[-1] if sbranches else None
-        if terminal and not terminal.get("prerelease"):
-            production_terminal_streams.append(sname)
+        if terminal:
+            terminal_release = terminal.get("release")
+            if terminal_release == "production":
+                production_terminal_streams.append(sname)
+            elif terminal_release == "none":
+                tname = terminal.get("name", "<unnamed>")
+                emit("FAIL", f"stream {sname!r}: terminal branch {tname!r} has release: none — the terminal branch must be release: prerelease or release: production")
 
     if len(production_terminal_streams) > 1:
-        emit("FAIL", f"multiple streams have a terminal production branch (no prerelease): {', '.join(production_terminal_streams)} — tag collision is unavoidable in a single repo, give all but one stream a prerelease identifier on its terminal branch")
+        emit("FAIL", f"multiple streams have a terminal production branch: {', '.join(production_terminal_streams)} — tag collision is unavoidable in a single repo, give all but one stream a prerelease terminal branch")
 
     seen = set()
     for n in stream_names:
@@ -122,10 +142,10 @@ def main():
         if len(slist) > 1:
             emit("FAIL", f"branch {bname!r} listed in multiple streams: {', '.join(slist)} — branches must belong to exactly one stream")
 
-    for label, occurrences in prerelease_to_branches.items():
+    for label, occurrences in suffix_to_branches.items():
         if len(occurrences) > 1:
             spots = ", ".join(f"{s}/{b}" for s, b in occurrences)
-            emit("FAIL", f"prerelease label {label!r} used by multiple branches ({spots}) — tags would collide")
+            emit("FAIL", f"suffix {label!r} used by multiple prerelease branches ({spots}) — tags would collide")
 
     ms = root.get("merge_strategy")
     if ms is None:

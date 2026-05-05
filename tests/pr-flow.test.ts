@@ -16,10 +16,11 @@ const baseConfig: FlywheelConfig = {
       branches: [
         {
           name: "develop",
-          prerelease: "dev",
+          release: "prerelease",
+          suffix: "dev",
           auto_merge: ["fix", "fix!", "chore", "feat", "perf", "refactor", "style", "test", "docs"],
         },
-        { name: "main", auto_merge: [] },
+        { name: "main", release: "production", auto_merge: [] },
       ],
     },
   ],

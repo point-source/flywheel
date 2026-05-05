@@ -18,6 +18,7 @@ export interface PushLogger {
 
 export type PushFlowOutcome =
   | { kind: "unmanaged"; reason: string }
+  | { kind: "promote-only"; stream: Stream }
   | { kind: "release"; stream: Stream; rcPath: string };
 
 export async function runPushFlow(deps: PushFlowDeps): Promise<PushFlowOutcome> {
@@ -27,6 +28,14 @@ export async function runPushFlow(deps: PushFlowDeps): Promise<PushFlowOutcome> 
       `push: branch ${deps.branchRef} is not in any stream — release flow skipped.`,
     );
     return { kind: "unmanaged", reason: "branch-not-in-stream" };
+  }
+
+  const branch = stream.branches.find((b) => b.name === deps.branchRef)!;
+  if (branch.release === "none") {
+    deps.log.info(
+      `push: branch ${deps.branchRef} is in stream ${stream.name} but release: none — skipping semantic-release.`,
+    );
+    return { kind: "promote-only", stream };
   }
 
   const rc = generateReleaseRc(stream, deps.config);

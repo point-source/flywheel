@@ -2,9 +2,7 @@ flywheel:
   streams:
     - name: main-line
       branches:
-        - name: develop
-          release: production
-          auto_merge: [fix]
         - name: main
           release: production
+          suffix: rc
           auto_merge: []
