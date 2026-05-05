@@ -31,6 +31,11 @@ SKIP_SECRETS=0
 SKIP_RULESETS=0
 REQUIRED_CHECKS=""
 FLYWHEEL_VERSION=""
+# Hoisted out of create_app_via_manifest / prompt_existing_app_credentials
+# so apply-rulesets.sh receives --app-id (App must be a bypass actor on the
+# rulesets this script applies, otherwise semantic-release tag pushes are
+# rejected).
+CREATED_APP_ID=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -201,6 +206,7 @@ create_app_via_manifest() {
   app_id="$(echo "$result" | python3 -c 'import json,sys;print(json.load(sys.stdin)["id"])')"
   pem="$(echo "$result" | python3 -c 'import json,sys;print(json.load(sys.stdin)["pem"])')"
   html_url="$(echo "$result" | python3 -c 'import json,sys;print(json.load(sys.stdin)["html_url"])')"
+  CREATED_APP_ID="$app_id"
   gh secret set FLYWHEEL_GH_APP_ID --body "$app_id" --repo "$REPO"
   printf '%s' "$pem" | gh secret set FLYWHEEL_GH_APP_PRIVATE_KEY --repo "$REPO"
   echo "  set FLYWHEEL_GH_APP_ID + FLYWHEEL_GH_APP_PRIVATE_KEY secrets."
@@ -227,6 +233,7 @@ EOF
     if [[ -z "$app_id" ]]; then
       echo "  empty App ID — skipping FLYWHEEL_GH_APP_ID secret."
     else
+      CREATED_APP_ID="$app_id"
       gh secret set FLYWHEEL_GH_APP_ID --body "$app_id" --repo "$REPO"
       echo "  set FLYWHEEL_GH_APP_ID secret."
     fi
@@ -299,9 +306,15 @@ if [[ "$SKIP_RULESETS" -eq 0 && -x "${SCRIPT_DIR:-}/apply-rulesets.sh" ]]; then
   if [[ "${yn:-N}" =~ ^[Yy]$ ]]; then
     args=("$REPO")
     [[ -n "$REQUIRED_CHECKS" ]] && args+=(--required-checks "$REQUIRED_CHECKS")
+    # TODO: when re-running init.sh against a repo with pre-existing
+    # FLYWHEEL_GH_APP_ID secret, CREATED_APP_ID is empty so --app-id is
+    # omitted here. Adopter must re-run apply-rulesets.sh manually with
+    # --app-id to add the App as a bypass actor. Followup would prompt for
+    # the App ID in the existing-secrets branch (no API to read secret bodies).
+    [[ -n "${CREATED_APP_ID:-}" ]] && args+=(--app-id "$CREATED_APP_ID")
     "$SCRIPT_DIR/apply-rulesets.sh" "${args[@]}"
   else
-    echo "  skipped ruleset apply. Run later with: scripts/apply-rulesets.sh $REPO"
+    echo "  skipped ruleset apply. Run later with: scripts/apply-rulesets.sh $REPO${CREATED_APP_ID:+ --app-id $CREATED_APP_ID}"
   fi
 elif [[ "$SKIP_RULESETS" -eq 0 ]]; then
   echo "  apply-rulesets.sh not adjacent to init.sh — fetch the repo or run:"
