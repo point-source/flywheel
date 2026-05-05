@@ -453,6 +453,20 @@ This repo uses [Flywheel](https://github.com/point-source/flywheel) to orchestra
 
 **One PR per branch; the branch dies on merge.** After your PR (or any PR carrying your commits — e.g. a maintainer's squashed cleanup) lands on the target branch, the branch is done. Cut a new branch off the latest base for your next change. With `delete_branch_on_merge` enabled (recommended; see [§5](#auto-delete-merged-branches)), the remote branch disappears automatically; reusing a stale local copy causes phantom rebase conflicts because the squashed upstream commit has a different patch-id than your originals.
 
+**Automating the local cleanup.** Two one-time setup steps make the local-side hands-off:
+
+1. Turn on prune-on-fetch globally so deleted remotes drop out of `git branch -vv` automatically:
+   ```bash
+   git config --global fetch.prune true
+   ```
+   After this, every `git fetch` (and `git pull`) marks branches whose upstream was deleted with `[gone]`.
+
+2. After fetching, delete any local branch whose upstream is gone:
+   ```bash
+   git branch -vv | awk '/: gone]/ {print $1}' | xargs -r git branch -d
+   ```
+   Use `-d` (safe — refuses unmerged branches) rather than `-D`, so you don't lose work that hadn't actually been pushed/merged. Wrap it in a shell or `git` alias if you do this often. VS Code, JetBrains IDEs, and `gh` extensions also expose equivalent "delete merged/gone branches" UI — pick whichever fits your flow.
+
 **Things you must not do:**
 - Do not push to or force-push managed branches (`<list>`); they are protected.
 - Do not create version tags (`v1.2.3`, etc.) or any tag matching the project's release namespace. Only Flywheel's GitHub App may mint them.
