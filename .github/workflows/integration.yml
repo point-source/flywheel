@@ -5,6 +5,16 @@ on:
     branches: ["develop", "main"]
   workflow_dispatch:
 
+# Tests share a single sandbox repo (point-source/flywheel-sandbox) and
+# create + merge real PRs against integration-test-base. Two runs in
+# parallel race on that base ref — see auto-merge-direct, where one
+# direct-merge call wins and the other returns 405/409. Serialize all
+# runs so they queue instead of racing. cancel-in-progress: false keeps
+# every required-check on PRs honest (the latest commit still runs).
+concurrency:
+  group: integration-sandbox
+  cancel-in-progress: false
+
 jobs:
   integration:
     runs-on: ubuntu-latest
