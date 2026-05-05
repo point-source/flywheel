@@ -13,10 +13,12 @@ import {
   type MergeMethod,
   type PullRequest,
 } from "./github.js";
+import { findSkipCiMarkers } from "./skip-ci.js";
 
 export type PrFlowOutcome =
   | { kind: "unmanaged" }
   | { kind: "parse-failed" }
+  | { kind: "skip-ci-found" }
   | {
       kind: "labeled";
       label: typeof FLYWHEEL_AUTO_MERGE_LABEL | typeof FLYWHEEL_NEEDS_REVIEW_LABEL;
@@ -61,9 +63,38 @@ export async function runPrFlow({ pr, config, gh, log }: PrFlowDeps): Promise<Pr
     return { kind: "parse-failed" };
   }
 
-  // Title is valid — always post a passing check so adopters can require
-  // flywheel/conventional-commit in branch protection without it disappearing
-  // for non-failing cases (which would surface as "Expected — Waiting for status").
+  const commits = await gh.listPullCommits(pr.number);
+
+  // Skip-ci markers anywhere in the PR title, body, or any commit message
+  // would propagate into the squash-merge commit body and silently suppress
+  // every workflow on the merged commit. Block before they can reach the
+  // merge commit. See src/skip-ci.ts for the recognized variants.
+  const skipCiHits = findSkipCiMarkers([
+    { source: "PR title", text: pr.title },
+    { source: "PR body", text: pr.body ?? "" },
+    ...commits.flatMap((c): { source: string; text: string }[] => [
+      { source: `commit ${c.sha.slice(0, 7)} title`, text: c.title },
+      { source: `commit ${c.sha.slice(0, 7)} body`, text: c.body ?? "" },
+    ]),
+  ]);
+  if (skipCiHits.length > 0) {
+    const summary = `PR contains GitHub Actions skip-ci marker(s). These suppress workflows on the merged commit and must be removed before merging.`;
+    const details = skipCiHits.map((h) => `- ${h.source}: \`${h.marker}\``).join("\n");
+    await gh.createCheck({
+      name: FLYWHEEL_TITLE_CHECK,
+      conclusion: "failure",
+      summary,
+      details,
+      headSha: pr.headSha,
+    });
+    log.warning(`PR #${pr.number}: skip-ci marker(s) found — failing check posted.`);
+    return { kind: "skip-ci-found" };
+  }
+
+  // Title is valid and no skip-ci markers — post a passing check so adopters
+  // can require flywheel/conventional-commit in branch protection without it
+  // disappearing for non-failing cases (which would surface as "Expected —
+  // Waiting for status").
   await gh.createCheck({
     name: FLYWHEEL_TITLE_CHECK,
     conclusion: "success",
@@ -71,7 +102,6 @@ export async function runPrFlow({ pr, config, gh, log }: PrFlowDeps): Promise<Pr
     headSha: pr.headSha,
   });
 
-  const commits = await gh.listPullCommits(pr.number);
   const breakingFromBodies = commits.some((c) => detectBreakingInBody(c.body));
   const increment = computeIncrement(parsed, breakingFromBodies);
   const matchKey = parsed.breaking || breakingFromBodies ? `${parsed.type}!` : parsed.type;

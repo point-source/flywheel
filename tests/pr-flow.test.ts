@@ -199,6 +199,97 @@ describe("runPrFlow", () => {
     expect(gh.createdChecks[0]!.headSha).toMatch(/^abcdef/);
   });
 
+  it("skip-ci marker in PR title fails the check before any rewrite or labeling", async () => {
+    const gh = createFakeGh({
+      pullCommits: { 7: [makeCommit("aaaaaaa", "fix: clean commit")] },
+    });
+    const { log } = silentLogger();
+
+    const outcome = await runPrFlow({
+      pr: makePR({ title: "fix: handle race [skip ci]" }),
+      config: baseConfig,
+      gh,
+      log,
+    });
+
+    expect(outcome).toEqual({ kind: "skip-ci-found" });
+    expect(gh.createdChecks).toHaveLength(1);
+    expect(gh.createdChecks[0]!.conclusion).toBe("failure");
+    expect(gh.createdChecks[0]!.details).toContain("PR title");
+    expect(gh.createdChecks[0]!.details).toContain("[skip ci]");
+    expect(gh.prLabels[7] ?? []).toEqual([]);
+  });
+
+  it("skip-ci marker in PR body fails the check", async () => {
+    const gh = createFakeGh({
+      pullCommits: { 7: [makeCommit("aaaaaaa", "fix: clean commit")] },
+    });
+    const { log } = silentLogger();
+
+    const outcome = await runPrFlow({
+      pr: makePR({ body: "Notes: [ci skip] for this rollout" }),
+      config: baseConfig,
+      gh,
+      log,
+    });
+
+    expect(outcome).toEqual({ kind: "skip-ci-found" });
+    expect(gh.createdChecks[0]!.details).toContain("PR body");
+  });
+
+  it("skip-ci marker in a commit title fails the check", async () => {
+    const gh = createFakeGh({
+      pullCommits: {
+        7: [
+          makeCommit("aaaaaaa", "fix: legitimate"),
+          makeCommit("bbbbbbb", "chore: bumped [no ci]"),
+        ],
+      },
+    });
+    const { log } = silentLogger();
+
+    const outcome = await runPrFlow({
+      pr: makePR(),
+      config: baseConfig,
+      gh,
+      log,
+    });
+
+    expect(outcome).toEqual({ kind: "skip-ci-found" });
+    expect(gh.createdChecks[0]!.details).toMatch(/commit \w+ title/);
+  });
+
+  it("skip-ci marker in a commit body fails the check", async () => {
+    const gh = createFakeGh({
+      pullCommits: {
+        7: [makeCommit("aaaaaaa", "fix: legitimate\n\nBody line\n[skip actions] suppressed.")],
+      },
+    });
+    const { log } = silentLogger();
+
+    const outcome = await runPrFlow({
+      pr: makePR(),
+      config: baseConfig,
+      gh,
+      log,
+    });
+
+    expect(outcome).toEqual({ kind: "skip-ci-found" });
+    expect(gh.createdChecks[0]!.details).toMatch(/commit \w+ body/);
+  });
+
+  it("clean PR with no markers proceeds to label and post a passing check (single check posted)", async () => {
+    const gh = createFakeGh({
+      pullCommits: { 7: [makeCommit("aaaaaaa", "fix: legitimate")] },
+    });
+    const { log } = silentLogger();
+
+    await runPrFlow({ pr: makePR(), config: baseConfig, gh, log });
+
+    expect(gh.createdChecks).toHaveLength(1);
+    expect(gh.createdChecks[0]!.conclusion).toBe("success");
+  });
+
   it("label flip: PR previously labeled needs-review now eligible (retitled feat: → fix:) → label flipped, auto-merge enabled", async () => {
     const gh = createFakeGh({
       pullCommits: { 7: [makeCommit("a", "fix: actually a fix")] },
