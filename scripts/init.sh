@@ -223,6 +223,11 @@ create_app_via_manifest() {
   CREATED_APP_ID="$app_id"
   gh secret set FLYWHEEL_GH_APP_ID --body "$app_id" --repo "$REPO"
   printf '%s' "$pem" | gh secret set FLYWHEEL_GH_APP_PRIVATE_KEY --repo "$REPO"
+  # Mirror App ID into a repo variable so re-runs of init.sh can recover
+  # it (secret bodies aren't readable via the API). Workflows continue to
+  # reference secrets.FLYWHEEL_GH_APP_ID — the variable is only for init.sh.
+  gh variable set FLYWHEEL_GH_APP_ID --body "$app_id" --repo "$REPO" >/dev/null 2>&1 || \
+    echo "  warning: could not set FLYWHEEL_GH_APP_ID repo variable; future re-runs may need to re-prompt for the App ID." >&2
   echo "  set FLYWHEEL_GH_APP_ID + FLYWHEEL_GH_APP_PRIVATE_KEY secrets."
   echo
   echo "  Final manual step: install the App on $REPO."
@@ -249,6 +254,8 @@ EOF
     else
       CREATED_APP_ID="$app_id"
       gh secret set FLYWHEEL_GH_APP_ID --body "$app_id" --repo "$REPO"
+      gh variable set FLYWHEEL_GH_APP_ID --body "$app_id" --repo "$REPO" >/dev/null 2>&1 || \
+        echo "  warning: could not set FLYWHEEL_GH_APP_ID repo variable; future re-runs may need to re-prompt for the App ID." >&2
       echo "  set FLYWHEEL_GH_APP_ID secret."
     fi
   fi
@@ -312,6 +319,14 @@ fi
 
 # 5. Optionally apply rulesets.
 if [[ "$SKIP_RULESETS" -eq 0 && -x "${SCRIPT_DIR:-}/apply-rulesets.sh" ]]; then
+  # Recover App ID for --app-id from the repo variable written on first-run.
+  # Without --app-id, apply-rulesets.sh PUTs an empty bypass_actors and the
+  # App loses its bypass entry, breaking semantic-release pushes on re-runs.
+  # Cheap and non-interactive — runs regardless of yn so the "skipped" hint
+  # below also includes --app-id when known.
+  if [[ -z "${CREATED_APP_ID:-}" ]]; then
+    CREATED_APP_ID="$(gh variable get FLYWHEEL_GH_APP_ID --repo "$REPO" 2>/dev/null || true)"
+  fi
   if [[ "$INTERACTIVE" -eq 1 ]]; then
     read -r -u 3 -p "  Apply branch + tag protection rulesets now? [y/N] " yn
   else
@@ -346,13 +361,20 @@ if [[ "$SKIP_RULESETS" -eq 0 && -x "${SCRIPT_DIR:-}/apply-rulesets.sh" ]]; then
         read -r -u 3 -p "  Required-check names (comma-separated, blank to skip): " REQUIRED_CHECKS
       fi
     fi
+    # Prompt fallback for adopters who onboarded before the variable was
+    # persisted. The non-interactive case falls through to the warning below.
+    if [[ -z "${CREATED_APP_ID:-}" && "$INTERACTIVE" -eq 1 ]]; then
+      echo "  App ID not found in repo variables (re-run from before this was persisted)."
+      read -r -u 3 -p "  Enter App ID for ruleset bypass-actor configuration (blank to skip): " CREATED_APP_ID
+      if [[ -n "$CREATED_APP_ID" ]]; then
+        gh variable set FLYWHEEL_GH_APP_ID --body "$CREATED_APP_ID" --repo "$REPO" >/dev/null 2>&1 || true
+      fi
+    fi
+    if [[ -z "${CREATED_APP_ID:-}" ]]; then
+      echo "  warning: no App ID available — apply-rulesets.sh will run without --app-id, leaving bypass_actors empty. Re-run scripts/apply-rulesets.sh $REPO --app-id <id> manually after this completes." >&2
+    fi
     args=("$REPO")
     [[ -n "$REQUIRED_CHECKS" ]] && args+=(--required-checks "$REQUIRED_CHECKS")
-    # TODO: when re-running init.sh against a repo with pre-existing
-    # FLYWHEEL_GH_APP_ID secret, CREATED_APP_ID is empty so --app-id is
-    # omitted here. Adopter must re-run apply-rulesets.sh manually with
-    # --app-id to add the App as a bypass actor. Followup would prompt for
-    # the App ID in the existing-secrets branch (no API to read secret bodies).
     [[ -n "${CREATED_APP_ID:-}" ]] && args+=(--app-id "$CREATED_APP_ID")
     "$SCRIPT_DIR/apply-rulesets.sh" "${args[@]}"
   else
