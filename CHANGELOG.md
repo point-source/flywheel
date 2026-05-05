@@ -1,3 +1,10 @@
+# [2.1.0-dev.13](https://github.com/point-source/flywheel/compare/v2.1.0-dev.12...v2.1.0-dev.13) (2026-05-05)
+
+
+### Bug Fixes
+
+* **e2e:** bump test 07 per-test timeout to 600s ([#56](https://github.com/point-source/flywheel/issues/56)) ([4e4a737](https://github.com/point-source/flywheel/commit/4e4a7379138bc0c5bbbfb548e6247b79c4d9f412))
+
 # [2.1.0-dev.12](https://github.com/point-source/flywheel/compare/v2.1.0-dev.11...v2.1.0-dev.12) (2026-05-05)
 
 
