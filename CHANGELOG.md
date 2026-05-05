@@ -1,3 +1,10 @@
+# [2.1.0-dev.11](https://github.com/point-source/flywheel/compare/v2.1.0-dev.10...v2.1.0-dev.11) (2026-05-05)
+
+
+### Bug Fixes
+
+* **e2e:** force-update sandbox refs so sync survives concurrent test merges ([#53](https://github.com/point-source/flywheel/issues/53)) ([5fa85a8](https://github.com/point-source/flywheel/commit/5fa85a829af336e98a94bb9ef9afdee6d68eb632))
+
 # [2.1.0-dev.10](https://github.com/point-source/flywheel/compare/v2.1.0-dev.9...v2.1.0-dev.10) (2026-05-05)
 
 
