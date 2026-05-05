@@ -1,3 +1,15 @@
+# [2.1.0-dev.7](https://github.com/point-source/flywheel/compare/v2.1.0-dev.6...v2.1.0-dev.7) (2026-05-05)
+
+
+### Bug Fixes
+
+* **workflow:** bundle @semantic-release/exec in dogfood push workflow ([#44](https://github.com/point-source/flywheel/issues/44)) ([79e1858](https://github.com/point-source/flywheel/commit/79e1858ec1f86e43756dcdaa6a64df6bf85bff81)), closes [#42](https://github.com/point-source/flywheel/issues/42) [#42](https://github.com/point-source/flywheel/issues/42) [#43](https://github.com/point-source/flywheel/issues/43)
+
+
+### Features
+
+* **push-flow:** respect committed .releaserc.json + bundle @semantic-release/exec ([#42](https://github.com/point-source/flywheel/issues/42)) ([ac0618a](https://github.com/point-source/flywheel/commit/ac0618a65530bfd9cf10058c79bb99a469828f79))
+
 # [2.1.0-dev.6](https://github.com/point-source/flywheel/compare/v2.1.0-dev.5...v2.1.0-dev.6) (2026-05-05)
 
 
