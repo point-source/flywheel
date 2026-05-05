@@ -13,6 +13,7 @@ import {
   type GitHubClient,
   type MergeMethod,
 } from "./github.js";
+import { sanitizeSkipCi } from "./skip-ci.js";
 import type { Branch, FlywheelConfig, Stream } from "./types.js";
 
 export type PromotionOutcome =
@@ -245,7 +246,7 @@ function formatPromotionBody(p: BodyParams): string {
       continue;
     }
     const list = groups.get(parsed.type) ?? [];
-    list.push({ desc: parsed.description, sha: c.sha.slice(0, 7) });
+    list.push({ desc: sanitizeSkipCi(parsed.description), sha: c.sha.slice(0, 7) });
     groups.set(parsed.type, list);
   }
 

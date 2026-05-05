@@ -28295,6 +28295,36 @@ function createGitHubClient(token, repoFullName) {
 var FLYWHEEL_AUTO_MERGE_LABEL = "flywheel:auto-merge";
 var FLYWHEEL_NEEDS_REVIEW_LABEL = "flywheel:needs-review";
 
+// src/skip-ci.ts
+var SKIP_CI_PATTERNS = [
+  /\[skip ci\]/i,
+  /\[ci skip\]/i,
+  /\[no ci\]/i,
+  /\[skip actions\]/i,
+  /\[actions skip\]/i,
+  /\*\*\*NO_CI\*\*\*/
+];
+function findSkipCiMarkers(inputs) {
+  const hits = [];
+  for (const input of inputs) {
+    if (!input.text) continue;
+    for (const pattern of SKIP_CI_PATTERNS) {
+      const match = input.text.match(pattern);
+      if (match) {
+        hits.push({ source: input.source, marker: match[0] });
+      }
+    }
+  }
+  return hits;
+}
+function sanitizeSkipCi(text) {
+  let out = text;
+  for (const pattern of SKIP_CI_PATTERNS) {
+    out = out.replace(new RegExp(pattern.source, pattern.flags + "g"), "");
+  }
+  return out.replace(/\s{2,}/g, " ").trim();
+}
+
 // src/pr-flow.ts
 var FLYWHEEL_TITLE_CHECK = "flywheel/conventional-commit";
 async function runPrFlow({ pr, config, gh, log }) {
@@ -28316,13 +28346,34 @@ async function runPrFlow({ pr, config, gh, log }) {
     log.warning(`PR #${pr.number}: invalid conventional commit title \u2014 failing check posted.`);
     return { kind: "parse-failed" };
   }
+  const commits = await gh.listPullCommits(pr.number);
+  const skipCiHits = findSkipCiMarkers([
+    { source: "PR title", text: pr.title },
+    { source: "PR body", text: pr.body ?? "" },
+    ...commits.flatMap((c) => [
+      { source: `commit ${c.sha.slice(0, 7)} title`, text: c.title },
+      { source: `commit ${c.sha.slice(0, 7)} body`, text: c.body ?? "" }
+    ])
+  ]);
+  if (skipCiHits.length > 0) {
+    const summary2 = `PR contains GitHub Actions skip-ci marker(s). These suppress workflows on the merged commit and must be removed before merging.`;
+    const details = skipCiHits.map((h) => `- ${h.source}: \`${h.marker}\``).join("\n");
+    await gh.createCheck({
+      name: FLYWHEEL_TITLE_CHECK,
+      conclusion: "failure",
+      summary: summary2,
+      details,
+      headSha: pr.headSha
+    });
+    log.warning(`PR #${pr.number}: skip-ci marker(s) found \u2014 failing check posted.`);
+    return { kind: "skip-ci-found" };
+  }
   await gh.createCheck({
     name: FLYWHEEL_TITLE_CHECK,
     conclusion: "success",
     summary: `Valid conventional commit title.`,
     headSha: pr.headSha
   });
-  const commits = await gh.listPullCommits(pr.number);
   const breakingFromBodies = commits.some((c) => detectBreakingInBody(c.body));
   const increment = computeIncrement(parsed, breakingFromBodies);
   const matchKey = parsed.breaking || breakingFromBodies ? `${parsed.type}!` : parsed.type;
@@ -28769,7 +28820,7 @@ function formatPromotionBody(p) {
       continue;
     }
     const list = groups.get(parsed.type) ?? [];
-    list.push({ desc: parsed.description, sha: c.sha.slice(0, 7) });
+    list.push({ desc: sanitizeSkipCi(parsed.description), sha: c.sha.slice(0, 7) });
     groups.set(parsed.type, list);
   }
   const lines = [];
