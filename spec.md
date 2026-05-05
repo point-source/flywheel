@@ -302,9 +302,34 @@ Non-bumping commits accumulate silently until a qualifying commit lands. They ar
 }
 ```
 
-No npm plugin. `@semantic-release/exec` is loaded but no-op when not referenced — it exists in the chain so adopters who commit their own `.releaserc.json` (see **Committed `.releaserc.json` precedence** below) can use `prepareCmd` for non-Node version files (e.g. `pubspec.yaml`, `Cargo.toml`) without forking `flywheel-push.yml`. The plugin list is otherwise fixed; there is currently no way to extend it from `.flywheel.yml`.
+No npm plugin. `@semantic-release/exec` is loaded but no-op when no `release_files:` are declared. When `release_files:` are present (see **Release file management** below), Flywheel synthesizes a `prepareCmd` for the exec plugin and extends `@semantic-release/git`'s `assets` list. Adopters never edit `.releaserc.json` directly — a committed `.releaserc.json` is overwritten on every push.
 
-**Committed `.releaserc.json` precedence:** Flywheel writes `.releaserc.json` to the workspace before semantic-release runs only when the file is *not* already committed in the repo. If the adopter committed their own `.releaserc.json`, Flywheel logs a notice and leaves it alone — the adopter's file wins. Trade-off: the adopter is responsible for keeping the committed file's `branches` and `tagFormat` in sync with `.flywheel.yml`. Only `.releaserc.json` is honored — `.releaserc.js`, `.releaserc.yml`, and `release.config.js` are not.
+**Release file management:** Many ecosystems carry the version in a checked-in file (Flutter's `pubspec.yaml`, Cargo's `Cargo.toml`, .NET `.csproj`, Gradle, etc.). Adopters declare these in `.flywheel.yml` under `release_files:`; Flywheel turns the entries into `@semantic-release/exec` `prepareCmd` invocations and adds each path to `@semantic-release/git`'s `assets` so the bumped file is committed alongside the changelog.
+
+```yaml
+flywheel:
+  release_files:
+    - path: pubspec.yaml
+      pattern: '^version: .*'
+      replacement: 'version: ${version}+${build}'
+    - path: pyproject.toml
+      cmd: |
+        python bump.py "${version}"
+```
+
+Each entry is a tagged union: either a declarative `{ pattern, replacement }` pair (Flywheel emits a `sed -i.bak -E` invocation) or a freeform `{ cmd }` (Flywheel runs the shell string verbatim after placeholder substitution). Exactly one form per entry; mixing both is a parse-time error. The sed delimiter is `|`, so `pattern` and `replacement` may not contain a literal `|`.
+
+Three placeholders are available in `replacement` and `cmd`:
+
+| Placeholder  | Substituted to                       | Notes                                                                                              |
+| ------------ | ------------------------------------ | -------------------------------------------------------------------------------------------------- |
+| `${version}` | `${nextRelease.version}`             | Full semver string (e.g. `1.2.3`, `1.2.3-rc.1`).                                                   |
+| `${channel}` | `${nextRelease.channel \|\| ''}`     | Prerelease channel (`rc`, `dev`, …); empty string on production releases.                          |
+| `${build}`   | `${BUILD}` (shell variable)          | Monotonic integer = `$(git tag --list 'v*' \| wc -l) + 1`. Required for Play Store / App Store.    |
+
+All entries share a single `prepareCmd` that begins `BUILD=$(( $(git tag --list 'v*' | wc -l) + 1 ))` and `&&`-chains every entry. Failure of any step aborts the release. Plugin order is preserved — `@semantic-release/exec` runs after `@semantic-release/changelog` and before `@semantic-release/git`, so file edits land in the same release commit as the changelog.
+
+The build number is **tag-count-based**: it counts existing `v*` tags repo-wide and adds one. This is monotonic across rc and prod releases (a property the Play Store and App Store require) but is not a "build number per branch" — every release, regardless of channel, increments it. Adopters who need a different scheme should use the `cmd` form to compute their own.
 
 **Branch config:** For each stream, Flywheel generates a `branches` array in stream order. This ordered declaration anchors pre-release versions to the stream's shared version history:
 
