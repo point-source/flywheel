@@ -78,6 +78,8 @@ Without this, expect `EGITNOPERMISSION` on the release push and a linear-history
 
 If you need a release immediately and the recent history isn't conventional, the simplest path is to push a `fix:` or `feat:` commit after adoption rather than trying to retroactively interpret old commits.
 
+> **`[skip ci]` in legacy release commits — squash-merge gotcha.** If your repo's history contains commits with `[skip ci]` in the title (typical of pre-Flywheel release-bot output), the first develop→main promotion PR will bundle them. GitHub's default `squash_merge_commit_message: COMMIT_MESSAGES` copies every squashed commit's message into the merge commit body, so `[skip ci]` reaches the merge commit and silently suppresses every workflow on the target branch — your first release will not fire and the symptom is "I merged the promotion PR but nothing happened on `main`." Two ways to dodge this on the cutover merge: (a) edit the squash-merge commit body in the GitHub UI before clicking *Confirm squash and merge* and remove the offending lines, or (b) set `squash_merge_commit_message: PR_BODY` on the repo (`gh api -X PATCH repos/<owner>/<repo> -f squash_merge_commit_message=PR_BODY`) so the Flywheel-generated PR description becomes the merge body. After the first promotion lands, the date-cutoff in `computePendingCommits` excludes pre-cutover commits from subsequent bundles automatically — this is a one-time hazard.
+
 ### 0.5 Open PRs at cutover
 
 Open PRs whose titles aren't conventional commits will be rewritten by Flywheel on their next `synchronize` event. Nothing breaks, but if you have many open PRs expect a wave of title-rewrite activity in the first day. No action required — included so it's not a surprise.
