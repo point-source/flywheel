@@ -110,7 +110,7 @@ on: workflow_run build completed
 
 **Important:** The release flow and the promotion PR flow are independent reactions to the same push event. A branch that is last in its stream (the terminal branch) still releases — being last means no promotion PR is created, not that no release occurs. Releases happen on every push to any managed branch where semantic-release computes a new version. A single-branch stream releases immediately on every qualifying push with no promotion step.
 
-**Back-merge.** Whenever a release lands on a non-head branch in its stream (e.g. `main` in a `develop → staging → main` stream), Flywheel back-merges the new tag and the `chore(release)` commit into every upstream branch (`staging`, `develop`) before the workflow exits. This keeps the release tag in each upstream branch's ancestry — required for semantic-release on those branches to compute the next prerelease version correctly — and keeps `CHANGELOG.md` in sync. The back-merge commit is marked `[skip ci]` so it doesn't retrigger the pipeline. The App must be a bypass actor on each upstream branch's ruleset (already required by Flywheel's spec for the release push itself); without it, the back-merge push is rejected by the linear-history rule. Single-branch streams have no upstream branches and skip this step.
+**Back-merge.** Whenever a release lands on a non-head branch in its stream (e.g. `main` in a `develop → staging → main` stream), Flywheel back-merges the new tag and the `chore(release)` commit into every upstream branch (`staging`, `develop`) before the workflow exits. This keeps the release tag in each upstream branch's ancestry — required for semantic-release on those branches to compute the next prerelease version correctly — and keeps `CHANGELOG.md` in sync. The back-merge push retriggers `flywheel-push.yml` on the upstream branch; that re-run is intentional and a no-op in steady state — semantic-release sees the freshly back-merged tag at HEAD and exits without publishing. Flywheel deliberately does **not** mark the merge commit `[skip ci]`: that token is a workflow-level commit-message filter and would leave required status checks `Pending` on any promotion PR tracking the upstream branch (per GitHub's [required-status-checks docs](https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/collaborating-on-repositories-with-code-quality-features/troubleshooting-required-status-checks#handling-skipped-but-required-checks)). Adopters who want to skip CI work on back-merge / release commits should use a job-level `if:` in their quality workflows — a job-level skip reports `success` to the required-checks rule and clears the gate. The App must be a bypass actor on each upstream branch's ruleset (already required by Flywheel's spec for the release push itself); without it, the back-merge push is rejected by the linear-history rule. Single-branch streams have no upstream branches and skip this step.
 
 ---
 
@@ -590,7 +590,7 @@ jobs:
             if git merge --ff-only "$RELEASED_BRANCH" 2>/dev/null; then
               echo "Fast-forwarded $upstream to $RELEASED_BRANCH."
             else
-              git merge --no-ff -m "chore: back-merge $new_tag from $RELEASED_BRANCH into $upstream [skip ci]" "$RELEASED_BRANCH"
+              git merge --no-ff -m "chore: back-merge $new_tag from $RELEASED_BRANCH into $upstream" "$RELEASED_BRANCH"
             fi
             git push origin "$upstream"
           done

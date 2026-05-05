@@ -7,6 +7,11 @@ const baseRc = {
   merge_strategy: "squash" as const,
 };
 
+// Override of @semantic-release/git's default message: drops the `[skip ci]`
+// token the plugin would otherwise append. See src/release-rc.ts for the why.
+const GIT_MESSAGE =
+  "chore(release): ${nextRelease.version}\n\n${nextRelease.notes}";
+
 describe("generateReleaseRc", () => {
   it("default plugin chain includes @semantic-release/exec for committed-rc adopters", () => {
     const config: FlywheelConfig = {
@@ -122,9 +127,29 @@ describe("generateReleaseRc", () => {
       "@semantic-release/release-notes-generator",
       "@semantic-release/changelog",
       "@semantic-release/exec",
-      ["@semantic-release/git", { assets: ["CHANGELOG.md"] }],
+      ["@semantic-release/git", { assets: ["CHANGELOG.md"], message: GIT_MESSAGE }],
       "@semantic-release/github",
     ]);
+  });
+
+  it("@semantic-release/git message override drops [skip ci]", () => {
+    const config: FlywheelConfig = {
+      ...baseRc,
+      streams: [
+        {
+          name: "only",
+          branches: [{ name: "main", release: "production", auto_merge: [] }],
+        },
+      ],
+    };
+    const rc = generateReleaseRc(config.streams[0]!, config);
+    const gitEntry = rc.plugins.find(
+      (p): p is [string, { assets: string[]; message: string }] =>
+        Array.isArray(p) && p[0] === "@semantic-release/git",
+    );
+    expect(gitEntry).toBeDefined();
+    expect(gitEntry![1].message).toBe(GIT_MESSAGE);
+    expect(gitEntry![1].message).not.toContain("[skip ci]");
   });
 
   describe("release_files", () => {
@@ -145,7 +170,7 @@ describe("generateReleaseRc", () => {
         "@semantic-release/release-notes-generator",
         "@semantic-release/changelog",
         "@semantic-release/exec",
-        ["@semantic-release/git", { assets: ["CHANGELOG.md"] }],
+        ["@semantic-release/git", { assets: ["CHANGELOG.md"], message: GIT_MESSAGE }],
         "@semantic-release/github",
       ]);
     });
@@ -172,7 +197,7 @@ describe("generateReleaseRc", () => {
       ]);
       expect(rc.plugins).toContainEqual([
         "@semantic-release/git",
-        { assets: ["CHANGELOG.md", "pubspec.yaml"] },
+        { assets: ["CHANGELOG.md", "pubspec.yaml"], message: GIT_MESSAGE },
       ]);
     });
 
@@ -216,7 +241,10 @@ describe("generateReleaseRc", () => {
       expect(prepareCmd).toContain('echo "${nextRelease.version}" > VERSION');
       expect(rc.plugins).toContainEqual([
         "@semantic-release/git",
-        { assets: ["CHANGELOG.md", "pubspec.yaml", "scripts/bump.sh"] },
+        {
+          assets: ["CHANGELOG.md", "pubspec.yaml", "scripts/bump.sh"],
+          message: GIT_MESSAGE,
+        },
       ]);
     });
 
@@ -233,7 +261,7 @@ describe("generateReleaseRc", () => {
       });
       expect(rc.plugins).toContainEqual([
         "@semantic-release/git",
-        { assets: ["CHANGELOG.md"] },
+        { assets: ["CHANGELOG.md"], message: GIT_MESSAGE },
       ]);
     });
 
