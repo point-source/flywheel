@@ -121,14 +121,14 @@ Flywheel mints its own installation token from the GitHub App credentials you su
 | Checks: r/w    | Posting the `flywheel/conventional-commit` check               |
 | Metadata: read | Required for any token interacting with a repo                 |
 
-Adopters store the App credentials as `FLYWHEEL_GH_APP_ID` + `FLYWHEEL_GH_APP_PRIVATE_KEY` repo secrets and pass them straight into the action — no separate `actions/create-github-app-token` step. Personal Access Tokens are not supported (they don't reliably propagate the cross-workflow trigger semantics Flywheel relies on); `secrets.GITHUB_TOKEN` is similarly insufficient (it cannot trigger downstream workflows from PRs it creates).
+Adopters store `FLYWHEEL_GH_APP_ID` as a repo Variable (it's not sensitive — the App ID is printed on the App's settings page) and `FLYWHEEL_GH_APP_PRIVATE_KEY` as a repo Secret, and pass them straight into the action — no separate `actions/create-github-app-token` step. Personal Access Tokens are not supported (they don't reliably propagate the cross-workflow trigger semantics Flywheel relies on); `secrets.GITHUB_TOKEN` is similarly insufficient (it cannot trigger downstream workflows from PRs it creates).
 
 ## Inputs and outputs
 
 | Input             | Required | Description                                                |
 | ----------------- | -------- | ---------------------------------------------------------- |
 | `event`           | yes      | `pull_request` or `push`                                   |
-| `app-id`          | yes      | GitHub App ID; typically `secrets.FLYWHEEL_GH_APP_ID`      |
+| `app-id`          | yes      | GitHub App ID; typically `vars.FLYWHEEL_GH_APP_ID`         |
 | `app-private-key` | yes      | App private key (PEM); typically `secrets.FLYWHEEL_GH_APP_PRIVATE_KEY` |
 
 | Output                | Description                                                                                                                                          |

@@ -2,12 +2,12 @@
 
 This file documents the one-time steps required to operate the Flywheel repository itself.
 
-## Required secrets
+## Required App credentials
 
 Flywheel uses a GitHub App installation token. Personal Access Tokens are not supported.
 
-- `FLYWHEEL_GH_APP_ID` — numeric ID of the GitHub App installed on this repo.
-- `FLYWHEEL_GH_APP_PRIVATE_KEY` — PEM-format private key for that App.
+- `FLYWHEEL_GH_APP_ID` — numeric ID of the GitHub App installed on this repo. Stored as a repo **Variable** (it's not sensitive — visible on the App's settings page).
+- `FLYWHEEL_GH_APP_PRIVATE_KEY` — PEM-format private key for that App. Stored as a repo **Secret**.
 
 The App needs:
 

@@ -129,25 +129,38 @@ if [[ "${#branches[@]}" -gt 0 ]]; then
   done
 fi
 
-# 3. App-token secrets. Listing secrets requires an admin PAT with the
-# 'secrets:read' scope; GitHub App installation tokens are NOT permitted
-# to read secrets via the API regardless of granted permissions. When the
-# listing fails, downgrade to a warning rather than a hard fail so doctor
-# can still pass when invoked with App credentials.
-bold "Repo secrets"
-if secrets_json="$(gh api "repos/$REPO/actions/secrets" 2>/dev/null)"; then
-  for name in FLYWHEEL_GH_APP_ID FLYWHEEL_GH_APP_PRIVATE_KEY; do
-    if echo "$secrets_json" | jq -e --arg n "$name" '.secrets[] | select(.name == $n)' >/dev/null; then
-      ok "$name set"
-    else
-      fail "$name missing — Flywheel requires GitHub App tokens (PATs are not supported)"
-    fi
-  done
+# 3. App-token credentials. The App ID lives in a repo Variable (it's public
+# information, visible on the App's settings page); the private key lives in
+# a repo Secret. Listing either via the API requires an admin PAT — GitHub
+# App installation tokens are NOT permitted to read secrets/variables
+# regardless of granted permissions. When a listing fails, downgrade to a
+# warning rather than a hard fail so doctor can still pass when invoked with
+# App credentials.
+bold "Repo App-token credentials"
+vars_json="$(gh api "repos/$REPO/actions/variables" 2>/dev/null || true)"
+secrets_json="$(gh api "repos/$REPO/actions/secrets" 2>/dev/null || true)"
+
+if [[ -n "$vars_json" ]]; then
+  if echo "$vars_json" | jq -e '.variables[] | select(.name == "FLYWHEEL_GH_APP_ID")' >/dev/null; then
+    ok "FLYWHEEL_GH_APP_ID variable set"
+  else
+    fail "FLYWHEEL_GH_APP_ID variable missing — set with: gh variable set FLYWHEEL_GH_APP_ID --body <app-id> --repo $REPO"
+  fi
+else
+  warn "could not list repo variables — verify FLYWHEEL_GH_APP_ID is set in Settings → Secrets and variables → Actions → Variables (App tokens cannot list variables)"
+fi
+
+if [[ -n "$secrets_json" ]]; then
+  if echo "$secrets_json" | jq -e '.secrets[] | select(.name == "FLYWHEEL_GH_APP_PRIVATE_KEY")' >/dev/null; then
+    ok "FLYWHEEL_GH_APP_PRIVATE_KEY secret set"
+  else
+    fail "FLYWHEEL_GH_APP_PRIVATE_KEY secret missing — Flywheel requires GitHub App tokens (PATs are not supported)"
+  fi
   if echo "$secrets_json" | jq -e '.secrets[] | select(.name == "GH_PAT")' >/dev/null; then
     warn "GH_PAT secret present — Flywheel does not use it; remove if it's left over from an older setup"
   fi
 else
-  warn "could not list repo secrets — verify FLYWHEEL_GH_APP_ID and FLYWHEEL_GH_APP_PRIVATE_KEY are set in repo Settings → Secrets and variables → Actions (App tokens cannot list secrets)"
+  warn "could not list repo secrets — verify FLYWHEEL_GH_APP_PRIVATE_KEY is set in Settings → Secrets and variables → Actions → Secrets (App tokens cannot list secrets)"
 fi
 
 # 4. Repo settings: allow_auto_merge, delete_branch_on_merge.
