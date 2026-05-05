@@ -31,6 +31,16 @@ jobs:
           owner: point-source
           repositories: flywheel-sandbox
 
+      # Overwrite the sandbox's workflow files + .flywheel.yml with the
+      # versions on the SHA under test. Treats the sandbox as a fresh-install
+      # target so template drift cannot mask regressions. Each commit carries
+      # [skip ci] to keep the sandbox's own Flywheel — Push from retriggering.
+      - name: Sync sandbox fixtures
+        env:
+          SANDBOX_GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          FLYWHEEL_ACTION_REF: ${{ github.sha }}
+        run: node scripts/sync-e2e-fixtures.mjs
+
       - name: Pre-flight (doctor.sh against sandbox)
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
