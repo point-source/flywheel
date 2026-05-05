@@ -22,9 +22,10 @@ VALID_TYPES = {
 }
 VALID_AUTO_MERGE_KEYS = VALID_TYPES | {f"{t}!" for t in VALID_TYPES}
 VALID_MERGE_STRATEGIES = {"squash", "rebase"}
-VALID_TOP_LEVEL_KEYS = {"streams", "merge_strategy"}
+VALID_TOP_LEVEL_KEYS = {"streams", "merge_strategy", "release_files"}
 VALID_STREAM_KEYS = {"name", "branches"}
 VALID_BRANCH_KEYS = {"name", "release", "suffix", "auto_merge"}
+VALID_RELEASE_FILE_KEYS = {"path", "pattern", "replacement", "cmd"}
 VALID_RELEASE_MODES = {"none", "prerelease", "production"}
 
 
@@ -153,7 +154,56 @@ def main():
     elif ms not in VALID_MERGE_STRATEGIES:
         emit("FAIL", f"merge_strategy {ms!r} invalid — must be one of {', '.join(sorted(VALID_MERGE_STRATEGIES))}")
 
+    if "release_files" in root:
+        validate_release_files(root["release_files"])
+
     print("BRANCHES " + " ".join(all_branches))
+
+
+def validate_release_files(value):
+    if not isinstance(value, list):
+        emit("FAIL", "flywheel.release_files: must be a list of file-edit entries")
+        return
+    if len(value) == 0:
+        emit("FAIL", "flywheel.release_files: if present, must be a non-empty list (omit the key entirely to disable)")
+        return
+    for idx, item in enumerate(value):
+        path_label = f"flywheel.release_files[{idx}]"
+        if not isinstance(item, dict):
+            emit("FAIL", f"{path_label}: must be an object")
+            continue
+        for k in item:
+            if k not in VALID_RELEASE_FILE_KEYS:
+                emit("FAIL", f"{path_label}.{k}: unknown key — allowed: {', '.join(sorted(VALID_RELEASE_FILE_KEYS))}")
+        file_path = item.get("path")
+        if not isinstance(file_path, str) or not file_path:
+            emit("FAIL", f"{path_label}.path: required non-empty string")
+            continue
+        has_pattern = "pattern" in item or "replacement" in item
+        has_cmd = "cmd" in item
+        if has_pattern and has_cmd:
+            emit("FAIL", f"{path_label}: must use either {{ pattern, replacement }} or {{ cmd }}, not both")
+            continue
+        if not has_pattern and not has_cmd:
+            emit("FAIL", f"{path_label}: must declare either {{ pattern, replacement }} (declarative) or {{ cmd }} (exec)")
+            continue
+        if has_pattern:
+            pattern = item.get("pattern")
+            replacement = item.get("replacement")
+            if not isinstance(pattern, str) or not pattern:
+                emit("FAIL", f"{path_label}.pattern: required non-empty string when using declarative form")
+                continue
+            if not isinstance(replacement, str):
+                emit("FAIL", f"{path_label}.replacement: required string when using declarative form")
+                continue
+            if "|" in pattern or "|" in replacement:
+                emit("FAIL", f"{path_label}: pattern/replacement may not contain \"|\" — Flywheel uses \"|\" as the sed delimiter")
+                continue
+        else:
+            cmd = item.get("cmd")
+            if not isinstance(cmd, str) or not cmd:
+                emit("FAIL", f"{path_label}.cmd: required non-empty string when using exec form")
+                continue
 
 
 if __name__ == "__main__":

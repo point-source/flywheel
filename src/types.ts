@@ -16,9 +16,23 @@ export interface Stream {
   branches: Branch[];
 }
 
+export interface ReleaseFileDeclarative {
+  path: string;
+  pattern: string;
+  replacement: string;
+}
+
+export interface ReleaseFileExec {
+  path: string;
+  cmd: string;
+}
+
+export type ReleaseFile = ReleaseFileDeclarative | ReleaseFileExec;
+
 export interface FlywheelConfig {
   streams: Stream[];
   merge_strategy: MergeStrategy;
+  release_files?: ReleaseFile[];
 }
 
 export interface ParsedTitle {

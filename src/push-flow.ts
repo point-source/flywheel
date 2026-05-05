@@ -1,4 +1,4 @@
-import { access, writeFile } from "node:fs/promises";
+import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import type { FlywheelConfig, Stream } from "./types.js";
@@ -10,7 +10,6 @@ export interface PushFlowDeps {
   workspace: string;
   log: PushLogger;
   writer?: (path: string, contents: string) => Promise<void>;
-  rcExists?: (path: string) => Promise<boolean>;
 }
 
 export interface PushLogger {
@@ -39,22 +38,8 @@ export async function runPushFlow(deps: PushFlowDeps): Promise<PushFlowOutcome> 
     return { kind: "promote-only", stream };
   }
 
-  const rcPath = join(deps.workspace, ".releaserc.json");
-  const rcExists = deps.rcExists ?? defaultRcExists;
-  if (await rcExists(rcPath)) {
-    // Adopter committed their own .releaserc.json (e.g. to add
-    // @semantic-release/exec for non-Node version files). Respect it; the
-    // adopter is responsible for keeping its branches/tagFormat in sync
-    // with .flywheel.yml. Only .releaserc.json is honored — not .releaserc.js,
-    // .releaserc.yml, or release.config.js.
-    deps.log.info(
-      `push: ${rcPath} already committed — using adopter-provided config. ` +
-        `branches/tagFormat must be kept in sync with .flywheel.yml manually.`,
-    );
-    return { kind: "release", stream, rcPath };
-  }
-
   const rc = generateReleaseRc(stream, deps.config);
+  const rcPath = join(deps.workspace, ".releaserc.json");
   const writer = deps.writer ?? defaultWriter;
   await writer(rcPath, JSON.stringify(rc, null, 2));
 
@@ -93,13 +78,4 @@ export function getUpstreamBranches(
 
 async function defaultWriter(path: string, contents: string): Promise<void> {
   await writeFile(path, contents, "utf8");
-}
-
-async function defaultRcExists(path: string): Promise<boolean> {
-  try {
-    await access(path);
-    return true;
-  } catch {
-    return false;
-  }
 }

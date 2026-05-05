@@ -1,0 +1,9 @@
+flywheel:
+  streams:
+    - name: main-line
+      branches:
+        - { name: main, release: production, auto_merge: [] }
+  release_files:
+    - path: pyproject.toml
+      cmd: 'python -c "print(123)"'
+  merge_strategy: squash

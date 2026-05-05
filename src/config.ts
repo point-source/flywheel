@@ -1,15 +1,23 @@
 import yaml from "js-yaml";
 
-import type { Branch, FlywheelConfig, ReleaseMode, Stream } from "./types.js";
+import type {
+  Branch,
+  FlywheelConfig,
+  ReleaseFile,
+  ReleaseMode,
+  Stream,
+} from "./types.js";
 import { ALLOWED_AUTO_MERGE_ENTRIES } from "./conventional.js";
 
 const TOP_LEVEL_KEYS = new Set([
   "streams",
   "merge_strategy",
+  "release_files",
 ]);
 
 const BRANCH_KEYS = new Set(["name", "release", "suffix", "auto_merge"]);
 const STREAM_KEYS = new Set(["name", "branches"]);
+const RELEASE_FILE_KEYS = new Set(["path", "pattern", "replacement", "cmd"]);
 const MERGE_STRATEGIES = new Set(["squash", "rebase"]);
 const RELEASE_MODES = new Set<ReleaseMode>(["none", "prerelease", "production"]);
 
@@ -55,6 +63,7 @@ export function loadConfig(yamlText: string): ConfigLoadResult {
 
   const streams = parseStreams(root.streams, errors);
   const mergeStrategy = parseMergeStrategy(root.merge_strategy, errors);
+  const releaseFiles = parseReleaseFiles(root.release_files, errors);
 
   if (streams && streams.length > 0) {
     validateStreams(streams, errors, notices);
@@ -68,6 +77,7 @@ export function loadConfig(yamlText: string): ConfigLoadResult {
     config: {
       streams: streams!,
       merge_strategy: mergeStrategy,
+      ...(releaseFiles ? { release_files: releaseFiles } : {}),
     },
     errors,
     warnings,
@@ -207,6 +217,79 @@ function parseReleaseMode(value: unknown, path: string, errors: string[]): Relea
     return "production";
   }
   return value as ReleaseMode;
+}
+
+function parseReleaseFiles(value: unknown, errors: string[]): ReleaseFile[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) {
+    errors.push("flywheel.release_files: must be a list of file-edit entries.");
+    return undefined;
+  }
+  if (value.length === 0) {
+    errors.push("flywheel.release_files: if present, must be a non-empty list (omit the key entirely to disable).");
+    return undefined;
+  }
+  const parsed: ReleaseFile[] = [];
+  value.forEach((item, idx) => {
+    const path = `flywheel.release_files[${idx}]`;
+    if (!isObject(item)) {
+      errors.push(`${path}: must be an object.`);
+      return;
+    }
+    for (const key of Object.keys(item)) {
+      if (!RELEASE_FILE_KEYS.has(key)) {
+        errors.push(
+          `${path}.${key}: unknown key. Allowed: ${[...RELEASE_FILE_KEYS].sort().join(", ")}.`,
+        );
+      }
+    }
+    const filePath = item.path;
+    if (typeof filePath !== "string" || filePath.length === 0) {
+      errors.push(`${path}.path: required non-empty string.`);
+      return;
+    }
+    const hasPattern = item.pattern !== undefined || item.replacement !== undefined;
+    const hasCmd = item.cmd !== undefined;
+    if (hasPattern && hasCmd) {
+      errors.push(
+        `${path}: must use either { pattern, replacement } or { cmd }, not both.`,
+      );
+      return;
+    }
+    if (!hasPattern && !hasCmd) {
+      errors.push(
+        `${path}: must declare either { pattern, replacement } (declarative) or { cmd } (exec).`,
+      );
+      return;
+    }
+    if (hasPattern) {
+      const pattern = item.pattern;
+      const replacement = item.replacement;
+      if (typeof pattern !== "string" || pattern.length === 0) {
+        errors.push(`${path}.pattern: required non-empty string when using declarative form.`);
+        return;
+      }
+      if (typeof replacement !== "string") {
+        errors.push(`${path}.replacement: required string when using declarative form.`);
+        return;
+      }
+      if (pattern.includes("|") || replacement.includes("|")) {
+        errors.push(
+          `${path}: pattern/replacement may not contain "|" — Flywheel uses "|" as the sed delimiter.`,
+        );
+        return;
+      }
+      parsed.push({ path: filePath, pattern, replacement });
+    } else {
+      const cmd = item.cmd;
+      if (typeof cmd !== "string" || cmd.length === 0) {
+        errors.push(`${path}.cmd: required non-empty string when using exec form.`);
+        return;
+      }
+      parsed.push({ path: filePath, cmd });
+    }
+  });
+  return parsed.length > 0 ? parsed : undefined;
 }
 
 function parseMergeStrategy(value: unknown, errors: string[]) {
