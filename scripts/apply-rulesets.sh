@@ -15,6 +15,13 @@
 # a config that hasn't been merged to the current working tree yet (e.g.
 # point at a sibling worktree or a checked-out copy of develop's config).
 #
+# --required-checks defaults to "flywheel/conventional-commit". This check
+# blocks PRs whose title/body/commits contain GitHub Actions skip-ci magic
+# strings ([skip ci], [ci skip], [no ci], [skip actions], [actions skip],
+# ***NO_CI***), which would otherwise silently suppress workflows on the
+# merged commit and break semantic-release. Pass a custom comma list to
+# extend, or pass "" to disable (not recommended).
+#
 # Dependencies: gh, jq, python3 with PyYAML (preinstalled on macOS; yamllint
 # pulls it in too).
 
@@ -22,7 +29,10 @@ set -euo pipefail
 
 REPO=""
 CONFIG_PATH=".flywheel.yml"
-REQUIRED_CHECKS=""
+# Default to requiring the Flywheel conventional-commit check. Adopters
+# can override with `--required-checks "..."` (or "" to disable, though
+# disabling drops the skip-ci marker block, which is strongly discouraged).
+REQUIRED_CHECKS="flywheel/conventional-commit"
 APP_ID="${APP_ID:-}"
 
 while [[ $# -gt 0 ]]; do
