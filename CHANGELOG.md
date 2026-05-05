@@ -1,3 +1,10 @@
+# [2.1.0-dev.10](https://github.com/point-source/flywheel/compare/v2.1.0-dev.9...v2.1.0-dev.10) (2026-05-05)
+
+
+### Features
+
+* store GitHub App ID as Actions variable, not secret ([#52](https://github.com/point-source/flywheel/issues/52)) ([b2a1c21](https://github.com/point-source/flywheel/commit/b2a1c210a0e277d1e7a62f6af24c273c103defa2))
+
 # [2.1.0-dev.9](https://github.com/point-source/flywheel/compare/v2.1.0-dev.8...v2.1.0-dev.9) (2026-05-05)
 
 
