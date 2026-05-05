@@ -1,3 +1,15 @@
+# [2.1.0-dev.8](https://github.com/point-source/flywheel/compare/v2.1.0-dev.7...v2.1.0-dev.8) (2026-05-05)
+
+
+### Bug Fixes
+
+* **init:** persist FLYWHEEL_GH_APP_ID across re-runs to keep ruleset bypass ([#48](https://github.com/point-source/flywheel/issues/48)) ([a75dac6](https://github.com/point-source/flywheel/commit/a75dac6fb6a9c446bd498d4d871cd350882d97d0))
+
+
+### Features
+
+* **e2e:** sync workflow templates + .flywheel.yml fixture into sandbox ([#46](https://github.com/point-source/flywheel/issues/46)) ([f566e5d](https://github.com/point-source/flywheel/commit/f566e5d0d337454199a8e129adc39e6d00aaccb8)), closes [#42](https://github.com/point-source/flywheel/issues/42) [#37](https://github.com/point-source/flywheel/issues/37)
+
 # [2.1.0-dev.7](https://github.com/point-source/flywheel/compare/v2.1.0-dev.6...v2.1.0-dev.7) (2026-05-05)
 
 
