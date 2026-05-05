@@ -28483,6 +28483,13 @@ var DEFAULT_PLUGINS = [
   // work on these commits — a job-level skip reports `success` to the
   // required-checks rule. See:
   // https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/collaborating-on-repositories-with-code-quality-features/troubleshooting-required-status-checks#handling-skipped-but-required-checks
+  //
+  // Related cutover gotcha (not addressed here): `[skip ci]` in *any*
+  // bundled commit's title — e.g. legacy release commits from a pre-Flywheel
+  // flow — propagates into the next promotion PR's squash-merge body under
+  // GitHub's default `squash_merge_commit_message: COMMIT_MESSAGES` setting,
+  // silently suppressing every workflow on the target branch. Documented in
+  // docs/adopter-setup.md §0.4.
   [
     GIT_PLUGIN,
     {
