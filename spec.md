@@ -472,7 +472,7 @@ A GitHub App with:
 - Checks: read and write (post the `flywheel/conventional-commit` check)
 - Metadata: read (always required)
 
-Store the App credentials as `FLYWHEEL_GH_APP_ID` + `FLYWHEEL_GH_APP_PRIVATE_KEY` repo secrets and pass them straight into the Flywheel action via the `app-id` and `app-private-key` inputs. The action mints its own installation token internally, validates that the granted permissions match the list above, and exposes the token as a step output for downstream steps that need it (e.g. semantic-release). Adopters do **not** add a separate `actions/create-github-app-token` step.
+Store `FLYWHEEL_GH_APP_ID` as a repo Variable (the App ID is public — it's printed on the App's settings page) and `FLYWHEEL_GH_APP_PRIVATE_KEY` as a repo Secret, then pass them straight into the Flywheel action via the `app-id` and `app-private-key` inputs. The action mints its own installation token internally, validates that the granted permissions match the list above, and exposes the token as a step output for downstream steps that need it (e.g. semantic-release). Adopters do **not** add a separate `actions/create-github-app-token` step.
 
 Personal Access Tokens are not supported — they don't reliably propagate the cross-workflow trigger semantics Flywheel relies on (in particular, native auto-merge enable and downstream workflow firing on bot-created PRs).
 
@@ -514,7 +514,7 @@ jobs:
       - uses: point-source/flywheel@v2
         with:
           event: pull_request
-          app-id: ${{ secrets.FLYWHEEL_GH_APP_ID }}
+          app-id: ${{ vars.FLYWHEEL_GH_APP_ID }}
           app-private-key: ${{ secrets.FLYWHEEL_GH_APP_PRIVATE_KEY }}
 ```
 
@@ -544,7 +544,7 @@ jobs:
         id: flywheel
         with:
           event: push
-          app-id: ${{ secrets.FLYWHEEL_GH_APP_ID }}
+          app-id: ${{ vars.FLYWHEEL_GH_APP_ID }}
           app-private-key: ${{ secrets.FLYWHEEL_GH_APP_PRIVATE_KEY }}
       - name: Run semantic-release
         # Only runs when pr-conductor confirms this is a managed branch and
@@ -613,7 +613,7 @@ jobs:
       - uses: actions/create-github-app-token@v1
         id: app-token
         with:
-          app-id: ${{ secrets.FLYWHEEL_GH_APP_ID }}
+          app-id: ${{ vars.FLYWHEEL_GH_APP_ID }}
           private-key: ${{ secrets.FLYWHEEL_GH_APP_PRIVATE_KEY }}
       - name: Build
         run: ./your-build-script.sh

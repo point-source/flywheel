@@ -21,7 +21,7 @@ jobs:
         id: flywheel
         with:
           event: push
-          app-id: ${{ secrets.FLYWHEEL_GH_APP_ID }}
+          app-id: ${{ vars.FLYWHEEL_GH_APP_ID }}
           app-private-key: ${{ secrets.FLYWHEEL_GH_APP_PRIVATE_KEY }}
       - name: Run semantic-release
         if: steps.flywheel.outputs.managed_branch == 'true'
