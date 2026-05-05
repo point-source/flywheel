@@ -129,12 +129,15 @@ flywheel:
     - name: main-line
       branches:
         - name: develop
-          prerelease: dev
+          release: prerelease
+          suffix: dev
           auto_merge: [fix, fix!, feat, chore, refactor, perf, style, test, docs]
         - name: staging
-          prerelease: rc
+          release: prerelease
+          suffix: rc
           auto_merge: [fix, chore, style, test, docs]
         - name: main
+          release: production
           auto_merge: []   # all PRs require human approval
   merge_strategy: squash
 ```
@@ -147,14 +150,17 @@ flywheel:
     - name: main-line
       branches:
         - name: develop
-          prerelease: dev
+          release: prerelease
+          suffix: dev
           auto_merge: [fix, feat, chore]
         - name: main
+          release: production
           auto_merge: []
     - name: customer-acme
       branches:
         - name: customer-acme
-          prerelease: acme
+          release: prerelease
+          suffix: acme
           auto_merge: [fix, fix!, chore]
   merge_strategy: squash
 ```

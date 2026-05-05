@@ -27793,9 +27793,10 @@ var TOP_LEVEL_KEYS = /* @__PURE__ */ new Set([
   "streams",
   "merge_strategy"
 ]);
-var BRANCH_KEYS = /* @__PURE__ */ new Set(["name", "prerelease", "auto_merge"]);
+var BRANCH_KEYS = /* @__PURE__ */ new Set(["name", "release", "suffix", "auto_merge"]);
 var STREAM_KEYS = /* @__PURE__ */ new Set(["name", "branches"]);
 var MERGE_STRATEGIES = /* @__PURE__ */ new Set(["squash", "rebase"]);
+var RELEASE_MODES = /* @__PURE__ */ new Set(["none", "prerelease", "production"]);
 function loadConfig(yamlText) {
   const errors = [];
   const warnings = [];
@@ -27891,7 +27892,7 @@ function parseStream(value, idx, errors) {
 }
 function parseBranch(value, path, errors) {
   if (!isObject2(value)) {
-    errors.push(`${path}: must be an object with name + auto_merge.`);
+    errors.push(`${path}: must be an object with name + release + auto_merge.`);
     return null;
   }
   for (const key of Object.keys(value)) {
@@ -27906,21 +27907,22 @@ function parseBranch(value, path, errors) {
     errors.push(`${path}.name: required string.`);
     return null;
   }
-  let prerelease;
-  if (value.prerelease === void 0 || value.prerelease === false) {
-    prerelease = false;
-  } else if (typeof value.prerelease === "string" && value.prerelease.length > 0) {
-    prerelease = value.prerelease;
-  } else if (value.prerelease === true) {
+  const release = parseReleaseMode(value.release, `${path}.release`, errors);
+  let suffix;
+  if (value.suffix !== void 0) {
+    if (typeof value.suffix !== "string" || value.suffix.length === 0) {
+      errors.push(`${path}.suffix: must be a non-empty string identifier (e.g. "dev").`);
+    } else {
+      suffix = value.suffix;
+    }
+  }
+  if (release === "prerelease" && suffix === void 0) {
+    errors.push(`${path}.suffix: required when release is "prerelease".`);
+  }
+  if (release !== "prerelease" && suffix !== void 0) {
     errors.push(
-      `${path}.prerelease: must be a non-empty string identifier (e.g. "dev"), false, or absent.`
+      `${path}.suffix: only valid when release is "prerelease" (got release: "${release}").`
     );
-    prerelease = false;
-  } else {
-    errors.push(
-      `${path}.prerelease: must be a non-empty string identifier (e.g. "dev"), false, or absent.`
-    );
-    prerelease = false;
   }
   const autoMergeRaw = value.auto_merge;
   if (!Array.isArray(autoMergeRaw)) {
@@ -27943,7 +27945,25 @@ function parseBranch(value, path, errors) {
     }
     autoMerge.push(entry);
   });
-  return { name, ...prerelease === false ? {} : { prerelease }, auto_merge: autoMerge };
+  return {
+    name,
+    release,
+    ...suffix === void 0 ? {} : { suffix },
+    auto_merge: autoMerge
+  };
+}
+function parseReleaseMode(value, path, errors) {
+  if (value === void 0) {
+    errors.push(`${path}: required. Allowed: ${[...RELEASE_MODES].join(", ")}.`);
+    return "production";
+  }
+  if (typeof value !== "string" || !RELEASE_MODES.has(value)) {
+    errors.push(
+      `${path}: must be one of ${[...RELEASE_MODES].join(", ")} (got ${JSON.stringify(value)}).`
+    );
+    return "production";
+  }
+  return value;
 }
 function parseMergeStrategy(value, errors) {
   if (value === void 0) return "squash";
@@ -27980,41 +28000,47 @@ function validateStreams(streams, errors, notices) {
       );
     }
   }
-  const prereleaseOwners = /* @__PURE__ */ new Map();
+  const suffixOwners = /* @__PURE__ */ new Map();
   for (const s of streams) {
     for (const b of s.branches) {
-      if (typeof b.prerelease === "string") {
-        const spots = prereleaseOwners.get(b.prerelease) ?? [];
+      if (b.release === "prerelease" && typeof b.suffix === "string") {
+        const spots = suffixOwners.get(b.suffix) ?? [];
         spots.push(`${s.name}/${b.name}`);
-        prereleaseOwners.set(b.prerelease, spots);
+        suffixOwners.set(b.suffix, spots);
       }
     }
   }
-  for (const [label, spots] of prereleaseOwners) {
+  for (const [label, spots] of suffixOwners) {
     if (spots.length > 1) {
       errors.push(
-        `prerelease label "${label}" used by multiple branches (${spots.join(", ")}) \u2014 tags would collide.`
+        `suffix "${label}" used by multiple prerelease branches (${spots.join(", ")}) \u2014 tags would collide.`
       );
     }
   }
   for (const s of streams) {
-    const productionBranches = s.branches.filter(
-      (b) => b.prerelease === false || b.prerelease === void 0
-    );
+    const productionBranches = s.branches.filter((b) => b.release === "production");
     if (productionBranches.length > 1) {
       errors.push(
-        `stream "${s.name}": multiple branches without a prerelease identifier (${productionBranches.map((b) => b.name).join(", ")}). Only the last branch in a stream should be the production release branch.`
+        `stream "${s.name}": multiple production branches (${productionBranches.map((b) => b.name).join(", ")}). Only the last branch in a stream should be the production release branch.`
       );
     }
   }
   const productionTerminalStreams = streams.filter((s) => {
     const last = s.branches[s.branches.length - 1];
-    return last && (last.prerelease === false || last.prerelease === void 0);
+    return last && last.release === "production";
   });
   if (productionTerminalStreams.length > 1) {
     errors.push(
-      `multiple streams have a terminal production branch (no prerelease): ${productionTerminalStreams.map((s) => s.name).join(", ")}. Tag collision is unavoidable in a single repo. Give all but one stream a \`prerelease\` identifier on its terminal branch.`
+      `multiple streams have a terminal production branch: ${productionTerminalStreams.map((s) => s.name).join(", ")}. Tag collision is unavoidable in a single repo. Give all but one stream a prerelease terminal branch.`
     );
+  }
+  for (const s of streams) {
+    const last = s.branches[s.branches.length - 1];
+    if (last && last.release === "none") {
+      errors.push(
+        `stream "${s.name}": terminal branch "${last.name}" has release: none. The terminal branch must be release: prerelease or release: production \u2014 otherwise the stream never produces a release.`
+      );
+    }
   }
   for (const s of streams) {
     if (s.branches.length === 1) {
@@ -28370,9 +28396,8 @@ var DEFAULT_PLUGINS = [
 ];
 function generateReleaseRc(targetStream, config) {
   const tagFormat = chooseTagFormat(targetStream, config.streams);
-  const branches = targetStream.branches.map(
-    (b) => mapBranch(b, targetStream.branches.length === 1)
-  );
+  const releasingBranches = targetStream.branches.filter((b) => b.release !== "none");
+  const branches = releasingBranches.map((b) => mapBranch(b, releasingBranches.length === 1)).filter((b) => b !== null);
   return { tagFormat, branches, plugins: [...DEFAULT_PLUGINS] };
 }
 function chooseTagFormat(target, allStreams) {
@@ -28386,15 +28411,15 @@ function pickPrimaryStream(allStreams) {
 }
 function isProductionTerminal(stream) {
   const last = stream.branches[stream.branches.length - 1];
-  return Boolean(last) && (last.prerelease === false || last.prerelease === void 0);
+  return Boolean(last) && last.release === "production";
 }
 function mapBranch(branch, isOnlyBranchInStream) {
-  const hasPrerelease = branch.prerelease !== void 0 && branch.prerelease !== false && typeof branch.prerelease === "string";
-  if (isOnlyBranchInStream && hasPrerelease) {
+  if (branch.release === "none") return null;
+  if (isOnlyBranchInStream && branch.release === "prerelease") {
     return { name: branch.name };
   }
-  if (hasPrerelease) {
-    const id = branch.prerelease;
+  if (branch.release === "prerelease") {
+    const id = branch.suffix;
     return { name: branch.name, prerelease: id, channel: id };
   }
   return { name: branch.name };
@@ -28408,6 +28433,13 @@ async function runPushFlow(deps) {
       `push: branch ${deps.branchRef} is not in any stream \u2014 release flow skipped.`
     );
     return { kind: "unmanaged", reason: "branch-not-in-stream" };
+  }
+  const branch = stream.branches.find((b) => b.name === deps.branchRef);
+  if (branch.release === "none") {
+    deps.log.info(
+      `push: branch ${deps.branchRef} is in stream ${stream.name} but release: none \u2014 skipping semantic-release.`
+    );
+    return { kind: "promote-only", stream };
   }
   const rc = generateReleaseRc(stream, deps.config);
   const rcPath = (0, import_node_path.join)(deps.workspace, ".releaserc.json");

@@ -8,16 +8,16 @@ const baseRc = {
 };
 
 describe("generateReleaseRc", () => {
-  it("primary stream (terminal prerelease: false) gets v${version}", () => {
+  it("primary stream (terminal release: production) gets v${version}", () => {
     const config: FlywheelConfig = {
       ...baseRc,
       streams: [
         {
           name: "main-line",
           branches: [
-            { name: "develop", prerelease: "dev", auto_merge: ["fix"] },
-            { name: "staging", prerelease: "rc", auto_merge: ["fix"] },
-            { name: "main", auto_merge: [] },
+            { name: "develop", release: "prerelease", suffix: "dev", auto_merge: ["fix"] },
+            { name: "staging", release: "prerelease", suffix: "rc", auto_merge: ["fix"] },
+            { name: "main", release: "production", auto_merge: [] },
           ],
         },
       ],
@@ -31,17 +31,40 @@ describe("generateReleaseRc", () => {
     ]);
   });
 
+  it("filters release: none branches out of the branches array", () => {
+    const config: FlywheelConfig = {
+      ...baseRc,
+      streams: [
+        {
+          name: "main-line",
+          branches: [
+            { name: "develop", release: "none", auto_merge: ["fix"] },
+            { name: "staging", release: "prerelease", suffix: "rc", auto_merge: ["fix"] },
+            { name: "main", release: "production", auto_merge: [] },
+          ],
+        },
+      ],
+    };
+    const rc = generateReleaseRc(config.streams[0]!, config);
+    expect(rc.branches).toEqual([
+      { name: "staging", prerelease: "rc", channel: "rc" },
+      { name: "main" },
+    ]);
+  });
+
   it("secondary stream gets prefixed tagFormat", () => {
     const config: FlywheelConfig = {
       ...baseRc,
       streams: [
         {
           name: "main-line",
-          branches: [{ name: "main", auto_merge: [] }],
+          branches: [{ name: "main", release: "production", auto_merge: [] }],
         },
         {
           name: "customer-acme",
-          branches: [{ name: "customer-acme", prerelease: "acme", auto_merge: ["fix"] }],
+          branches: [
+            { name: "customer-acme", release: "prerelease", suffix: "acme", auto_merge: ["fix"] },
+          ],
         },
       ],
     };
@@ -55,11 +78,13 @@ describe("generateReleaseRc", () => {
       streams: [
         {
           name: "main-line",
-          branches: [{ name: "main", auto_merge: [] }],
+          branches: [{ name: "main", release: "production", auto_merge: [] }],
         },
         {
           name: "customer-acme",
-          branches: [{ name: "customer-acme", prerelease: "acme", auto_merge: ["fix"] }],
+          branches: [
+            { name: "customer-acme", release: "prerelease", suffix: "acme", auto_merge: ["fix"] },
+          ],
         },
       ],
     };
@@ -73,7 +98,7 @@ describe("generateReleaseRc", () => {
       streams: [
         {
           name: "only",
-          branches: [{ name: "main", auto_merge: [] }],
+          branches: [{ name: "main", release: "production", auto_merge: [] }],
         },
       ],
     };
@@ -94,9 +119,9 @@ describe("generateReleaseRc", () => {
         {
           name: "only",
           branches: [
-            { name: "third", prerelease: "c", auto_merge: ["fix"] },
-            { name: "first", prerelease: "a", auto_merge: ["fix"] },
-            { name: "second", auto_merge: [] },
+            { name: "third", release: "prerelease", suffix: "c", auto_merge: ["fix"] },
+            { name: "first", release: "prerelease", suffix: "a", auto_merge: ["fix"] },
+            { name: "second", release: "production", auto_merge: [] },
           ],
         },
       ],
@@ -109,8 +134,18 @@ describe("generateReleaseRc", () => {
 describe("chooseTagFormat — edge cases", () => {
   it("with zero terminal-production streams, the first declared stream is primary", () => {
     const streams = [
-      { name: "alpha", branches: [{ name: "alpha", prerelease: "a", auto_merge: ["fix"] }] },
-      { name: "beta", branches: [{ name: "beta", prerelease: "b", auto_merge: ["fix"] }] },
+      {
+        name: "alpha",
+        branches: [
+          { name: "alpha", release: "prerelease" as const, suffix: "a", auto_merge: ["fix"] },
+        ],
+      },
+      {
+        name: "beta",
+        branches: [
+          { name: "beta", release: "prerelease" as const, suffix: "b", auto_merge: ["fix"] },
+        ],
+      },
     ];
     expect(chooseTagFormat(streams[0]!, streams)).toBe("v${version}");
     expect(chooseTagFormat(streams[1]!, streams)).toBe("beta/v${version}");
@@ -118,12 +153,22 @@ describe("chooseTagFormat — edge cases", () => {
 
   it("with exactly one terminal-production stream, it wins regardless of declaration order", () => {
     const streams = [
-      { name: "customer-acme", branches: [{ name: "customer-acme", prerelease: "acme", auto_merge: ["fix"] }] },
+      {
+        name: "customer-acme",
+        branches: [
+          {
+            name: "customer-acme",
+            release: "prerelease" as const,
+            suffix: "acme",
+            auto_merge: ["fix"],
+          },
+        ],
+      },
       {
         name: "main-line",
         branches: [
-          { name: "develop", prerelease: "dev", auto_merge: ["fix"] },
-          { name: "main", auto_merge: [] },
+          { name: "develop", release: "prerelease" as const, suffix: "dev", auto_merge: ["fix"] },
+          { name: "main", release: "production" as const, auto_merge: [] },
         ],
       },
     ];

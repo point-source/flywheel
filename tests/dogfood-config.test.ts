@@ -24,7 +24,9 @@ describe("the repo's actual .flywheel.yml (dogfood config)", () => {
       "develop",
       "main",
     ]);
-    expect(result.config!.streams[0]!.branches[0]!.prerelease).toBe("dev");
+    expect(result.config!.streams[0]!.branches[0]!.release).toBe("prerelease");
+    expect(result.config!.streams[0]!.branches[0]!.suffix).toBe("dev");
+    expect(result.config!.streams[0]!.branches[1]!.release).toBe("production");
   });
 
   it("does not allow feat! in main's auto_merge (major bumps require human review)", () => {

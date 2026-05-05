@@ -52,9 +52,11 @@ flywheel:
     - name: main-line
       branches:
         - name: develop
-          prerelease: dev
+          release: prerelease
+          suffix: dev
           auto_merge: [fix, chore, refactor, perf, style, test, docs]
         - name: main
+          release: production
           auto_merge: []
   merge_strategy: squash
 ```

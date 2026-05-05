@@ -25,9 +25,10 @@ export function generateReleaseRc(
   config: FlywheelConfig,
 ): ReleaseRc {
   const tagFormat = chooseTagFormat(targetStream, config.streams);
-  const branches = targetStream.branches.map((b) =>
-    mapBranch(b, targetStream.branches.length === 1),
-  );
+  const releasingBranches = targetStream.branches.filter((b) => b.release !== "none");
+  const branches = releasingBranches
+    .map((b) => mapBranch(b, releasingBranches.length === 1))
+    .filter((b): b is SemanticReleaseBranch => b !== null);
   return { tagFormat, branches, plugins: [...DEFAULT_PLUGINS] };
 }
 
@@ -45,25 +46,22 @@ function pickPrimaryStream(allStreams: Stream[]): Stream {
 
 function isProductionTerminal(stream: Stream): boolean {
   const last = stream.branches[stream.branches.length - 1];
-  return Boolean(last) && (last!.prerelease === false || last!.prerelease === undefined);
+  return Boolean(last) && last!.release === "production";
 }
 
-function mapBranch(branch: Branch, isOnlyBranchInStream: boolean): SemanticReleaseBranch {
-  const hasPrerelease =
-    branch.prerelease !== undefined &&
-    branch.prerelease !== false &&
-    typeof branch.prerelease === "string";
+function mapBranch(branch: Branch, isOnlyBranchInStream: boolean): SemanticReleaseBranch | null {
+  if (branch.release === "none") return null;
 
-  if (isOnlyBranchInStream && hasPrerelease) {
+  if (isOnlyBranchInStream && branch.release === "prerelease") {
     // Single-branch stream with prerelease identifier: per spec §Single-branch streams,
-    // treat as a regular release branch — the prerelease identifier is captured by the
-    // scoped tagFormat, not semantic-release's prerelease flag (which would otherwise
+    // treat as a regular release branch — the suffix is captured by the scoped
+    // tagFormat, not semantic-release's prerelease flag (which would otherwise
     // throw ERELEASEBRANCHES).
     return { name: branch.name };
   }
 
-  if (hasPrerelease) {
-    const id = branch.prerelease as string;
+  if (branch.release === "prerelease") {
+    const id = branch.suffix!;
     return { name: branch.name, prerelease: id, channel: id };
   }
 

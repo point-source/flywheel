@@ -20,7 +20,11 @@ describe("loadConfig", () => {
       "staging",
       "main",
     ]);
-    expect(result.config!.streams[0]!.branches[2]!.prerelease).toBeUndefined();
+    expect(result.config!.streams[0]!.branches[0]!.release).toBe("none");
+    expect(result.config!.streams[0]!.branches[1]!.release).toBe("prerelease");
+    expect(result.config!.streams[0]!.branches[1]!.suffix).toBe("rc");
+    expect(result.config!.streams[0]!.branches[2]!.release).toBe("production");
+    expect(result.config!.streams[0]!.branches[2]!.suffix).toBeUndefined();
     expect(result.config!.merge_strategy).toBe("squash");
   });
 
@@ -35,7 +39,7 @@ describe("loadConfig", () => {
     expect(result.config).toBeNull();
     expect(
       result.errors.some((e) =>
-        e.includes('stream "main-line": multiple branches without a prerelease identifier'),
+        e.includes('stream "main-line": multiple production branches'),
       ),
     ).toBe(true);
   });
@@ -48,11 +52,11 @@ describe("loadConfig", () => {
     ).toBe(true);
   });
 
-  it("flags duplicate prerelease label across branches", () => {
+  it("flags duplicate suffix across prerelease branches", () => {
     const result = loadConfig(fx("flywheel.dup-prerelease.yml"));
     expect(result.config).toBeNull();
     expect(
-      result.errors.some((e) => e.includes('prerelease label "dev" used by multiple branches')),
+      result.errors.some((e) => e.includes('suffix "dev" used by multiple prerelease branches')),
     ).toBe(true);
   });
 
@@ -63,10 +67,12 @@ flywheel:
     - name: dup
       branches:
         - name: a
+          release: production
           auto_merge: []
     - name: dup
       branches:
         - name: b
+          release: production
           auto_merge: []
 `;
     const result = loadConfig(yamlText);
@@ -100,11 +106,70 @@ flywheel:
     - name: bad-stream
       branches:
         - name: only
+          release: production
           auto_merge: [fix, totally-not-a-type, zzz]
 `;
     const result = loadConfig(yamlText);
     expect(result.config).toBeNull();
     expect(result.errors.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("parses release: none on a non-terminal branch", () => {
+    const result = loadConfig(fx("flywheel.release-none.yml"));
+    expect(result.errors).toEqual([]);
+    expect(result.config).not.toBeNull();
+    expect(result.config!.streams[0]!.branches[0]!.release).toBe("none");
+    expect(result.config!.streams[0]!.branches[0]!.suffix).toBeUndefined();
+  });
+
+  it("flags terminal release: none (rule 4)", () => {
+    const result = loadConfig(fx("flywheel.terminal-none.yml"));
+    expect(result.config).toBeNull();
+    expect(
+      result.errors.some(
+        (e) =>
+          e.includes('stream "main-line"') &&
+          e.includes('terminal branch "staging"') &&
+          e.includes("release: none"),
+      ),
+    ).toBe(true);
+  });
+
+  it("rejects suffix when release is not prerelease", () => {
+    const result = loadConfig(fx("flywheel.suffix-without-prerelease.yml"));
+    expect(result.config).toBeNull();
+    expect(
+      result.errors.some((e) =>
+        e.includes('only valid when release is "prerelease"'),
+      ),
+    ).toBe(true);
+  });
+
+  it("rejects release: prerelease without a suffix", () => {
+    const result = loadConfig(fx("flywheel.prerelease-without-suffix.yml"));
+    expect(result.config).toBeNull();
+    expect(
+      result.errors.some((e) =>
+        e.includes('required when release is "prerelease"'),
+      ),
+    ).toBe(true);
+  });
+
+  it("rejects unknown release mode", () => {
+    const yamlText = `
+flywheel:
+  streams:
+    - name: only
+      branches:
+        - name: main
+          release: somethingelse
+          auto_merge: []
+`;
+    const result = loadConfig(yamlText);
+    expect(result.config).toBeNull();
+    expect(
+      result.errors.some((e) => e.includes("must be one of none, prerelease, production")),
+    ).toBe(true);
   });
 
   it("errors on completely missing top-level flywheel mapping", () => {
@@ -126,6 +191,7 @@ flywheel:
     - name: only
       branches:
         - name: main
+          release: production
           auto_merge: []
   merge_strategy: merge
 `;

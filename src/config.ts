@@ -1,6 +1,6 @@
 import yaml from "js-yaml";
 
-import type { Branch, FlywheelConfig, Stream } from "./types.js";
+import type { Branch, FlywheelConfig, ReleaseMode, Stream } from "./types.js";
 import { ALLOWED_AUTO_MERGE_ENTRIES } from "./conventional.js";
 
 const TOP_LEVEL_KEYS = new Set([
@@ -8,9 +8,10 @@ const TOP_LEVEL_KEYS = new Set([
   "merge_strategy",
 ]);
 
-const BRANCH_KEYS = new Set(["name", "prerelease", "auto_merge"]);
+const BRANCH_KEYS = new Set(["name", "release", "suffix", "auto_merge"]);
 const STREAM_KEYS = new Set(["name", "branches"]);
 const MERGE_STRATEGIES = new Set(["squash", "rebase"]);
+const RELEASE_MODES = new Set<ReleaseMode>(["none", "prerelease", "production"]);
 
 export interface ConfigLoadResult {
   config: FlywheelConfig | null;
@@ -126,7 +127,7 @@ function parseStream(value: unknown, idx: number, errors: string[]): Stream | nu
 
 function parseBranch(value: unknown, path: string, errors: string[]): Branch | null {
   if (!isObject(value)) {
-    errors.push(`${path}: must be an object with name + auto_merge.`);
+    errors.push(`${path}: must be an object with name + release + auto_merge.`);
     return null;
   }
   for (const key of Object.keys(value)) {
@@ -143,21 +144,24 @@ function parseBranch(value: unknown, path: string, errors: string[]): Branch | n
     return null;
   }
 
-  let prerelease: string | false | undefined;
-  if (value.prerelease === undefined || value.prerelease === false) {
-    prerelease = false;
-  } else if (typeof value.prerelease === "string" && value.prerelease.length > 0) {
-    prerelease = value.prerelease;
-  } else if (value.prerelease === true) {
+  const release = parseReleaseMode(value.release, `${path}.release`, errors);
+
+  let suffix: string | undefined;
+  if (value.suffix !== undefined) {
+    if (typeof value.suffix !== "string" || value.suffix.length === 0) {
+      errors.push(`${path}.suffix: must be a non-empty string identifier (e.g. "dev").`);
+    } else {
+      suffix = value.suffix;
+    }
+  }
+
+  if (release === "prerelease" && suffix === undefined) {
+    errors.push(`${path}.suffix: required when release is "prerelease".`);
+  }
+  if (release !== "prerelease" && suffix !== undefined) {
     errors.push(
-      `${path}.prerelease: must be a non-empty string identifier (e.g. "dev"), false, or absent.`,
+      `${path}.suffix: only valid when release is "prerelease" (got release: "${release}").`,
     );
-    prerelease = false;
-  } else {
-    errors.push(
-      `${path}.prerelease: must be a non-empty string identifier (e.g. "dev"), false, or absent.`,
-    );
-    prerelease = false;
   }
 
   const autoMergeRaw = value.auto_merge;
@@ -183,7 +187,26 @@ function parseBranch(value: unknown, path: string, errors: string[]): Branch | n
     autoMerge.push(entry);
   });
 
-  return { name, ...(prerelease === false ? {} : { prerelease }), auto_merge: autoMerge };
+  return {
+    name,
+    release,
+    ...(suffix === undefined ? {} : { suffix }),
+    auto_merge: autoMerge,
+  };
+}
+
+function parseReleaseMode(value: unknown, path: string, errors: string[]): ReleaseMode {
+  if (value === undefined) {
+    errors.push(`${path}: required. Allowed: ${[...RELEASE_MODES].join(", ")}.`);
+    return "production";
+  }
+  if (typeof value !== "string" || !RELEASE_MODES.has(value as ReleaseMode)) {
+    errors.push(
+      `${path}: must be one of ${[...RELEASE_MODES].join(", ")} (got ${JSON.stringify(value)}).`,
+    );
+    return "production";
+  }
+  return value as ReleaseMode;
 }
 
 function parseMergeStrategy(value: unknown, errors: string[]) {
@@ -231,50 +254,59 @@ function validateStreams(
     }
   }
 
-  // Rule 1b: same prerelease label used by >1 branch — tags would collide.
-  const prereleaseOwners = new Map<string, string[]>();
+  // Rule 1b: same suffix used by >1 prerelease branch — tags would collide.
+  const suffixOwners = new Map<string, string[]>();
   for (const s of streams) {
     for (const b of s.branches) {
-      if (typeof b.prerelease === "string") {
-        const spots = prereleaseOwners.get(b.prerelease) ?? [];
+      if (b.release === "prerelease" && typeof b.suffix === "string") {
+        const spots = suffixOwners.get(b.suffix) ?? [];
         spots.push(`${s.name}/${b.name}`);
-        prereleaseOwners.set(b.prerelease, spots);
+        suffixOwners.set(b.suffix, spots);
       }
     }
   }
-  for (const [label, spots] of prereleaseOwners) {
+  for (const [label, spots] of suffixOwners) {
     if (spots.length > 1) {
       errors.push(
-        `prerelease label "${label}" used by multiple branches (${spots.join(", ")}) — tags would collide.`,
+        `suffix "${label}" used by multiple prerelease branches (${spots.join(", ")}) — tags would collide.`,
       );
     }
   }
 
-  // Rule 2: >1 branch with prerelease: false in same stream.
+  // Rule 2: >1 production branch in same stream.
   for (const s of streams) {
-    const productionBranches = s.branches.filter(
-      (b) => b.prerelease === false || b.prerelease === undefined,
-    );
+    const productionBranches = s.branches.filter((b) => b.release === "production");
     if (productionBranches.length > 1) {
       errors.push(
-        `stream "${s.name}": multiple branches without a prerelease identifier ` +
+        `stream "${s.name}": multiple production branches ` +
           `(${productionBranches.map((b) => b.name).join(", ")}). ` +
           "Only the last branch in a stream should be the production release branch.",
       );
     }
   }
 
-  // Rule 3: >1 stream with terminal prerelease: false (corrected to error per §Versioning).
+  // Rule 3: >1 stream with terminal release: production.
   const productionTerminalStreams = streams.filter((s) => {
     const last = s.branches[s.branches.length - 1];
-    return last && (last.prerelease === false || last.prerelease === undefined);
+    return last && last.release === "production";
   });
   if (productionTerminalStreams.length > 1) {
     errors.push(
-      `multiple streams have a terminal production branch (no prerelease): ` +
+      `multiple streams have a terminal production branch: ` +
         `${productionTerminalStreams.map((s) => s.name).join(", ")}. ` +
-        "Tag collision is unavoidable in a single repo. Give all but one stream a `prerelease` identifier on its terminal branch.",
+        "Tag collision is unavoidable in a single repo. Give all but one stream a prerelease terminal branch.",
     );
+  }
+
+  // Rule 4: terminal branch must release (release: none on terminal is structurally pointless).
+  for (const s of streams) {
+    const last = s.branches[s.branches.length - 1];
+    if (last && last.release === "none") {
+      errors.push(
+        `stream "${s.name}": terminal branch "${last.name}" has release: none. ` +
+          "The terminal branch must be release: prerelease or release: production — otherwise the stream never produces a release.",
+      );
+    }
   }
 
   // Rule 5: single-branch stream → info notice (not error).
