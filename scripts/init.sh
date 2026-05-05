@@ -3,7 +3,8 @@
 #
 # Writes .flywheel.yml (from a chosen preset), the two adopter workflows
 # (flywheel-pr.yml + flywheel-push.yml) using GitHub App tokens, and prompts
-# for FLYWHEEL_GH_APP_ID + FLYWHEEL_GH_APP_PRIVATE_KEY repo secrets via gh.
+# for the FLYWHEEL_GH_APP_ID repo Variable + FLYWHEEL_GH_APP_PRIVATE_KEY repo
+# Secret via gh.
 #
 # Usage:
 #   curl -fsSL https://raw.githubusercontent.com/point-source/flywheel/main/scripts/init.sh | bash
@@ -12,7 +13,8 @@
 #
 # Flags (all optional):
 #   --preset minimal|three-stage|multi-stream
-#   --skip-secrets        do not prompt for FLYWHEEL_GH_APP_ID / FLYWHEEL_GH_APP_PRIVATE_KEY
+#   --skip-secrets        do not prompt for App credentials (FLYWHEEL_GH_APP_ID
+#                         variable, FLYWHEEL_GH_APP_PRIVATE_KEY secret)
 #   --skip-rulesets       do not offer to run apply-rulesets.sh
 #   --required-checks "Quality,Build"   passed through to apply-rulesets.sh
 #   --force               overwrite flywheel-pr.yml / flywheel-push.yml even
@@ -221,14 +223,15 @@ create_app_via_manifest() {
   pem="$(echo "$result" | python3 -c 'import json,sys;print(json.load(sys.stdin)["pem"])')"
   html_url="$(echo "$result" | python3 -c 'import json,sys;print(json.load(sys.stdin)["html_url"])')"
   CREATED_APP_ID="$app_id"
-  gh secret set FLYWHEEL_GH_APP_ID --body "$app_id" --repo "$REPO"
+  # The App ID is public information (visible on the App's settings page) so
+  # we store it as a repo Variable. Workflows reference vars.FLYWHEEL_GH_APP_ID;
+  # init.sh reads it back on re-run for apply-rulesets.sh --app-id.
+  gh variable set FLYWHEEL_GH_APP_ID --body "$app_id" --repo "$REPO" || {
+    echo "  error: could not set FLYWHEEL_GH_APP_ID repo variable." >&2
+    return 1
+  }
   printf '%s' "$pem" | gh secret set FLYWHEEL_GH_APP_PRIVATE_KEY --repo "$REPO"
-  # Mirror App ID into a repo variable so re-runs of init.sh can recover
-  # it (secret bodies aren't readable via the API). Workflows continue to
-  # reference secrets.FLYWHEEL_GH_APP_ID — the variable is only for init.sh.
-  gh variable set FLYWHEEL_GH_APP_ID --body "$app_id" --repo "$REPO" >/dev/null 2>&1 || \
-    echo "  warning: could not set FLYWHEEL_GH_APP_ID repo variable; future re-runs may need to re-prompt for the App ID." >&2
-  echo "  set FLYWHEEL_GH_APP_ID + FLYWHEEL_GH_APP_PRIVATE_KEY secrets."
+  echo "  set FLYWHEEL_GH_APP_ID variable and FLYWHEEL_GH_APP_PRIVATE_KEY secret."
   echo
   echo "  Final manual step: install the App on $REPO."
   echo "    Open: $html_url/installations/new"
@@ -250,13 +253,14 @@ EOF
   if [[ "$has_app_id" -eq 0 ]]; then
     read -r -u 3 -p "  GitHub App ID (numeric): " app_id
     if [[ -z "$app_id" ]]; then
-      echo "  empty App ID — skipping FLYWHEEL_GH_APP_ID secret."
+      echo "  empty App ID — skipping FLYWHEEL_GH_APP_ID variable."
     else
       CREATED_APP_ID="$app_id"
-      gh secret set FLYWHEEL_GH_APP_ID --body "$app_id" --repo "$REPO"
-      gh variable set FLYWHEEL_GH_APP_ID --body "$app_id" --repo "$REPO" >/dev/null 2>&1 || \
-        echo "  warning: could not set FLYWHEEL_GH_APP_ID repo variable; future re-runs may need to re-prompt for the App ID." >&2
-      echo "  set FLYWHEEL_GH_APP_ID secret."
+      gh variable set FLYWHEEL_GH_APP_ID --body "$app_id" --repo "$REPO" || {
+        echo "  error: could not set FLYWHEEL_GH_APP_ID repo variable." >&2
+        return 1
+      }
+      echo "  set FLYWHEEL_GH_APP_ID variable."
     fi
   fi
   if [[ "$has_app_key" -eq 0 ]]; then
@@ -273,25 +277,26 @@ EOF
 }
 
 if [[ "$SKIP_SECRETS" -eq 1 ]]; then
-  echo "  --skip-secrets set; not touching repo secrets."
+  echo "  --skip-secrets set; not touching repo App credentials."
 else
+  existing_vars="$(gh variable list --json name -q '.[].name' 2>/dev/null || true)"
   existing_secrets="$(gh secret list --json name -q '.[].name' 2>/dev/null || true)"
   has_app_id=0; has_app_key=0
-  echo "$existing_secrets" | grep -qx "FLYWHEEL_GH_APP_ID" && has_app_id=1
+  echo "$existing_vars"    | grep -qx "FLYWHEEL_GH_APP_ID"          && has_app_id=1
   echo "$existing_secrets" | grep -qx "FLYWHEEL_GH_APP_PRIVATE_KEY" && has_app_key=1
 
   if [[ "$has_app_id" -eq 1 && "$has_app_key" -eq 1 ]]; then
-    echo "  FLYWHEEL_GH_APP_ID + FLYWHEEL_GH_APP_PRIVATE_KEY secrets already set."
+    echo "  FLYWHEEL_GH_APP_ID variable + FLYWHEEL_GH_APP_PRIVATE_KEY secret already set."
   elif [[ "$INTERACTIVE" -eq 0 ]]; then
-    echo "  non-interactive shell — skipping secret prompts. Set FLYWHEEL_GH_APP_ID + FLYWHEEL_GH_APP_PRIVATE_KEY manually:"
-    echo "    gh secret set FLYWHEEL_GH_APP_ID --body '<your-app-id>' --repo $REPO"
+    echo "  non-interactive shell — skipping App-credential prompts. Set them manually:"
+    echo "    gh variable set FLYWHEEL_GH_APP_ID --body '<your-app-id>' --repo $REPO"
     echo "    gh secret set FLYWHEEL_GH_APP_PRIVATE_KEY < /path/to/private-key.pem --repo $REPO"
   else
     echo
     echo "  Flywheel needs a GitHub App for installation tokens. Pick a setup path:"
     echo "    1) Create the App for me  — opens browser, ~30s round-trip"
     echo "    2) I have an App already — paste credentials manually"
-    echo "    3) Skip — I'll set the secrets later"
+    echo "    3) Skip — I'll set the App credentials later"
     read -r -u 3 -p "  Selection [1/2/3] (default 1): " app_choice
     case "${app_choice:-1}" in
       1)
@@ -301,7 +306,7 @@ else
         fi
         ;;
       2) prompt_existing_app_credentials ;;
-      3) echo "  Skipped — set FLYWHEEL_GH_APP_ID and FLYWHEEL_GH_APP_PRIVATE_KEY before any Flywheel workflow runs." ;;
+      3) echo "  Skipped — set FLYWHEEL_GH_APP_ID variable and FLYWHEEL_GH_APP_PRIVATE_KEY secret before any Flywheel workflow runs." ;;
       *) echo "  invalid selection — skipping." ;;
     esac
   fi
@@ -361,10 +366,10 @@ if [[ "$SKIP_RULESETS" -eq 0 && -x "${SCRIPT_DIR:-}/apply-rulesets.sh" ]]; then
         read -r -u 3 -p "  Required-check names (comma-separated, blank to skip): " REQUIRED_CHECKS
       fi
     fi
-    # Prompt fallback for adopters who onboarded before the variable was
-    # persisted. The non-interactive case falls through to the warning below.
+    # Prompt fallback if the variable is missing (e.g. user deleted it manually).
+    # The non-interactive case falls through to the warning below.
     if [[ -z "${CREATED_APP_ID:-}" && "$INTERACTIVE" -eq 1 ]]; then
-      echo "  App ID not found in repo variables (re-run from before this was persisted)."
+      echo "  App ID not found in repo variables."
       read -r -u 3 -p "  Enter App ID for ruleset bypass-actor configuration (blank to skip): " CREATED_APP_ID
       if [[ -n "$CREATED_APP_ID" ]]; then
         gh variable set FLYWHEEL_GH_APP_ID --body "$CREATED_APP_ID" --repo "$REPO" >/dev/null 2>&1 || true

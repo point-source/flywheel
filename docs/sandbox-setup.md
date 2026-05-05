@@ -51,11 +51,12 @@ never against `flywheel` itself or any production target.
    - **Install** the App on `point-source/flywheel-sandbox` (and only that
      repo — don't grant org-wide access).
 
-6. **Store the App credentials as repo secrets** on `point-source/flywheel`
+6. **Store the App credentials** on `point-source/flywheel`
    (Settings → Secrets and variables → Actions):
    - `FLYWHEEL_E2E_APP_ID` — the `flywheel-build-e2e` App ID (numeric).
+     Store as a repo **Variable** (it's not sensitive).
    - `FLYWHEEL_E2E_APP_PRIVATE_KEY` — the App's private key, PEM format
-     including the `BEGIN/END` lines.
+     including the `BEGIN/END` lines. Store as a repo **Secret**.
 
    The `Integration tests` workflow (`.github/workflows/integration.yml`)
    uses [`actions/create-github-app-token`](https://github.com/actions/create-github-app-token)

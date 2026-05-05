@@ -20,5 +20,5 @@ jobs:
       - uses: point-source/flywheel@__FLYWHEEL_VERSION__
         with:
           event: pull_request
-          app-id: ${{ secrets.FLYWHEEL_GH_APP_ID }}
+          app-id: ${{ vars.FLYWHEEL_GH_APP_ID }}
           app-private-key: ${{ secrets.FLYWHEEL_GH_APP_PRIVATE_KEY }}

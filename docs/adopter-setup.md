@@ -86,7 +86,7 @@ Open PRs whose titles aren't conventional commits will be rewritten by Flywheel 
 
 Flywheel uses a GitHub App installation token. Personal Access Tokens are not supported — they don't reliably propagate the cross-workflow trigger semantics Flywheel relies on (in particular, native auto-merge enable and downstream workflow firing on bot-created PRs).
 
-**Fastest path: let `init.sh` do it.** The quick-start command (§Quick start) opens a browser to GitHub's App-creation page pre-populated with the required permissions, captures the credentials on a localhost callback, and writes them as repo secrets — about 30 seconds end to end. The only remaining manual step is clicking "Install" on the resulting App page to scope it to your repo. If that's all you need, skip the rest of this section.
+**Fastest path: let `init.sh` do it.** The quick-start command (§Quick start) opens a browser to GitHub's App-creation page pre-populated with the required permissions, captures the credentials on a localhost callback, and writes the App ID as a repo Variable + the private key as a repo Secret — about 30 seconds end to end. The only remaining manual step is clicking "Install" on the resulting App page to scope it to your repo. If that's all you need, skip the rest of this section.
 
 If you'd rather create the App by hand: follow GitHub's [Creating a GitHub App](https://docs.github.com/en/apps/creating-github-apps/about-creating-github-apps/creating-a-github-app) guide with these permissions:
 
@@ -96,10 +96,10 @@ If you'd rather create the App by hand: follow GitHub's [Creating a GitHub App](
 - **Checks: read and write** — posting the `flywheel/conventional-commit` check
 - **Metadata: read**
 
-Install the App on your repo. Then store its credentials as repo secrets:
+Install the App on your repo. Then store its credentials in Settings → Secrets and variables → Actions:
 
-- `FLYWHEEL_GH_APP_ID` — the numeric App ID (visible on the App's settings page).
-- `FLYWHEEL_GH_APP_PRIVATE_KEY` — the PEM-format private key downloaded from the App settings.
+- `FLYWHEEL_GH_APP_ID` — the numeric App ID (visible on the App's settings page). Store as a **Variable**, not a Secret — it's not sensitive.
+- `FLYWHEEL_GH_APP_PRIVATE_KEY` — the PEM-format private key downloaded from the App settings. Store as a **Secret**.
 
 Pass these straight into the Flywheel action via the `app-id` and `app-private-key` inputs (see the workflow YAML in §3). The action mints its own short-lived installation token internally and validates that the App's granted permissions match the list above — if anything is missing it fails fast with a friendly error pointing you at the App settings. You do not need a separate `actions/create-github-app-token` step.
 
@@ -194,7 +194,7 @@ jobs:
       - uses: point-source/flywheel@v2
         with:
           event: pull_request
-          app-id: ${{ secrets.FLYWHEEL_GH_APP_ID }}
+          app-id: ${{ vars.FLYWHEEL_GH_APP_ID }}
           app-private-key: ${{ secrets.FLYWHEEL_GH_APP_PRIVATE_KEY }}
 ```
 
@@ -226,7 +226,7 @@ jobs:
         id: flywheel
         with:
           event: push
-          app-id: ${{ secrets.FLYWHEEL_GH_APP_ID }}
+          app-id: ${{ vars.FLYWHEEL_GH_APP_ID }}
           app-private-key: ${{ secrets.FLYWHEEL_GH_APP_PRIVATE_KEY }}
       - name: Run semantic-release
         if: steps.flywheel.outputs.managed_branch == 'true'
@@ -311,7 +311,7 @@ jobs:
       - uses: actions/create-github-app-token@v1
         id: app-token
         with:
-          app-id: ${{ secrets.FLYWHEEL_GH_APP_ID }}
+          app-id: ${{ vars.FLYWHEEL_GH_APP_ID }}
           private-key: ${{ secrets.FLYWHEEL_GH_APP_PRIVATE_KEY }}
       - name: Upload artifact
         uses: softprops/action-gh-release@v2
@@ -514,7 +514,7 @@ Run the doctor script — it validates everything the prior steps configured wit
 curl -fsSL https://raw.githubusercontent.com/point-source/flywheel/main/scripts/doctor.sh | bash
 ```
 
-`doctor.sh` confirms `.flywheel.yml` parses, every managed branch exists, `FLYWHEEL_GH_APP_ID` + `FLYWHEEL_GH_APP_PRIVATE_KEY` are set, `Allow auto-merge` is on, both Flywheel workflow files exist with App-token plumbing, a ruleset covers each managed branch, and the `v*` tag namespace is protected. Anything red is annotated with the script you should run to fix it.
+`doctor.sh` confirms `.flywheel.yml` parses, every managed branch exists, the `FLYWHEEL_GH_APP_ID` Variable + `FLYWHEEL_GH_APP_PRIVATE_KEY` Secret are set, `Allow auto-merge` is on, both Flywheel workflow files exist with App-token plumbing, a ruleset covers each managed branch, and the `v*` tag namespace is protected. Anything red is annotated with the script you should run to fix it.
 
 Then open a small PR titled `chore: smoke test`. Confirm:
 

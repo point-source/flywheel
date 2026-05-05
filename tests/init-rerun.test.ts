@@ -14,12 +14,12 @@ import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
-// init.sh's re-run hazard: when both FLYWHEEL_GH_APP_ID + FLYWHEEL_GH_APP_PRIVATE_KEY
-// secrets already exist, the secret-prompt block short-circuits and
-// CREATED_APP_ID stays empty. Without --app-id, apply-rulesets.sh PUTs
-// an empty bypass_actors and the App loses its bypass entry, breaking
-// semantic-release pushes. Recovery: init.sh mirrors the App ID into a
-// repo Variable on first run and reads it back on re-run.
+// init.sh's re-run hazard: when both the FLYWHEEL_GH_APP_ID variable and
+// FLYWHEEL_GH_APP_PRIVATE_KEY secret already exist, the App-credential
+// prompt block short-circuits and CREATED_APP_ID stays empty. Without
+// --app-id, apply-rulesets.sh PUTs an empty bypass_actors and the App
+// loses its bypass entry, breaking semantic-release pushes. Recovery:
+// init.sh reads the App ID back from the repo Variable.
 //
 // These tests stub `gh` so the test never talks to GitHub, then run
 // init.sh non-interactively (yn defaults to N → "skipped ruleset apply"
@@ -46,7 +46,10 @@ case "$1 $2" in
     echo "test-owner/test-repo"
     ;;
   "secret list")
-    printf '%s\\n' "FLYWHEEL_GH_APP_ID" "FLYWHEEL_GH_APP_PRIVATE_KEY"
+    printf '%s\\n' "FLYWHEEL_GH_APP_PRIVATE_KEY"
+    ;;
+  "variable list")
+    printf '%s\\n' "FLYWHEEL_GH_APP_ID"
     ;;
   "secret set"|"variable set")
     cat >/dev/null
