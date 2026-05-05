@@ -1,3 +1,10 @@
+# [2.1.0-dev.14](https://github.com/point-source/flywheel/compare/v2.1.0-dev.13...v2.1.0-dev.14) (2026-05-05)
+
+
+### Bug Fixes
+
+* **e2e:** scope presweep to e2e-prefixed head refs only ([#58](https://github.com/point-source/flywheel/issues/58)) ([21890a6](https://github.com/point-source/flywheel/commit/21890a6571180ff591eb487af6eafeb64f9249be))
+
 # [2.1.0-dev.13](https://github.com/point-source/flywheel/compare/v2.1.0-dev.12...v2.1.0-dev.13) (2026-05-05)
 
 
