@@ -110,11 +110,17 @@ async function syncBranch(branch) {
     tree: tree.data.sha,
     parents: [parentSha],
   });
+  // force: true because integration tests merge PRs into integration-test-base
+  // (and e2e tests advance e2e-* branches), so the ref may have moved between
+  // getRef above and updateRef here. The sync's intent is "reset sandbox to
+  // the SHA under test", so non-FF overwrites are correct — those intermediate
+  // commits are throwaway test artifacts.
   await octokit.rest.git.updateRef({
     owner: OWNER,
     repo: REPO,
     ref: `heads/${branch}`,
     sha: commit.data.sha,
+    force: true,
   });
   console.log(`${branch}: synced ${commit.data.sha.slice(0, 7)}`);
 }
