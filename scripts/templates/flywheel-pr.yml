@@ -16,9 +16,9 @@ jobs:
       (github.event.action != 'edited' || github.event.sender.type == 'User')
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: point-source/flywheel@v1
+      - uses: actions/checkout@v6
+      - uses: point-source/flywheel@__FLYWHEEL_VERSION__
         with:
           event: pull_request
-          app-id: ${{ secrets.FLYWHEEL_GH_APP_ID }}
+          app-id: ${{ vars.FLYWHEEL_GH_APP_ID }}
           app-private-key: ${{ secrets.FLYWHEEL_GH_APP_PRIVATE_KEY }}

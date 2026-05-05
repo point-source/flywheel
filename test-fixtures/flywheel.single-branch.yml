@@ -3,4 +3,5 @@ flywheel:
     - name: solo
       branches:
         - name: main
+          release: production
           auto_merge: [fix, chore]

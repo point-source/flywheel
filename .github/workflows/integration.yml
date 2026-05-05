@@ -5,6 +5,16 @@ on:
     branches: ["develop", "main"]
   workflow_dispatch:
 
+# Tests share a single sandbox repo (point-source/flywheel-sandbox) and
+# create + merge real PRs against integration-test-base. Two runs in
+# parallel race on that base ref — see auto-merge-direct, where one
+# direct-merge call wins and the other returns 405/409. Serialize all
+# runs so they queue instead of racing. cancel-in-progress: false keeps
+# every required-check on PRs honest (the latest commit still runs).
+concurrency:
+  group: integration-sandbox
+  cancel-in-progress: false
+
 jobs:
   integration:
     runs-on: ubuntu-latest
@@ -12,7 +22,7 @@ jobs:
     # and the suite would skip every test anyway. Save the CI minutes.
     if: ${{ github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: actions/setup-node@v4
         with:
           node-version: "24"
@@ -20,14 +30,14 @@ jobs:
 
       # Mint a short-lived installation token from the flywheel-build-e2e
       # GitHub App, scoped to point-source/flywheel-sandbox only.
-      # Required secrets in this repo:
-      #   FLYWHEEL_E2E_APP_ID          — flywheel-build-e2e App ID
-      #   FLYWHEEL_E2E_APP_PRIVATE_KEY — flywheel-build-e2e App private key (PEM)
+      # Required in this repo:
+      #   FLYWHEEL_E2E_APP_ID          — flywheel-build-e2e App ID (Variable)
+      #   FLYWHEEL_E2E_APP_PRIVATE_KEY — flywheel-build-e2e App private key (Secret, PEM)
       - name: Mint sandbox installation token
         id: app-token
         uses: actions/create-github-app-token@v1
         with:
-          app-id: ${{ secrets.FLYWHEEL_E2E_APP_ID }}
+          app-id: ${{ vars.FLYWHEEL_E2E_APP_ID }}
           private-key: ${{ secrets.FLYWHEEL_E2E_APP_PRIVATE_KEY }}
           owner: point-source
           repositories: flywheel-sandbox

@@ -6,7 +6,7 @@ on:
 
 concurrency:
   group: e2e-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   e2e:
@@ -14,7 +14,7 @@ jobs:
     timeout-minutes: 20
     if: ${{ github.event.repository.fork == false }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: actions/setup-node@v4
         with:
           node-version: "24"
@@ -26,15 +26,37 @@ jobs:
         id: app-token
         uses: actions/create-github-app-token@v1
         with:
-          app-id: ${{ secrets.FLYWHEEL_E2E_APP_ID }}
+          app-id: ${{ vars.FLYWHEEL_E2E_APP_ID }}
           private-key: ${{ secrets.FLYWHEEL_E2E_APP_PRIVATE_KEY }}
           owner: point-source
           repositories: flywheel-sandbox
 
+      # Close stranded open PRs from any prior cancelled run before mutating
+      # the sandbox. Required because cancel-in-progress: true above means an
+      # afterEach teardown can be killed mid-run, leaving open PRs behind.
+      - name: Sandbox presweep
+        env:
+          SANDBOX_GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: node scripts/sandbox-presweep.mjs
+
+      # Overwrite the sandbox's workflow files + .flywheel.yml with the
+      # versions on the SHA under test. Treats the sandbox as a fresh-install
+      # target so template drift cannot mask regressions. Each commit carries
+      # [skip ci] to keep the sandbox's own Flywheel — Push from retriggering.
+      - name: Sync sandbox fixtures
+        env:
+          SANDBOX_GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          FLYWHEEL_ACTION_REF: ${{ github.sha }}
+        run: node scripts/sync-e2e-fixtures.mjs
+
       - name: Pre-flight (doctor.sh against sandbox)
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
-        run: ./scripts/doctor.sh point-source/flywheel-sandbox
+        # The previous step already proved the App credentials work by
+        # minting an installation token; doctor's listing checks would
+        # only fail with 403 under that token (App installation tokens
+        # cannot list Variables or Secrets), so skip them.
+        run: ./scripts/doctor.sh --skip-credentials point-source/flywheel-sandbox
 
       - name: Run e2e suite
         env:

@@ -20,9 +20,12 @@ describe("loadConfig", () => {
       "staging",
       "main",
     ]);
-    expect(result.config!.streams[0]!.branches[2]!.prerelease).toBeUndefined();
+    expect(result.config!.streams[0]!.branches[0]!.release).toBe("none");
+    expect(result.config!.streams[0]!.branches[1]!.release).toBe("prerelease");
+    expect(result.config!.streams[0]!.branches[1]!.suffix).toBe("rc");
+    expect(result.config!.streams[0]!.branches[2]!.release).toBe("production");
+    expect(result.config!.streams[0]!.branches[2]!.suffix).toBeUndefined();
     expect(result.config!.merge_strategy).toBe("squash");
-    expect(result.config!.initial_version).toBe("0.1.0");
   });
 
   it("flags branch in multiple streams (rule 1)", () => {
@@ -36,7 +39,7 @@ describe("loadConfig", () => {
     expect(result.config).toBeNull();
     expect(
       result.errors.some((e) =>
-        e.includes('stream "main-line": multiple branches without a prerelease identifier'),
+        e.includes('stream "main-line": multiple production branches'),
       ),
     ).toBe(true);
   });
@@ -47,6 +50,34 @@ describe("loadConfig", () => {
     expect(
       result.errors.some((e) => e.includes("multiple streams have a terminal production branch")),
     ).toBe(true);
+  });
+
+  it("flags duplicate suffix across prerelease branches", () => {
+    const result = loadConfig(fx("flywheel.dup-prerelease.yml"));
+    expect(result.config).toBeNull();
+    expect(
+      result.errors.some((e) => e.includes('suffix "dev" used by multiple prerelease branches')),
+    ).toBe(true);
+  });
+
+  it("flags duplicate stream names", () => {
+    const yamlText = `
+flywheel:
+  streams:
+    - name: dup
+      branches:
+        - name: a
+          release: production
+          auto_merge: []
+    - name: dup
+      branches:
+        - name: b
+          release: production
+          auto_merge: []
+`;
+    const result = loadConfig(yamlText);
+    expect(result.config).toBeNull();
+    expect(result.errors.some((e) => e.includes('duplicate stream name: "dup"'))).toBe(true);
   });
 
   it("flags unrecognized auto_merge entries (rule 4)", () => {
@@ -75,11 +106,70 @@ flywheel:
     - name: bad-stream
       branches:
         - name: only
+          release: production
           auto_merge: [fix, totally-not-a-type, zzz]
 `;
     const result = loadConfig(yamlText);
     expect(result.config).toBeNull();
     expect(result.errors.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("parses release: none on a non-terminal branch", () => {
+    const result = loadConfig(fx("flywheel.release-none.yml"));
+    expect(result.errors).toEqual([]);
+    expect(result.config).not.toBeNull();
+    expect(result.config!.streams[0]!.branches[0]!.release).toBe("none");
+    expect(result.config!.streams[0]!.branches[0]!.suffix).toBeUndefined();
+  });
+
+  it("flags terminal release: none (rule 4)", () => {
+    const result = loadConfig(fx("flywheel.terminal-none.yml"));
+    expect(result.config).toBeNull();
+    expect(
+      result.errors.some(
+        (e) =>
+          e.includes('stream "main-line"') &&
+          e.includes('terminal branch "staging"') &&
+          e.includes("release: none"),
+      ),
+    ).toBe(true);
+  });
+
+  it("rejects suffix when release is not prerelease", () => {
+    const result = loadConfig(fx("flywheel.suffix-without-prerelease.yml"));
+    expect(result.config).toBeNull();
+    expect(
+      result.errors.some((e) =>
+        e.includes('only valid when release is "prerelease"'),
+      ),
+    ).toBe(true);
+  });
+
+  it("rejects release: prerelease without a suffix", () => {
+    const result = loadConfig(fx("flywheel.prerelease-without-suffix.yml"));
+    expect(result.config).toBeNull();
+    expect(
+      result.errors.some((e) =>
+        e.includes('required when release is "prerelease"'),
+      ),
+    ).toBe(true);
+  });
+
+  it("rejects unknown release mode", () => {
+    const yamlText = `
+flywheel:
+  streams:
+    - name: only
+      branches:
+        - name: main
+          release: somethingelse
+          auto_merge: []
+`;
+    const result = loadConfig(yamlText);
+    expect(result.config).toBeNull();
+    expect(
+      result.errors.some((e) => e.includes("must be one of none, prerelease, production")),
+    ).toBe(true);
   });
 
   it("errors on completely missing top-level flywheel mapping", () => {
@@ -94,6 +184,107 @@ flywheel:
     expect(result.errors[0]).toContain("failed to parse YAML");
   });
 
+  describe("release_files", () => {
+    it("parses a declarative entry into the config", () => {
+      const result = loadConfig(fx("flywheel.release-files-declarative.yml"));
+      expect(result.errors).toEqual([]);
+      expect(result.config!.release_files).toEqual([
+        {
+          path: "pubspec.yaml",
+          pattern: "^version: .*",
+          replacement: "version: ${version}+${build}",
+        },
+      ]);
+    });
+
+    it("parses an exec entry into the config", () => {
+      const result = loadConfig(fx("flywheel.release-files-exec.yml"));
+      expect(result.errors).toEqual([]);
+      expect(result.config!.release_files).toEqual([
+        { path: "pyproject.toml", cmd: 'python -c "print(123)"' },
+      ]);
+    });
+
+    it("parses mixed declarative + exec entries in declaration order", () => {
+      const result = loadConfig(fx("flywheel.release-files-mixed.yml"));
+      expect(result.errors).toEqual([]);
+      expect(result.config!.release_files).toHaveLength(2);
+      expect(result.config!.release_files![0]).toMatchObject({ path: "pubspec.yaml" });
+      expect(result.config!.release_files![1]).toMatchObject({ path: "pyproject.toml" });
+    });
+
+    it("rejects entry that has both pattern/replacement and cmd", () => {
+      const result = loadConfig(fx("flywheel.release-files-both-forms.yml"));
+      expect(result.config).toBeNull();
+      expect(result.errors.some((e) => e.includes("not both"))).toBe(true);
+    });
+
+    it("rejects entry that has neither pattern/replacement nor cmd", () => {
+      const result = loadConfig(fx("flywheel.release-files-neither-form.yml"));
+      expect(result.config).toBeNull();
+      expect(result.errors.some((e) => e.includes("must declare either"))).toBe(true);
+    });
+
+    it("rejects entry missing path", () => {
+      const result = loadConfig(fx("flywheel.release-files-missing-path.yml"));
+      expect(result.config).toBeNull();
+      expect(result.errors.some((e) => e.includes("path: required"))).toBe(true);
+    });
+
+    it("rejects empty pattern", () => {
+      const result = loadConfig(fx("flywheel.release-files-empty-pattern.yml"));
+      expect(result.config).toBeNull();
+      expect(result.errors.some((e) => e.includes("pattern: required non-empty string"))).toBe(true);
+    });
+
+    it("rejects pattern containing the sed delimiter |", () => {
+      const yamlText = `
+flywheel:
+  streams:
+    - name: only
+      branches:
+        - { name: main, release: production, auto_merge: [] }
+  release_files:
+    - path: pubspec.yaml
+      pattern: '^a|b'
+      replacement: 'x'
+  merge_strategy: squash
+`;
+      const result = loadConfig(yamlText);
+      expect(result.config).toBeNull();
+      expect(result.errors.some((e) => e.includes("sed delimiter"))).toBe(true);
+    });
+
+    it("rejects empty release_files list", () => {
+      const yamlText = `
+flywheel:
+  streams:
+    - name: only
+      branches:
+        - { name: main, release: production, auto_merge: [] }
+  release_files: []
+  merge_strategy: squash
+`;
+      const result = loadConfig(yamlText);
+      expect(result.config).toBeNull();
+      expect(result.errors.some((e) => e.includes("non-empty list"))).toBe(true);
+    });
+
+    it("absent release_files is fine — config has no release_files key", () => {
+      const yamlText = `
+flywheel:
+  streams:
+    - name: only
+      branches:
+        - { name: main, release: production, auto_merge: [] }
+  merge_strategy: squash
+`;
+      const result = loadConfig(yamlText);
+      expect(result.errors).toEqual([]);
+      expect(result.config!.release_files).toBeUndefined();
+    });
+  });
+
   it("rejects merge_strategy: merge with descriptive error", () => {
     const yamlText = `
 flywheel:
@@ -101,6 +292,7 @@ flywheel:
     - name: only
       branches:
         - name: main
+          release: production
           auto_merge: []
   merge_strategy: merge
 `;

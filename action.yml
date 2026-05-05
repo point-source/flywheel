@@ -9,7 +9,7 @@ inputs:
     description: "Event to handle: 'pull_request' or 'push'."
     required: true
   app-id:
-    description: "GitHub App ID (numeric). Typically supplied via secrets.FLYWHEEL_GH_APP_ID."
+    description: "GitHub App ID (numeric). Typically supplied via vars.FLYWHEEL_GH_APP_ID (a repo Variable, not a Secret — the App ID is not sensitive)."
     required: true
   app-private-key:
     description: "GitHub App private key in PEM format. Typically supplied via secrets.FLYWHEEL_GH_APP_PRIVATE_KEY."
@@ -18,7 +18,7 @@ outputs:
   token:
     description: "Minted installation token (masked). Pass to downstream steps that need it (e.g. semantic-release)."
   managed_branch:
-    description: "'true' when the pushed/targeted branch is in a stream in .flywheel.yml; 'false' otherwise."
+    description: "'true' when the pushed branch should run semantic-release; 'false' otherwise (branch not in a stream, or branch has release: none)."
   back_merge_targets:
     description: "Comma-separated list of upstream branches in the same stream that should receive a back-merge after this branch releases. Empty when there are no upstream branches (single-branch stream, or this is the head of its stream)."
 runs:

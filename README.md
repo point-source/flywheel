@@ -20,14 +20,16 @@ What Flywheel does **not** own: your quality checks, your build, your publish. Y
 Run from your repo, with `gh auth login` already done:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/point-source/flywheel/v1/scripts/init.sh | bash
+curl -fsSL https://raw.githubusercontent.com/point-source/flywheel/main/scripts/init.sh | bash
 ```
 
 `init.sh` picks a `.flywheel.yml` preset, writes both Flywheel workflow files, prompts for the GitHub App credentials, and (optionally) applies the recommended branch + tag rulesets. Validate any time with:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/point-source/flywheel/v1/scripts/doctor.sh | bash
+curl -fsSL https://raw.githubusercontent.com/point-source/flywheel/main/scripts/doctor.sh | bash
 ```
+
+> **Adopting into an existing repo** with prior version tags, release automation, or branch protection? Skip `init.sh` and start with [docs/adopter-setup.md §0](./docs/adopter-setup.md#0-adopting-flywheel-into-an-existing-project) — it covers the audit and cleanup steps the script doesn't.
 
 The hand-rolled equivalent — four files in your repo:
 
@@ -50,12 +52,13 @@ flywheel:
     - name: main-line
       branches:
         - name: develop
-          prerelease: dev
+          release: prerelease
+          suffix: dev
           auto_merge: [fix, chore, refactor, perf, style, test, docs]
         - name: main
+          release: production
           auto_merge: []
   merge_strategy: squash
-  initial_version: 0.1.0
 ```
 
 See **[docs/adopter-setup.md](./docs/adopter-setup.md)** for the full setup walkthrough including the workflow templates, branch protection rulesets, and required secret scopes.
@@ -108,7 +111,7 @@ workflow_run: build completed
 
 ## Permissions
 
-Flywheel needs a token with:
+Flywheel mints its own installation token from the GitHub App credentials you supply via the `app-id` / `app-private-key` inputs. The App needs these scopes:
 
 | Scope          | Purpose                                                        |
 | -------------- | -------------------------------------------------------------- |
@@ -118,14 +121,15 @@ Flywheel needs a token with:
 | Checks: r/w    | Posting the `flywheel/conventional-commit` check               |
 | Metadata: read | Required for any token interacting with a repo                 |
 
-Use a GitHub App installation token, minted at the start of each workflow via [`actions/create-github-app-token`](https://github.com/actions/create-github-app-token) from `FLYWHEEL_GH_APP_ID` + `FLYWHEEL_GH_APP_PRIVATE_KEY` repo secrets. Personal Access Tokens are not supported — they don't reliably propagate the cross-workflow trigger semantics Flywheel relies on. `secrets.GITHUB_TOKEN` is similarly insufficient: it cannot trigger downstream workflows from PRs it creates.
+Adopters store `FLYWHEEL_GH_APP_ID` as a repo Variable (it's not sensitive — the App ID is printed on the App's settings page) and `FLYWHEEL_GH_APP_PRIVATE_KEY` as a repo Secret, and pass them straight into the action — no separate `actions/create-github-app-token` step. Personal Access Tokens are not supported (they don't reliably propagate the cross-workflow trigger semantics Flywheel relies on); `secrets.GITHUB_TOKEN` is similarly insufficient (it cannot trigger downstream workflows from PRs it creates).
 
 ## Inputs and outputs
 
-| Input    | Required | Description                                            |
-| -------- | -------- | ------------------------------------------------------ |
-| `event`  | yes      | `pull_request` or `push`                               |
-| `token`  | yes      | A token with the scopes above                          |
+| Input             | Required | Description                                                |
+| ----------------- | -------- | ---------------------------------------------------------- |
+| `event`           | yes      | `pull_request` or `push`                                   |
+| `app-id`          | yes      | GitHub App ID; typically `vars.FLYWHEEL_GH_APP_ID`         |
+| `app-private-key` | yes      | App private key (PEM); typically `secrets.FLYWHEEL_GH_APP_PRIVATE_KEY` |
 
 | Output                | Description                                                                                                                                          |
 | --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -167,7 +171,7 @@ npm run build
 npm run verify-dist   # rebuilds and fails if dist/ drifts from source
 ```
 
-Source is TypeScript under `src/`; the bundled `dist/index.js` is committed and is what GitHub executes. The `verify-dist` workflow ensures the bundle stays in sync.
+Source is TypeScript under `src/`; the bundled `dist/index.cjs` is committed and is what GitHub executes. The `verify-dist` workflow ensures the bundle stays in sync.
 
 See [CONTRIBUTING.md](./CONTRIBUTING.md) for the full contributor workflow, sandbox testing, and PR conventions.
 

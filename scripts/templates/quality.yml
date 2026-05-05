@@ -20,9 +20,25 @@ on:
   merge_group:    # required for merge-queue compatibility
 jobs:
   test:
+    # Skip work on Flywheel-emitted metadata commits and on the bot-managed
+    # promotion PR. A job-level `if:` that evaluates false reports `success`
+    # to the required-status-checks rule (per GitHub docs), so this clears
+    # the gate without running tests on commits that have no meaningful
+    # signal:
+    #   - `chore(release): ...` — semantic-release version bump
+    #   - `chore: back-merge ...` — Flywheel back-merge of a release tag
+    #   - PR title containing `: promote ` — the long-lived promotion PR
+    # Reference:
+    # https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/collaborating-on-repositories-with-code-quality-features/troubleshooting-required-status-checks#handling-skipped-but-required-checks
+    # Remove this `if:` (or individual clauses) to opt back in to running
+    # the full suite on those commits.
+    if: |
+      !startsWith(github.event.head_commit.message || '', 'chore(release):') &&
+      !startsWith(github.event.head_commit.message || '', 'chore: back-merge') &&
+      !contains(github.event.pull_request.title || '', ': promote ')
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       # Replace this with your real test invocation. If you have multiple
       # check types (lint, typecheck, unit, integration), it's fine to
       # split them into separate jobs in this same file — each becomes its

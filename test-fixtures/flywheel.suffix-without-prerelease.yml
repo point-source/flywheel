@@ -1,0 +1,8 @@
+flywheel:
+  streams:
+    - name: main-line
+      branches:
+        - name: main
+          release: production
+          suffix: rc
+          auto_merge: []

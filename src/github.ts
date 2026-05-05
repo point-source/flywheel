@@ -115,13 +115,18 @@ export function createGitHubClient(token: string, repoFullName?: string): GitHub
 
     async enableAutoMerge(pullRequestId, mergeMethod) {
       try {
+        // The variable is named `mergeMethod` (not `method`) because
+        // @octokit/graphql reserves `method`, `url`, `headers`,
+        // `mediaType`, and `request` for the underlying HTTP request
+        // config. Passing one of those as a GraphQL variable throws
+        // `"<name>" cannot be used as variable name`.
         await octokit.graphql(
-          `mutation Enable($id: ID!, $method: PullRequestMergeMethod!) {
-            enablePullRequestAutoMerge(input: { pullRequestId: $id, mergeMethod: $method }) {
+          `mutation Enable($id: ID!, $mergeMethod: PullRequestMergeMethod!) {
+            enablePullRequestAutoMerge(input: { pullRequestId: $id, mergeMethod: $mergeMethod }) {
               pullRequest { id }
             }
           }`,
-          { id: pullRequestId, method: mergeMethod },
+          { id: pullRequestId, mergeMethod },
         );
         return { ok: true };
       } catch (err: unknown) {

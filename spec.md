@@ -30,7 +30,7 @@ Flywheel is not a long-running orchestrator. It is a collection of short-lived, 
 
 ### 1. `pr-conductor` (Flywheel's only custom code)
 
-A TypeScript GitHub Action, published to the GitHub Actions marketplace as `point-source/flywheel@v1`. Authored in TypeScript and bundled to a single `dist/index.cjs` via esbuild; runs on the `node24` Action runtime. See "Implementation sketch" below.
+A TypeScript GitHub Action, published to the GitHub Actions marketplace as `point-source/flywheel@v2`. Authored in TypeScript and bundled to a single `dist/index.cjs` via esbuild; runs on the `node24` Action runtime. See "Implementation sketch" below.
 
 Reacts to `pull_request` events and `push` events on managed branches. It is stateless — reads `.flywheel.yml`, reads/writes the PR or repo state, and exits. Holds no state between runs.
 
@@ -110,7 +110,7 @@ on: workflow_run build completed
 
 **Important:** The release flow and the promotion PR flow are independent reactions to the same push event. A branch that is last in its stream (the terminal branch) still releases — being last means no promotion PR is created, not that no release occurs. Releases happen on every push to any managed branch where semantic-release computes a new version. A single-branch stream releases immediately on every qualifying push with no promotion step.
 
-**Back-merge.** Whenever a release lands on a non-head branch in its stream (e.g. `main` in a `develop → staging → main` stream), Flywheel back-merges the new tag and the `chore(release)` commit into every upstream branch (`staging`, `develop`) before the workflow exits. This keeps the release tag in each upstream branch's ancestry — required for semantic-release on those branches to compute the next prerelease version correctly — and keeps `CHANGELOG.md` in sync. The back-merge commit is marked `[skip ci]` so it doesn't retrigger the pipeline. The App must be a bypass actor on each upstream branch's ruleset (already required by Flywheel's spec for the release push itself); without it, the back-merge push is rejected by the linear-history rule. Single-branch streams have no upstream branches and skip this step.
+**Back-merge.** Whenever a release lands on a non-head branch in its stream (e.g. `main` in a `develop → staging → main` stream), Flywheel back-merges the new tag and the `chore(release)` commit into every upstream branch (`staging`, `develop`) before the workflow exits. This keeps the release tag in each upstream branch's ancestry — required for semantic-release on those branches to compute the next prerelease version correctly — and keeps `CHANGELOG.md` in sync. The back-merge push retriggers `flywheel-push.yml` on the upstream branch; that re-run is intentional and a no-op in steady state — semantic-release sees the freshly back-merged tag at HEAD and exits without publishing. Flywheel deliberately does **not** mark the merge commit `[skip ci]`: that token is a workflow-level commit-message filter and would leave required status checks `Pending` on any promotion PR tracking the upstream branch (per GitHub's [required-status-checks docs](https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/collaborating-on-repositories-with-code-quality-features/troubleshooting-required-status-checks#handling-skipped-but-required-checks)). Adopters who want to skip CI work on back-merge / release commits should use a job-level `if:` in their quality workflows — a job-level skip reports `success` to the required-checks rule and clears the gate. The App must be a bypass actor on each upstream branch's ruleset (already required by Flywheel's spec for the release push itself); without it, the back-merge push is rejected by the linear-history rule. Single-branch streams have no upstream branches and skip this step.
 
 ---
 
@@ -131,10 +131,17 @@ flywheel:
     - name: main-line
       branches:
         - name: develop
-          # Optional. Semver pre-release identifier.
-          # Absent or false = production release (no suffix).
-          # Must be unique across streams if using a shared publish destination.
-          prerelease: dev
+          # Required. One of: none | prerelease | production.
+          #   none       — branch is in the promotion chain but does NOT run
+          #                semantic-release (no tag, no GitHub Release).
+          #   prerelease — branch releases a prerelease tag; requires `suffix`.
+          #   production — branch releases a production tag (no suffix).
+          release: prerelease
+
+          # Required iff release: prerelease. Semver pre-release identifier
+          # (becomes the `-<suffix>.N` part of the version). Must be unique
+          # across all prerelease branches in the repo.
+          suffix: dev
 
           # Required. Commit types that auto-merge into this branch without human review.
           # Use conventional commit type, optionally suffixed with ! for breaking changes.
@@ -152,7 +159,8 @@ flywheel:
             - docs
 
         - name: staging
-          prerelease: rc
+          release: prerelease
+          suffix: rc
           auto_merge:
             - fix
             - chore
@@ -161,14 +169,15 @@ flywheel:
             - docs
 
         - name: main
-          # prerelease absent = production release, no suffix
+          release: production
           auto_merge: [] # all PRs require human approval
 
     # A second stream for a customer variant — independent version history
     - name: customer-acme
       branches:
         - name: customer-acme
-          prerelease: acme
+          release: prerelease
+          suffix: acme
           auto_merge:
             - fix
             - fix!
@@ -179,18 +188,22 @@ flywheel:
   # requires linear history, which is incompatible with merge commits.
   # If you need merge commits, disable the linear history ruleset requirement.
   merge_strategy: squash
-
-  # Initial version if no tags exist in the repo.
-  initial_version: 0.1.0
 ```
 
 ### Branch config fields
 
-| Field        | Required | Default | Description                                                                                  |
-| ------------ | -------- | ------- | -------------------------------------------------------------------------------------------- |
-| `name`       | Yes      | —       | Git branch name                                                                              |
-| `prerelease` | No       | `false` | Semver pre-release identifier, or `false` / absent for production release                    |
-| `auto_merge` | Yes      | —       | List of commit types (with optional `!`) that auto-merge. Empty list = all need human review |
+| Field        | Required           | Default | Description                                                                                                |
+| ------------ | ------------------ | ------- | ---------------------------------------------------------------------------------------------------------- |
+| `name`       | Yes                | —       | Git branch name                                                                                            |
+| `release`    | Yes                | —       | One of `none`, `prerelease`, `production` — see release modes below                                        |
+| `suffix`     | If `prerelease`    | —       | Semver pre-release identifier (e.g. `dev`, `rc`). Required iff `release: prerelease`; forbidden otherwise. |
+| `auto_merge` | Yes                | —       | List of commit types (with optional `!`) that auto-merge. Empty list = all need human review               |
+
+#### Release modes
+
+- **`none`** — the branch is in the promotion chain (auto-promotion PRs are still upserted to and from it) but pushes do **not** run semantic-release. No tag is created, no GitHub Release is published, no `.releaserc.json` is written. Use this when an integration branch should accumulate work and auto-promote without producing its own release artifacts. The terminal branch of a stream cannot be `release: none` (validation error).
+- **`prerelease`** — pushes release a prerelease tag using `suffix` as the identifier (e.g. `v1.3.0-dev.4`). Each `suffix` must be unique across all prerelease branches in the repo (otherwise tags collide).
+- **`production`** — pushes release a production tag (e.g. `v1.3.0`). At most one production branch is allowed per stream, and it must be the terminal branch.
 
 ### Valid `auto_merge` entries
 
@@ -206,8 +219,11 @@ A `fix!` entry matches PRs of type `fix` with a breaking change — indicated by
 `pr-conductor` validates `.flywheel.yml` on every run and posts a failing check with a descriptive error if:
 
 - A branch appears in more than one stream — each branch may belong to exactly one stream.
-- More than one branch within the same stream has `prerelease: false` or absent — only the last branch in a stream should be the production release branch.
-- More than one stream has a terminal branch (last branch) with `prerelease: false` and the streams share a publish destination — version collision is likely. A warning (not an error) is emitted with guidance to use distinct `prerelease` identifiers.
+- More than one branch within the same stream has `release: production` — only the last branch in a stream should be the production release branch.
+- More than one stream has a terminal branch (last branch) with `release: production` — tag collision is unavoidable in a single repo. Give all but one stream a prerelease terminal branch.
+- The terminal branch of a stream has `release: none` — the terminal branch must be `release: prerelease` or `release: production`, otherwise the stream never produces a release.
+- A `suffix` is set without `release: prerelease`, or `release: prerelease` is set without a `suffix`.
+- The same `suffix` is used by more than one prerelease branch — tags would collide.
 - An `auto_merge` entry is not a recognized conventional commit type (with or without `!`).
 - A stream contains only one branch — a single-branch stream is valid (immediate release, no promotion) but `pr-conductor` emits an info notice so the user can confirm this is intentional.
 
@@ -232,11 +248,11 @@ main-line stream:      v1.0.1          (tagFormat: v${version})
 customer-acme stream:  customer-acme/v1.0.1   (tagFormat: customer-acme/v${version})
 ```
 
-The first (or only) stream with a terminal `prerelease: false` branch uses the default `v${version}` tag format. All other streams use a prefixed format derived from their stream name. Flywheel generates this automatically — adopters do not configure `tagFormat` directly.
+The first (or only) stream with a terminal `release: production` branch uses the default `v${version}` tag format. All other streams use a prefixed format derived from their stream name. Flywheel generates this automatically — adopters do not configure `tagFormat` directly.
 
 This means the "harmless collision" framing in earlier versions of this spec was incorrect. There is no safe scenario where two streams in the same repo produce the same tag string. The tag format scoping is mandatory and non-optional.
 
-Flywheel emits a validation **error** (not warning) if multiple streams have terminal branches with `prerelease: false` and no tag format disambiguation can be inferred. In practice this means: at most one stream may have the "primary" `v${version}` tag format. All other streams are automatically prefixed.
+Flywheel emits a validation **error** (not warning) if multiple streams have terminal branches with `release: production` and no tag format disambiguation can be inferred. In practice this means: at most one stream may have the "primary" `v${version}` tag format. All other streams are automatically prefixed.
 
 ### JIT computation
 
@@ -254,7 +270,7 @@ main     →  1.3.0
 
 This is enforced by declaring stream branches to semantic-release as an ordered sequence. semantic-release computes pre-release versions relative to the stream's production branch tag history, not independently per branch. The version drift problem (`develop` at `23.4.3-dev.1` while `main` is at `3.6.5`) is structurally impossible within a stream.
 
-The pre-release identifier comes from the `prerelease` field in `.flywheel.yml`. The counter increments automatically via semantic-release's tag inspection.
+The pre-release identifier comes from the `suffix` field in `.flywheel.yml` (set when `release: prerelease`). The counter increments automatically via semantic-release's tag inspection.
 
 ### Increment rules
 
@@ -279,13 +295,41 @@ Non-bumping commits accumulate silently until a qualifying commit lands. They ar
     "@semantic-release/commit-analyzer",
     "@semantic-release/release-notes-generator",
     "@semantic-release/changelog",
+    "@semantic-release/exec",
     ["@semantic-release/git", { "assets": ["CHANGELOG.md"] }],
     "@semantic-release/github"
   ]
 }
 ```
 
-No npm plugin. Adopters who need additional plugins (npm publish, pub.dev, etc.) add them to a `semantic_release_plugins` array in `.flywheel.yml` which gets merged into the generated config.
+No npm plugin. `@semantic-release/exec` is loaded but no-op when no `release_files:` are declared. When `release_files:` are present (see **Release file management** below), Flywheel synthesizes a `prepareCmd` for the exec plugin and extends `@semantic-release/git`'s `assets` list. Adopters never edit `.releaserc.json` directly — a committed `.releaserc.json` is overwritten on every push.
+
+**Release file management:** Many ecosystems carry the version in a checked-in file (Flutter's `pubspec.yaml`, Cargo's `Cargo.toml`, .NET `.csproj`, Gradle, etc.). Adopters declare these in `.flywheel.yml` under `release_files:`; Flywheel turns the entries into `@semantic-release/exec` `prepareCmd` invocations and adds each path to `@semantic-release/git`'s `assets` so the bumped file is committed alongside the changelog.
+
+```yaml
+flywheel:
+  release_files:
+    - path: pubspec.yaml
+      pattern: '^version: .*'
+      replacement: 'version: ${version}+${build}'
+    - path: pyproject.toml
+      cmd: |
+        python bump.py "${version}"
+```
+
+Each entry is a tagged union: either a declarative `{ pattern, replacement }` pair (Flywheel emits a `sed -i.bak -E` invocation) or a freeform `{ cmd }` (Flywheel runs the shell string verbatim after placeholder substitution). Exactly one form per entry; mixing both is a parse-time error. The sed delimiter is `|`, so `pattern` and `replacement` may not contain a literal `|`.
+
+Three placeholders are available in `replacement` and `cmd`:
+
+| Placeholder  | Substituted to                       | Notes                                                                                              |
+| ------------ | ------------------------------------ | -------------------------------------------------------------------------------------------------- |
+| `${version}` | `${nextRelease.version}`             | Full semver string (e.g. `1.2.3`, `1.2.3-rc.1`).                                                   |
+| `${channel}` | `${nextRelease.channel \|\| ''}`     | Prerelease channel (`rc`, `dev`, …); empty string on production releases.                          |
+| `${build}`   | `${BUILD}` (shell variable)          | Monotonic integer = `$(git tag --list 'v*' \| wc -l) + 1`. Required for Play Store / App Store.    |
+
+All entries share a single `prepareCmd` that begins `BUILD=$(( $(git tag --list 'v*' | wc -l) + 1 ))` and `&&`-chains every entry. Failure of any step aborts the release. Plugin order is preserved — `@semantic-release/exec` runs after `@semantic-release/changelog` and before `@semantic-release/git`, so file edits land in the same release commit as the changelog.
+
+The build number is **tag-count-based**: it counts existing `v*` tags repo-wide and adds one. This is monotonic across rc and prod releases (a property the Play Store and App Store require) but is not a "build number per branch" — every release, regardless of channel, increments it. Adopters who need a different scheme should use the `cmd` form to compute their own.
 
 **Branch config:** For each stream, Flywheel generates a `branches` array in stream order. This ordered declaration anchors pre-release versions to the stream's shared version history:
 
@@ -300,7 +344,7 @@ No npm plugin. Adopters who need additional plugins (npm publish, pub.dev, etc.)
 }
 ```
 
-**Tag format scoping:** Each stream gets a unique `tagFormat` to prevent repo-global tag collisions. The primary stream (first stream defined, or only stream with `prerelease: false` terminal branch) uses `v${version}`. All other streams use `{stream-name}/v${version}`:
+**Tag format scoping:** Each stream gets a unique `tagFormat` to prevent repo-global tag collisions. The primary stream (first stream defined, or only stream with `release: production` terminal branch) uses `v${version}`. All other streams use `{stream-name}/v${version}`:
 
 ```json
 {
@@ -309,7 +353,9 @@ No npm plugin. Adopters who need additional plugins (npm publish, pub.dev, etc.)
 }
 ```
 
-**Single-branch streams:** semantic-release requires at least one non-pre-release branch in its config (`ERELEASEBRANCHES` error otherwise). A stream whose only branch has a `prerelease` identifier (e.g. `customer-acme` with `prerelease: acme`) is treated by Flywheel as a release branch — the `prerelease` field in `.flywheel.yml` controls the tag format prefix, not semantic-release's `prerelease` flag. The branch is declared as a normal release branch with a scoped tag format.
+**Single-branch streams:** semantic-release requires at least one non-pre-release branch in its config (`ERELEASEBRANCHES` error otherwise). A stream whose only branch is `release: prerelease` (e.g. `customer-acme` with `suffix: acme`) is treated by Flywheel as a release branch — the `suffix` field in `.flywheel.yml` controls the tag format prefix, not semantic-release's `prerelease` flag. The branch is declared as a normal release branch with a scoped tag format.
+
+**`release: none` branches:** branches with `release: none` are filtered out of the generated `.releaserc.json` `branches` array entirely. They don't appear in any stream's release config and pushes to them skip the semantic-release step (no `.releaserc.json` is written). They still participate in promotion PRs as a normal stream member, and they still receive back-merges from downstream releases (so `CHANGELOG.md` stays in sync).
 
 For repositories with multiple streams, `pr-conductor` detects which stream the current branch belongs to and generates the appropriate `.releaserc.json` scoped to that stream. Each stream runs semantic-release independently.
 
@@ -414,7 +460,7 @@ This determines whether the promotion PR itself gets `flywheel:auto-merge` or `f
 
 ### Distribution
 
-Flywheel is published to the GitHub Actions marketplace as `point-source/flywheel@v1`. Adopters reference it directly — no forking required. The marketplace Action contains `pr-conductor` (TypeScript/Deno). The two thin entrypoint workflow files (`flywheel-pr.yml`, `flywheel-push.yml`) are copied once into the adopting repo.
+Flywheel is published to the GitHub Actions marketplace as `point-source/flywheel@v2`. Adopters reference it directly — no forking required. The marketplace Action contains `pr-conductor` (TypeScript/Deno). The two thin entrypoint workflow files (`flywheel-pr.yml`, `flywheel-push.yml`) are copied once into the adopting repo.
 
 ### What you need
 
@@ -426,7 +472,7 @@ A GitHub App with:
 - Checks: read and write (post the `flywheel/conventional-commit` check)
 - Metadata: read (always required)
 
-Store the App credentials as `FLYWHEEL_GH_APP_ID` + `FLYWHEEL_GH_APP_PRIVATE_KEY` repo secrets and pass them straight into the Flywheel action via the `app-id` and `app-private-key` inputs. The action mints its own installation token internally, validates that the granted permissions match the list above, and exposes the token as a step output for downstream steps that need it (e.g. semantic-release). Adopters do **not** add a separate `actions/create-github-app-token` step.
+Store `FLYWHEEL_GH_APP_ID` as a repo Variable (the App ID is public — it's printed on the App's settings page) and `FLYWHEEL_GH_APP_PRIVATE_KEY` as a repo Secret, then pass them straight into the Flywheel action via the `app-id` and `app-private-key` inputs. The action mints its own installation token internally, validates that the granted permissions match the list above, and exposes the token as a step output for downstream steps that need it (e.g. semantic-release). Adopters do **not** add a separate `actions/create-github-app-token` step.
 
 Personal Access Tokens are not supported — they don't reliably propagate the cross-workflow trigger semantics Flywheel relies on (in particular, native auto-merge enable and downstream workflow firing on bot-created PRs).
 
@@ -464,11 +510,11 @@ jobs:
       (github.event.action != 'edited' || github.event.sender.type == 'User')
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: point-source/flywheel@v1
+      - uses: actions/checkout@v6
+      - uses: point-source/flywheel@v2
         with:
           event: pull_request
-          app-id: ${{ secrets.FLYWHEEL_GH_APP_ID }}
+          app-id: ${{ vars.FLYWHEEL_GH_APP_ID }}
           app-private-key: ${{ secrets.FLYWHEEL_GH_APP_PRIVATE_KEY }}
 ```
 
@@ -486,7 +532,7 @@ jobs:
   release:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
           # Don't persist the workflow's default GITHUB_TOKEN as a git
@@ -494,11 +540,11 @@ jobs:
           # semantic-release embeds in its push URL, and the workflow's
           # token only has read scope here.
           persist-credentials: false
-      - uses: point-source/flywheel@v1
+      - uses: point-source/flywheel@v2
         id: flywheel
         with:
           event: push
-          app-id: ${{ secrets.FLYWHEEL_GH_APP_ID }}
+          app-id: ${{ vars.FLYWHEEL_GH_APP_ID }}
           app-private-key: ${{ secrets.FLYWHEEL_GH_APP_PRIVATE_KEY }}
       - name: Run semantic-release
         # Only runs when pr-conductor confirms this is a managed branch and
@@ -512,6 +558,7 @@ jobs:
             -p @semantic-release/commit-analyzer \
             -p @semantic-release/release-notes-generator \
             -p @semantic-release/changelog \
+            -p @semantic-release/exec \
             -p @semantic-release/git \
             -p @semantic-release/github \
             semantic-release
@@ -543,7 +590,7 @@ jobs:
             if git merge --ff-only "$RELEASED_BRANCH" 2>/dev/null; then
               echo "Fast-forwarded $upstream to $RELEASED_BRANCH."
             else
-              git merge --no-ff -m "chore: back-merge $new_tag from $RELEASED_BRANCH into $upstream [skip ci]" "$RELEASED_BRANCH"
+              git merge --no-ff -m "chore: back-merge $new_tag from $RELEASED_BRANCH into $upstream" "$RELEASED_BRANCH"
             fi
             git push origin "$upstream"
           done
@@ -562,11 +609,11 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: actions/create-github-app-token@v1
         id: app-token
         with:
-          app-id: ${{ secrets.FLYWHEEL_GH_APP_ID }}
+          app-id: ${{ vars.FLYWHEEL_GH_APP_ID }}
           private-key: ${{ secrets.FLYWHEEL_GH_APP_PRIVATE_KEY }}
       - name: Build
         run: ./your-build-script.sh
@@ -620,7 +667,7 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - run: ./your-test-script.sh
 ```
 
@@ -692,7 +739,7 @@ TypeScript, compiled to a single bundled JavaScript file for distribution. Publi
 ## Open questions / deferred decisions
 
 - **Monorepo support:** Multiple independently versioned packages in one repo. The stream model maps directly — each package gets its own stream with an optional `path` field scoping it to a subdirectory. semantic-release manifest mode is the underlying mechanism. Deferred to v2 but the config structure is designed to accommodate it without breaking changes: `path` is simply added as an optional stream-level field.
-- **Cross-stream version collision:** Documented above as a known property of independent streams. Validation warns when multiple streams have `prerelease: false` terminal branches. Deeper tooling (e.g. a publish destination uniqueness check) is out of scope for v1.
+- **Cross-stream version collision:** Documented above as a known property of independent streams. Validation errors when multiple streams have `release: production` terminal branches. Deeper tooling (e.g. a publish destination uniqueness check) is out of scope for v1.
 - **Commit message validation on feature branches:** Flywheel validates PR titles (which become squash commit messages). Individual commit messages on feature branches are not validated. A `commitlint` pre-commit hook or push-triggered check in the adopting repo fills this gap if needed.
 - **Notification hooks:** Out of scope for v1. Implement as steps in user-defined `publish.yml`.
 - **TypeScript compilation:** `pr-conductor` is authored in TypeScript and compiled to a bundled `dist/index.cjs` via `esbuild` before release. The `runs.using: node24` runtime in `action.yml` executes the bundle directly. The compiled output is committed alongside the source so marketplace consumers don't need a build step; a `verify-dist` CI job checks for drift between source and bundle on every PR.

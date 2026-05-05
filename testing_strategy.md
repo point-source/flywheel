@@ -136,26 +136,32 @@ flywheel:
     - name: main-line
       branches:
         - name: e2e-develop
-          prerelease: dev
+          release: prerelease
+          suffix: dev
           auto_merge: [fix, fix!, chore, style, test, docs]
         - name: e2e-staging
-          prerelease: rc
+          release: prerelease
+          suffix: rc
           auto_merge: [fix, chore]
         - name: e2e-main
+          release: production
           auto_merge: []
 
     - name: customer-acme
       branches:
         - name: e2e-customer-acme
+          release: prerelease
+          suffix: acme
           auto_merge: [fix, fix!, chore]
 
     - name: integration
       branches:
         - name: integration-test-base
+          release: prerelease
+          suffix: int
           auto_merge: [fix, chore, perf, style, test]
 
   merge_strategy: squash
-  initial_version: 0.1.0
 ```
 
 Long-lived branches: `e2e-main`, `e2e-staging`, `e2e-develop`,

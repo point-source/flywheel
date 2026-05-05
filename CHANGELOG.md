@@ -1,3 +1,110 @@
+# [2.1.0-dev.13](https://github.com/point-source/flywheel/compare/v2.1.0-dev.12...v2.1.0-dev.13) (2026-05-05)
+
+
+### Bug Fixes
+
+* **e2e:** bump test 07 per-test timeout to 600s ([#56](https://github.com/point-source/flywheel/issues/56)) ([4e4a737](https://github.com/point-source/flywheel/commit/4e4a7379138bc0c5bbbfb548e6247b79c4d9f412))
+
+# [2.1.0-dev.12](https://github.com/point-source/flywheel/compare/v2.1.0-dev.11...v2.1.0-dev.12) (2026-05-05)
+
+
+### Bug Fixes
+
+* **doctor:** hard-fail listing errors; add --skip-credentials ([#54](https://github.com/point-source/flywheel/issues/54)) ([3963225](https://github.com/point-source/flywheel/commit/3963225462a479762538d594a934dffcdb39c93d)), closes [#52](https://github.com/point-source/flywheel/issues/52) [#26](https://github.com/point-source/flywheel/issues/26)
+
+# [2.1.0-dev.11](https://github.com/point-source/flywheel/compare/v2.1.0-dev.10...v2.1.0-dev.11) (2026-05-05)
+
+
+### Bug Fixes
+
+* **e2e:** force-update sandbox refs so sync survives concurrent test merges ([#53](https://github.com/point-source/flywheel/issues/53)) ([5fa85a8](https://github.com/point-source/flywheel/commit/5fa85a829af336e98a94bb9ef9afdee6d68eb632))
+
+# [2.1.0-dev.10](https://github.com/point-source/flywheel/compare/v2.1.0-dev.9...v2.1.0-dev.10) (2026-05-05)
+
+
+### Features
+
+* store GitHub App ID as Actions variable, not secret ([#52](https://github.com/point-source/flywheel/issues/52)) ([b2a1c21](https://github.com/point-source/flywheel/commit/b2a1c210a0e277d1e7a62f6af24c273c103defa2))
+
+# [2.1.0-dev.9](https://github.com/point-source/flywheel/compare/v2.1.0-dev.8...v2.1.0-dev.9) (2026-05-05)
+
+
+### Bug Fixes
+
+* stop emitting skip-ci in release and back-merge commits ([#50](https://github.com/point-source/flywheel/issues/50)) ([cbbfd77](https://github.com/point-source/flywheel/commit/cbbfd7702f854eb64a5d71e92a29588bc0ac928a))
+
+# [2.1.0-dev.8](https://github.com/point-source/flywheel/compare/v2.1.0-dev.7...v2.1.0-dev.8) (2026-05-05)
+
+
+### Bug Fixes
+
+* **init:** persist FLYWHEEL_GH_APP_ID across re-runs to keep ruleset bypass ([#48](https://github.com/point-source/flywheel/issues/48)) ([a75dac6](https://github.com/point-source/flywheel/commit/a75dac6fb6a9c446bd498d4d871cd350882d97d0))
+
+
+### Features
+
+* **e2e:** sync workflow templates + .flywheel.yml fixture into sandbox ([#46](https://github.com/point-source/flywheel/issues/46)) ([f566e5d](https://github.com/point-source/flywheel/commit/f566e5d0d337454199a8e129adc39e6d00aaccb8)), closes [#42](https://github.com/point-source/flywheel/issues/42) [#37](https://github.com/point-source/flywheel/issues/37)
+
+# [2.1.0-dev.7](https://github.com/point-source/flywheel/compare/v2.1.0-dev.6...v2.1.0-dev.7) (2026-05-05)
+
+
+### Bug Fixes
+
+* **workflow:** bundle @semantic-release/exec in dogfood push workflow ([#44](https://github.com/point-source/flywheel/issues/44)) ([79e1858](https://github.com/point-source/flywheel/commit/79e1858ec1f86e43756dcdaa6a64df6bf85bff81)), closes [#42](https://github.com/point-source/flywheel/issues/42) [#42](https://github.com/point-source/flywheel/issues/42) [#43](https://github.com/point-source/flywheel/issues/43)
+
+
+### Features
+
+* **push-flow:** respect committed .releaserc.json + bundle @semantic-release/exec ([#42](https://github.com/point-source/flywheel/issues/42)) ([ac0618a](https://github.com/point-source/flywheel/commit/ac0618a65530bfd9cf10058c79bb99a469828f79))
+
+# [2.1.0-dev.6](https://github.com/point-source/flywheel/compare/v2.1.0-dev.5...v2.1.0-dev.6) (2026-05-05)
+
+
+### Features
+
+* **scripts:** doctor merge_group check + init --force/required-checks prompt + soften legacy keys ([#40](https://github.com/point-source/flywheel/issues/40)) ([cc1c1a7](https://github.com/point-source/flywheel/commit/cc1c1a738a8168b13dfadc7ebe495c57cb4b2fb3))
+
+# [2.1.0-dev.5](https://github.com/point-source/flywheel/compare/v2.1.0-dev.4...v2.1.0-dev.5) (2026-05-05)
+
+
+### Bug Fixes
+
+* **init:** propagate App ID to apply-rulesets.sh ([#38](https://github.com/point-source/flywheel/issues/38)) ([f44ac10](https://github.com/point-source/flywheel/commit/f44ac100cf4df3392219fbe7d12665e383f10bea))
+
+# [2.1.0-dev.4](https://github.com/point-source/flywheel/compare/v2.1.0-dev.3...v2.1.0-dev.4) (2026-05-04)
+
+
+### Features
+
+* **scripts:** auto-delete merged branches and document branch lifecycle ([#36](https://github.com/point-source/flywheel/issues/36)) ([7797e41](https://github.com/point-source/flywheel/commit/7797e41a77d7c2558650def898b446c6e5fe835a))
+
+# [2.1.0-dev.3](https://github.com/point-source/flywheel/compare/v2.1.0-dev.2...v2.1.0-dev.3) (2026-05-04)
+
+
+### Bug Fixes
+
+* **config:** pre-v2.1.0 cleanup — close [#28](https://github.com/point-source/flywheel/issues/28), [#29](https://github.com/point-source/flywheel/issues/29), [#30](https://github.com/point-source/flywheel/issues/30), [#33](https://github.com/point-source/flywheel/issues/33) ([#34](https://github.com/point-source/flywheel/issues/34)) ([3a3ceb0](https://github.com/point-source/flywheel/commit/3a3ceb07a62cdbe84de5d4f8ffc1aa0ae3c2e928))
+
+# [2.1.0-dev.2](https://github.com/point-source/flywheel/compare/v2.1.0-dev.1...v2.1.0-dev.2) (2026-05-04)
+
+
+### Bug Fixes
+
+* **github:** rename $method GraphQL var; bump actions/checkout to v6 ([#32](https://github.com/point-source/flywheel/issues/32)) ([83947ce](https://github.com/point-source/flywheel/commit/83947ce615ad98db921cad656f494607764cf12a))
+
+# [2.1.0-dev.1](https://github.com/point-source/flywheel/compare/v2.0.0...v2.1.0-dev.1) (2026-05-04)
+
+
+### Bug Fixes
+
+* **scripts:** address review findings on PR [#27](https://github.com/point-source/flywheel/issues/27) ([#31](https://github.com/point-source/flywheel/issues/31)) ([34a8b07](https://github.com/point-source/flywheel/commit/34a8b076f5105f62e31c4f5e07f09aa65d0a5d5d))
+
+
+### Features
+
+* **config:** add develop to main-line stream as prerelease channel ([#25](https://github.com/point-source/flywheel/issues/25)) ([b19d1d7](https://github.com/point-source/flywheel/commit/b19d1d700ad20121549f409a5fa33190dc6053c8))
+* **scripts:** adopter setup DX cleanups ([#27](https://github.com/point-source/flywheel/issues/27)) ([90f7438](https://github.com/point-source/flywheel/commit/90f74382c9f99529aef98c61a319c96c7c2f6c09))
+
 # [2.0.0](https://github.com/point-source/flywheel/compare/v1.0.0...v2.0.0) (2026-05-01)
 
 

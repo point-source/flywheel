@@ -2,9 +2,12 @@ export type IncrementType = "major" | "minor" | "patch" | "none";
 
 export type MergeStrategy = "squash" | "rebase";
 
+export type ReleaseMode = "none" | "prerelease" | "production";
+
 export interface Branch {
   name: string;
-  prerelease?: string | false;
+  release: ReleaseMode;
+  suffix?: string;
   auto_merge: string[];
 }
 
@@ -13,11 +16,23 @@ export interface Stream {
   branches: Branch[];
 }
 
+export interface ReleaseFileDeclarative {
+  path: string;
+  pattern: string;
+  replacement: string;
+}
+
+export interface ReleaseFileExec {
+  path: string;
+  cmd: string;
+}
+
+export type ReleaseFile = ReleaseFileDeclarative | ReleaseFileExec;
+
 export interface FlywheelConfig {
   streams: Stream[];
   merge_strategy: MergeStrategy;
-  initial_version: string;
-  semantic_release_plugins?: unknown[];
+  release_files?: ReleaseFile[];
 }
 
 export interface ParsedTitle {

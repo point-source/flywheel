@@ -27792,12 +27792,13 @@ function isBumping(type2, breaking) {
 var TOP_LEVEL_KEYS = /* @__PURE__ */ new Set([
   "streams",
   "merge_strategy",
-  "initial_version",
-  "semantic_release_plugins"
+  "release_files"
 ]);
-var BRANCH_KEYS = /* @__PURE__ */ new Set(["name", "prerelease", "auto_merge"]);
+var BRANCH_KEYS = /* @__PURE__ */ new Set(["name", "release", "suffix", "auto_merge"]);
 var STREAM_KEYS = /* @__PURE__ */ new Set(["name", "branches"]);
+var RELEASE_FILE_KEYS = /* @__PURE__ */ new Set(["path", "pattern", "replacement", "cmd"]);
 var MERGE_STRATEGIES = /* @__PURE__ */ new Set(["squash", "rebase"]);
+var RELEASE_MODES = /* @__PURE__ */ new Set(["none", "prerelease", "production"]);
 function loadConfig(yamlText) {
   const errors = [];
   const warnings = [];
@@ -27828,11 +27829,7 @@ function loadConfig(yamlText) {
   }
   const streams = parseStreams(root.streams, errors);
   const mergeStrategy = parseMergeStrategy(root.merge_strategy, errors);
-  const initialVersion = parseInitialVersion(root.initial_version, errors);
-  const semanticReleasePlugins = parseSemanticReleasePlugins(
-    root.semantic_release_plugins,
-    errors
-  );
+  const releaseFiles = parseReleaseFiles(root.release_files, errors);
   if (streams && streams.length > 0) {
     validateStreams(streams, errors, notices);
   }
@@ -27843,8 +27840,7 @@ function loadConfig(yamlText) {
     config: {
       streams,
       merge_strategy: mergeStrategy,
-      initial_version: initialVersion,
-      ...semanticReleasePlugins ? { semantic_release_plugins: semanticReleasePlugins } : {}
+      ...releaseFiles ? { release_files: releaseFiles } : {}
     },
     errors,
     warnings,
@@ -27900,7 +27896,7 @@ function parseStream(value, idx, errors) {
 }
 function parseBranch(value, path, errors) {
   if (!isObject2(value)) {
-    errors.push(`${path}: must be an object with name + auto_merge.`);
+    errors.push(`${path}: must be an object with name + release + auto_merge.`);
     return null;
   }
   for (const key of Object.keys(value)) {
@@ -27915,21 +27911,22 @@ function parseBranch(value, path, errors) {
     errors.push(`${path}.name: required string.`);
     return null;
   }
-  let prerelease;
-  if (value.prerelease === void 0 || value.prerelease === false) {
-    prerelease = false;
-  } else if (typeof value.prerelease === "string" && value.prerelease.length > 0) {
-    prerelease = value.prerelease;
-  } else if (value.prerelease === true) {
+  const release = parseReleaseMode(value.release, `${path}.release`, errors);
+  let suffix;
+  if (value.suffix !== void 0) {
+    if (typeof value.suffix !== "string" || value.suffix.length === 0) {
+      errors.push(`${path}.suffix: must be a non-empty string identifier (e.g. "dev").`);
+    } else {
+      suffix = value.suffix;
+    }
+  }
+  if (release === "prerelease" && suffix === void 0) {
+    errors.push(`${path}.suffix: required when release is "prerelease".`);
+  }
+  if (release !== "prerelease" && suffix !== void 0) {
     errors.push(
-      `${path}.prerelease: must be a non-empty string identifier (e.g. "dev"), false, or absent.`
+      `${path}.suffix: only valid when release is "prerelease" (got release: "${release}").`
     );
-    prerelease = false;
-  } else {
-    errors.push(
-      `${path}.prerelease: must be a non-empty string identifier (e.g. "dev"), false, or absent.`
-    );
-    prerelease = false;
   }
   const autoMergeRaw = value.auto_merge;
   if (!Array.isArray(autoMergeRaw)) {
@@ -27952,7 +27949,97 @@ function parseBranch(value, path, errors) {
     }
     autoMerge.push(entry);
   });
-  return { name, ...prerelease === false ? {} : { prerelease }, auto_merge: autoMerge };
+  return {
+    name,
+    release,
+    ...suffix === void 0 ? {} : { suffix },
+    auto_merge: autoMerge
+  };
+}
+function parseReleaseMode(value, path, errors) {
+  if (value === void 0) {
+    errors.push(`${path}: required. Allowed: ${[...RELEASE_MODES].join(", ")}.`);
+    return "production";
+  }
+  if (typeof value !== "string" || !RELEASE_MODES.has(value)) {
+    errors.push(
+      `${path}: must be one of ${[...RELEASE_MODES].join(", ")} (got ${JSON.stringify(value)}).`
+    );
+    return "production";
+  }
+  return value;
+}
+function parseReleaseFiles(value, errors) {
+  if (value === void 0) return void 0;
+  if (!Array.isArray(value)) {
+    errors.push("flywheel.release_files: must be a list of file-edit entries.");
+    return void 0;
+  }
+  if (value.length === 0) {
+    errors.push("flywheel.release_files: if present, must be a non-empty list (omit the key entirely to disable).");
+    return void 0;
+  }
+  const parsed = [];
+  value.forEach((item, idx) => {
+    const path = `flywheel.release_files[${idx}]`;
+    if (!isObject2(item)) {
+      errors.push(`${path}: must be an object.`);
+      return;
+    }
+    for (const key of Object.keys(item)) {
+      if (!RELEASE_FILE_KEYS.has(key)) {
+        errors.push(
+          `${path}.${key}: unknown key. Allowed: ${[...RELEASE_FILE_KEYS].sort().join(", ")}.`
+        );
+      }
+    }
+    const filePath = item.path;
+    if (typeof filePath !== "string" || filePath.length === 0) {
+      errors.push(`${path}.path: required non-empty string.`);
+      return;
+    }
+    const hasPattern = item.pattern !== void 0 || item.replacement !== void 0;
+    const hasCmd = item.cmd !== void 0;
+    if (hasPattern && hasCmd) {
+      errors.push(
+        `${path}: must use either { pattern, replacement } or { cmd }, not both.`
+      );
+      return;
+    }
+    if (!hasPattern && !hasCmd) {
+      errors.push(
+        `${path}: must declare either { pattern, replacement } (declarative) or { cmd } (exec).`
+      );
+      return;
+    }
+    if (hasPattern) {
+      const pattern = item.pattern;
+      const replacement = item.replacement;
+      if (typeof pattern !== "string" || pattern.length === 0) {
+        errors.push(`${path}.pattern: required non-empty string when using declarative form.`);
+        return;
+      }
+      if (typeof replacement !== "string") {
+        errors.push(`${path}.replacement: required string when using declarative form.`);
+        return;
+      }
+      if (pattern.includes("|") || replacement.includes("|")) {
+        errors.push(
+          `${path}: pattern/replacement may not contain "|" \u2014 Flywheel uses "|" as the sed delimiter.`
+        );
+        return;
+      }
+      parsed.push({ path: filePath, pattern, replacement });
+    } else {
+      const cmd = item.cmd;
+      if (typeof cmd !== "string" || cmd.length === 0) {
+        errors.push(`${path}.cmd: required non-empty string when using exec form.`);
+        return;
+      }
+      parsed.push({ path: filePath, cmd });
+    }
+  });
+  return parsed.length > 0 ? parsed : void 0;
 }
 function parseMergeStrategy(value, errors) {
   if (value === void 0) return "squash";
@@ -27964,25 +28051,16 @@ function parseMergeStrategy(value, errors) {
   }
   return value;
 }
-function parseInitialVersion(value, errors) {
-  if (value === void 0) return "0.1.0";
-  if (typeof value !== "string" || !/^\d+\.\d+\.\d+$/.test(value)) {
-    errors.push(
-      `flywheel.initial_version: must be a semver string like "0.1.0" (got ${JSON.stringify(value)}).`
-    );
-    return "0.1.0";
-  }
-  return value;
-}
-function parseSemanticReleasePlugins(value, errors) {
-  if (value === void 0) return void 0;
-  if (!Array.isArray(value)) {
-    errors.push("flywheel.semantic_release_plugins: must be a list if present.");
-    return void 0;
-  }
-  return value;
-}
 function validateStreams(streams, errors, notices) {
+  const streamNameCounts = /* @__PURE__ */ new Map();
+  for (const s of streams) {
+    streamNameCounts.set(s.name, (streamNameCounts.get(s.name) ?? 0) + 1);
+  }
+  for (const [name, count] of streamNameCounts) {
+    if (count > 1) {
+      errors.push(`duplicate stream name: "${name}".`);
+    }
+  }
   const branchOwners = /* @__PURE__ */ new Map();
   for (const s of streams) {
     for (const b of s.branches) {
@@ -27998,24 +28076,47 @@ function validateStreams(streams, errors, notices) {
       );
     }
   }
+  const suffixOwners = /* @__PURE__ */ new Map();
   for (const s of streams) {
-    const productionBranches = s.branches.filter(
-      (b) => b.prerelease === false || b.prerelease === void 0
-    );
+    for (const b of s.branches) {
+      if (b.release === "prerelease" && typeof b.suffix === "string") {
+        const spots = suffixOwners.get(b.suffix) ?? [];
+        spots.push(`${s.name}/${b.name}`);
+        suffixOwners.set(b.suffix, spots);
+      }
+    }
+  }
+  for (const [label, spots] of suffixOwners) {
+    if (spots.length > 1) {
+      errors.push(
+        `suffix "${label}" used by multiple prerelease branches (${spots.join(", ")}) \u2014 tags would collide.`
+      );
+    }
+  }
+  for (const s of streams) {
+    const productionBranches = s.branches.filter((b) => b.release === "production");
     if (productionBranches.length > 1) {
       errors.push(
-        `stream "${s.name}": multiple branches without a prerelease identifier (${productionBranches.map((b) => b.name).join(", ")}). Only the last branch in a stream should be the production release branch.`
+        `stream "${s.name}": multiple production branches (${productionBranches.map((b) => b.name).join(", ")}). Only the last branch in a stream should be the production release branch.`
       );
     }
   }
   const productionTerminalStreams = streams.filter((s) => {
     const last = s.branches[s.branches.length - 1];
-    return last && (last.prerelease === false || last.prerelease === void 0);
+    return last && last.release === "production";
   });
   if (productionTerminalStreams.length > 1) {
     errors.push(
-      `multiple streams have a terminal production branch (no prerelease): ${productionTerminalStreams.map((s) => s.name).join(", ")}. Tag collision is unavoidable in a single repo. Give all but one stream a \`prerelease\` identifier on its terminal branch.`
+      `multiple streams have a terminal production branch: ${productionTerminalStreams.map((s) => s.name).join(", ")}. Tag collision is unavoidable in a single repo. Give all but one stream a prerelease terminal branch.`
     );
+  }
+  for (const s of streams) {
+    const last = s.branches[s.branches.length - 1];
+    if (last && last.release === "none") {
+      errors.push(
+        `stream "${s.name}": terminal branch "${last.name}" has release: none. The terminal branch must be release: prerelease or release: production \u2014 otherwise the stream never produces a release.`
+      );
+    }
   }
   for (const s of streams) {
     if (s.branches.length === 1) {
@@ -28069,12 +28170,12 @@ function createGitHubClient(token, repoFullName) {
     async enableAutoMerge(pullRequestId, mergeMethod2) {
       try {
         await octokit.graphql(
-          `mutation Enable($id: ID!, $method: PullRequestMergeMethod!) {
-            enablePullRequestAutoMerge(input: { pullRequestId: $id, mergeMethod: $method }) {
+          `mutation Enable($id: ID!, $mergeMethod: PullRequestMergeMethod!) {
+            enablePullRequestAutoMerge(input: { pullRequestId: $id, mergeMethod: $mergeMethod }) {
               pullRequest { id }
             }
           }`,
-          { id: pullRequestId, method: mergeMethod2 }
+          { id: pullRequestId, mergeMethod: mergeMethod2 }
         );
         return { ok: true };
       } catch (err) {
@@ -28362,20 +28463,77 @@ var import_promises = require("node:fs/promises");
 var import_node_path = require("node:path");
 
 // src/release-rc.ts
+var EXEC_PLUGIN = "@semantic-release/exec";
+var GIT_PLUGIN = "@semantic-release/git";
 var DEFAULT_PLUGINS = [
   "@semantic-release/commit-analyzer",
   "@semantic-release/release-notes-generator",
   "@semantic-release/changelog",
-  ["@semantic-release/git", { assets: ["CHANGELOG.md"] }],
+  // No-op when release_files is unset; replaced inline with a configured
+  // [EXEC_PLUGIN, { prepareCmd }] entry when release_files declares any files.
+  // Plugin position is load-bearing: prepareCmd must run before
+  // @semantic-release/git commits the assets.
+  EXEC_PLUGIN,
+  // `message` overrides the plugin's default, which appends `[skip ci]` to the
+  // chore(release) commit. We don't want that token: GitHub Actions treats
+  // `[skip ci]` as a workflow-level commit-message filter, which leaves
+  // required status checks in `Pending` forever on any PR whose head is the
+  // release commit (e.g. promotion PRs tracking a stream's source branch).
+  // Job-level `if:` in adopter quality workflows is the correct way to skip
+  // work on these commits — a job-level skip reports `success` to the
+  // required-checks rule. See:
+  // https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/collaborating-on-repositories-with-code-quality-features/troubleshooting-required-status-checks#handling-skipped-but-required-checks
+  [
+    GIT_PLUGIN,
+    {
+      assets: ["CHANGELOG.md"],
+      message: "chore(release): ${nextRelease.version}\n\n${nextRelease.notes}"
+    }
+  ],
   "@semantic-release/github"
 ];
 function generateReleaseRc(targetStream, config) {
   const tagFormat = chooseTagFormat(targetStream, config.streams);
-  const branches = targetStream.branches.map(
-    (b) => mapBranch(b, targetStream.branches.length === 1)
-  );
-  const plugins = mergePlugins(config.semantic_release_plugins);
+  const releasingBranches = targetStream.branches.filter((b) => b.release !== "none");
+  const branches = releasingBranches.map((b) => mapBranch(b, releasingBranches.length === 1)).filter((b) => b !== null);
+  const plugins = buildPlugins(config.release_files);
   return { tagFormat, branches, plugins };
+}
+function buildPlugins(releaseFiles) {
+  if (!releaseFiles || releaseFiles.length === 0) {
+    return [...DEFAULT_PLUGINS];
+  }
+  const prepareCmd = buildPrepareCmd(releaseFiles);
+  const extraAssets = releaseFiles.map((f) => f.path);
+  return DEFAULT_PLUGINS.map((entry) => {
+    if (entry === EXEC_PLUGIN) {
+      return [EXEC_PLUGIN, { prepareCmd }];
+    }
+    if (Array.isArray(entry) && entry[0] === GIT_PLUGIN) {
+      const config = entry[1];
+      const merged = [...config.assets];
+      for (const path of extraAssets) {
+        if (!merged.includes(path)) merged.push(path);
+      }
+      return [GIT_PLUGIN, { ...config, assets: merged }];
+    }
+    return entry;
+  });
+}
+function buildPrepareCmd(releaseFiles) {
+  const buildPrefix = "BUILD=$(( $(git tag --list 'v*' | wc -l) + 1 ))";
+  const parts = releaseFiles.map(renderEntry);
+  return [buildPrefix, ...parts].join(" && ");
+}
+function renderEntry(entry) {
+  if ("cmd" in entry) {
+    return substitutePlaceholders(entry.cmd);
+  }
+  const replacement = substitutePlaceholders(entry.replacement);
+  return `sed -i.bak -E "s|${entry.pattern}|${replacement}|" ${entry.path} && rm ${entry.path}.bak`;
+}
+function substitutePlaceholders(input) {
+  return input.replace(/\$\{version\}/g, "${nextRelease.version}").replace(/\$\{channel\}/g, "${nextRelease.channel || ''}").replace(/\$\{build\}/g, "${BUILD}");
 }
 function chooseTagFormat(target, allStreams) {
   const primary = pickPrimaryStream(allStreams);
@@ -28388,22 +28546,18 @@ function pickPrimaryStream(allStreams) {
 }
 function isProductionTerminal(stream) {
   const last = stream.branches[stream.branches.length - 1];
-  return Boolean(last) && (last.prerelease === false || last.prerelease === void 0);
+  return Boolean(last) && last.release === "production";
 }
 function mapBranch(branch, isOnlyBranchInStream) {
-  const hasPrerelease = branch.prerelease !== void 0 && branch.prerelease !== false && typeof branch.prerelease === "string";
-  if (isOnlyBranchInStream && hasPrerelease) {
+  if (branch.release === "none") return null;
+  if (isOnlyBranchInStream && branch.release === "prerelease") {
     return { name: branch.name };
   }
-  if (hasPrerelease) {
-    const id = branch.prerelease;
+  if (branch.release === "prerelease") {
+    const id = branch.suffix;
     return { name: branch.name, prerelease: id, channel: id };
   }
   return { name: branch.name };
-}
-function mergePlugins(extra) {
-  if (!extra || extra.length === 0) return [...DEFAULT_PLUGINS];
-  return [...DEFAULT_PLUGINS, ...extra];
 }
 
 // src/push-flow.ts
@@ -28414,6 +28568,13 @@ async function runPushFlow(deps) {
       `push: branch ${deps.branchRef} is not in any stream \u2014 release flow skipped.`
     );
     return { kind: "unmanaged", reason: "branch-not-in-stream" };
+  }
+  const branch = stream.branches.find((b) => b.name === deps.branchRef);
+  if (branch.release === "none") {
+    deps.log.info(
+      `push: branch ${deps.branchRef} is in stream ${stream.name} but release: none \u2014 skipping semantic-release.`
+    );
+    return { kind: "promote-only", stream };
   }
   const rc = generateReleaseRc(stream, deps.config);
   const rcPath = (0, import_node_path.join)(deps.workspace, ".releaserc.json");

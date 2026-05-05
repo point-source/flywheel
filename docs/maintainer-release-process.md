@@ -16,7 +16,7 @@ Non-bumping types (`chore`, `style`, `test`, `docs`, `ci`, `build`, `refactor`) 
 
 ## Major-tag floating
 
-The `release-major-tag.yml` workflow runs on `release: published` and re-points the floating major tag (`v1`, `v2`, …) to the new release SHA. This is the standard marketplace pattern — adopters reference `point-source/flywheel@v1` and get the latest 1.x release on every workflow run.
+The `release-major-tag.yml` workflow runs on `release: published` and re-points the floating major tag (`v1`, `v2`, …) to the new release SHA. This is the standard marketplace pattern — adopters reference `point-source/flywheel@v2` and get the latest 2.x release on every workflow run.
 
 You should not need to touch this. It runs automatically. The only manual case is the **first** release, before the workflow exists or before `v1` exists at all — see "First-release bootstrap" below.
 
@@ -34,11 +34,11 @@ The first release of Flywheel cannot use the marketplace listing because the lis
    ```
 
 4. **Submit to the marketplace** via the GitHub UI on the v1.0.0 release page. Required: `action.yml` with `name`, `description`, `branding` (already present).
-5. **Open a follow-up PR** flipping `flywheel-pr.yml` and `flywheel-push.yml` from `uses: ./` to `uses: point-source/flywheel@v1`. From here on, flywheel consumes itself from the marketplace, and the `release-major-tag.yml` workflow keeps `v1` floating automatically.
+5. **Open a follow-up PR** flipping `flywheel-pr.yml` and `flywheel-push.yml` from `uses: ./` to `uses: point-source/flywheel@v1`. From here on, flywheel consumes itself from the marketplace, and the `release-major-tag.yml` workflow keeps the floating major tag updated automatically.
 
 ## Versioning across streams
 
-Flywheel currently has a single stream (`main-line`) with a single branch (`main`). If a customer-variant stream is ever added, its tags would be prefixed (e.g. `customer-acme/v1.2.3`) and the major-float workflow handles both formats — see the regex in `.github/workflows/release-major-tag.yml`.
+Flywheel currently has a single stream (`main-line`) with `develop → main` — develop cuts `v*-dev.N` prereleases; main cuts the real release and back-merges the chore(release) commit + tag back to develop. If a customer-variant stream is ever added, its tags would be prefixed (e.g. `customer-acme/v1.2.3`) and the major-float workflow handles both formats — see the regex in `.github/workflows/release-major-tag.yml`.
 
 ## Rolling back
 

@@ -1,4 +1,9 @@
-import type { Branch, FlywheelConfig, Stream } from "./types.js";
+import type {
+  Branch,
+  FlywheelConfig,
+  ReleaseFile,
+  Stream,
+} from "./types.js";
 
 export interface SemanticReleaseBranch {
   name: string;
@@ -12,11 +17,34 @@ export interface ReleaseRc {
   plugins: unknown[];
 }
 
+const EXEC_PLUGIN = "@semantic-release/exec";
+const GIT_PLUGIN = "@semantic-release/git";
+
 const DEFAULT_PLUGINS: unknown[] = [
   "@semantic-release/commit-analyzer",
   "@semantic-release/release-notes-generator",
   "@semantic-release/changelog",
-  ["@semantic-release/git", { assets: ["CHANGELOG.md"] }],
+  // No-op when release_files is unset; replaced inline with a configured
+  // [EXEC_PLUGIN, { prepareCmd }] entry when release_files declares any files.
+  // Plugin position is load-bearing: prepareCmd must run before
+  // @semantic-release/git commits the assets.
+  EXEC_PLUGIN,
+  // `message` overrides the plugin's default, which appends `[skip ci]` to the
+  // chore(release) commit. We don't want that token: GitHub Actions treats
+  // `[skip ci]` as a workflow-level commit-message filter, which leaves
+  // required status checks in `Pending` forever on any PR whose head is the
+  // release commit (e.g. promotion PRs tracking a stream's source branch).
+  // Job-level `if:` in adopter quality workflows is the correct way to skip
+  // work on these commits — a job-level skip reports `success` to the
+  // required-checks rule. See:
+  // https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/collaborating-on-repositories-with-code-quality-features/troubleshooting-required-status-checks#handling-skipped-but-required-checks
+  [
+    GIT_PLUGIN,
+    {
+      assets: ["CHANGELOG.md"],
+      message: "chore(release): ${nextRelease.version}\n\n${nextRelease.notes}",
+    },
+  ],
   "@semantic-release/github",
 ];
 
@@ -25,11 +53,64 @@ export function generateReleaseRc(
   config: FlywheelConfig,
 ): ReleaseRc {
   const tagFormat = chooseTagFormat(targetStream, config.streams);
-  const branches = targetStream.branches.map((b) =>
-    mapBranch(b, targetStream.branches.length === 1),
-  );
-  const plugins = mergePlugins(config.semantic_release_plugins);
+  const releasingBranches = targetStream.branches.filter((b) => b.release !== "none");
+  const branches = releasingBranches
+    .map((b) => mapBranch(b, releasingBranches.length === 1))
+    .filter((b): b is SemanticReleaseBranch => b !== null);
+  const plugins = buildPlugins(config.release_files);
   return { tagFormat, branches, plugins };
+}
+
+function buildPlugins(releaseFiles: ReleaseFile[] | undefined): unknown[] {
+  if (!releaseFiles || releaseFiles.length === 0) {
+    return [...DEFAULT_PLUGINS];
+  }
+  const prepareCmd = buildPrepareCmd(releaseFiles);
+  const extraAssets = releaseFiles.map((f) => f.path);
+  return DEFAULT_PLUGINS.map((entry) => {
+    if (entry === EXEC_PLUGIN) {
+      return [EXEC_PLUGIN, { prepareCmd }];
+    }
+    if (Array.isArray(entry) && entry[0] === GIT_PLUGIN) {
+      const config = entry[1] as { assets: string[]; message: string };
+      const merged = [...config.assets];
+      for (const path of extraAssets) {
+        if (!merged.includes(path)) merged.push(path);
+      }
+      return [GIT_PLUGIN, { ...config, assets: merged }];
+    }
+    return entry;
+  });
+}
+
+// Build a single shell command that bumps every release_files entry.
+// Single BUILD= prefix shared across entries; && chains so any failure aborts.
+// semantic-release's @semantic-release/exec templates the string with Lodash
+// at runtime — that's what expands ${nextRelease.version} and ${nextRelease.channel || ''}.
+// $BUILD is a bash variable assigned inline; semantic-release passes it through
+// untouched because it doesn't match Lodash's interpolate syntax.
+function buildPrepareCmd(releaseFiles: ReleaseFile[]): string {
+  const buildPrefix = "BUILD=$(( $(git tag --list 'v*' | wc -l) + 1 ))";
+  const parts = releaseFiles.map(renderEntry);
+  return [buildPrefix, ...parts].join(" && ");
+}
+
+function renderEntry(entry: ReleaseFile): string {
+  if ("cmd" in entry) {
+    return substitutePlaceholders(entry.cmd);
+  }
+  const replacement = substitutePlaceholders(entry.replacement);
+  return (
+    `sed -i.bak -E "s|${entry.pattern}|${replacement}|" ${entry.path}` +
+    ` && rm ${entry.path}.bak`
+  );
+}
+
+function substitutePlaceholders(input: string): string {
+  return input
+    .replace(/\$\{version\}/g, "${nextRelease.version}")
+    .replace(/\$\{channel\}/g, "${nextRelease.channel || ''}")
+    .replace(/\$\{build\}/g, "${BUILD}");
 }
 
 export function chooseTagFormat(target: Stream, allStreams: Stream[]): string {
@@ -46,32 +127,24 @@ function pickPrimaryStream(allStreams: Stream[]): Stream {
 
 function isProductionTerminal(stream: Stream): boolean {
   const last = stream.branches[stream.branches.length - 1];
-  return Boolean(last) && (last!.prerelease === false || last!.prerelease === undefined);
+  return Boolean(last) && last!.release === "production";
 }
 
-function mapBranch(branch: Branch, isOnlyBranchInStream: boolean): SemanticReleaseBranch {
-  const hasPrerelease =
-    branch.prerelease !== undefined &&
-    branch.prerelease !== false &&
-    typeof branch.prerelease === "string";
+function mapBranch(branch: Branch, isOnlyBranchInStream: boolean): SemanticReleaseBranch | null {
+  if (branch.release === "none") return null;
 
-  if (isOnlyBranchInStream && hasPrerelease) {
+  if (isOnlyBranchInStream && branch.release === "prerelease") {
     // Single-branch stream with prerelease identifier: per spec §Single-branch streams,
-    // treat as a regular release branch — the prerelease identifier is captured by the
-    // scoped tagFormat, not semantic-release's prerelease flag (which would otherwise
+    // treat as a regular release branch — the suffix is captured by the scoped
+    // tagFormat, not semantic-release's prerelease flag (which would otherwise
     // throw ERELEASEBRANCHES).
     return { name: branch.name };
   }
 
-  if (hasPrerelease) {
-    const id = branch.prerelease as string;
+  if (branch.release === "prerelease") {
+    const id = branch.suffix!;
     return { name: branch.name, prerelease: id, channel: id };
   }
 
   return { name: branch.name };
-}
-
-function mergePlugins(extra: unknown[] | undefined): unknown[] {
-  if (!extra || extra.length === 0) return [...DEFAULT_PLUGINS];
-  return [...DEFAULT_PLUGINS, ...extra];
 }

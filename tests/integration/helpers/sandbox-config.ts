@@ -12,15 +12,17 @@ export const sandboxConfig: FlywheelConfig = {
       branches: [
         {
           name: "e2e-develop",
-          prerelease: "dev",
+          release: "prerelease",
+          suffix: "dev",
           auto_merge: ["fix", "fix!", "chore", "style", "test", "docs"],
         },
         {
           name: "e2e-staging",
-          prerelease: "rc",
+          release: "prerelease",
+          suffix: "rc",
           auto_merge: ["fix", "chore"],
         },
-        { name: "e2e-main", auto_merge: [] },
+        { name: "e2e-main", release: "production", auto_merge: [] },
       ],
     },
     {
@@ -28,7 +30,8 @@ export const sandboxConfig: FlywheelConfig = {
       branches: [
         {
           name: "e2e-customer-acme",
-          prerelease: "acme",
+          release: "prerelease",
+          suffix: "acme",
           auto_merge: ["fix", "fix!", "chore"],
         },
       ],
@@ -38,12 +41,12 @@ export const sandboxConfig: FlywheelConfig = {
       branches: [
         {
           name: "integration-test-base",
-          prerelease: "int",
+          release: "prerelease",
+          suffix: "int",
           auto_merge: ["fix", "chore", "perf", "style", "test"],
         },
       ],
     },
   ],
   merge_strategy: "squash",
-  initial_version: "0.1.0",
 };

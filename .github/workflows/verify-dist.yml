@@ -7,13 +7,19 @@ jobs:
   verify:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: actions/setup-node@v4
         with:
           node-version: "24"
       - run: npm ci
       - run: npm run typecheck
       - run: npm test
+        # tests/init.test.ts skips when `gh auth status` fails; pass the
+        # workflow's default token so it runs in CI. Default GITHUB_TOKEN
+        # has contents:read only, so init.sh's `gh api PATCH delete_branch_on_merge`
+        # call fails silently — that's the desired no-side-effect behavior.
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Rebuild bundle and check for drift
         run: |
           npm run build

@@ -9,7 +9,7 @@ jobs:
   release:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
           # Don't persist the workflow's default GITHUB_TOKEN as a git
@@ -21,7 +21,7 @@ jobs:
         id: flywheel
         with:
           event: push
-          app-id: ${{ secrets.FLYWHEEL_GH_APP_ID }}
+          app-id: ${{ vars.FLYWHEEL_GH_APP_ID }}
           app-private-key: ${{ secrets.FLYWHEEL_GH_APP_PRIVATE_KEY }}
       - name: Run semantic-release
         if: steps.flywheel.outputs.managed_branch == 'true'
@@ -33,6 +33,7 @@ jobs:
             -p @semantic-release/commit-analyzer \
             -p @semantic-release/release-notes-generator \
             -p @semantic-release/changelog \
+            -p @semantic-release/exec \
             -p @semantic-release/git \
             -p @semantic-release/github \
             semantic-release
@@ -43,8 +44,15 @@ jobs:
         # HEAD by semantic-release) and the stream has upstream branches.
         # Brings the chore(release) commit + tag into each upstream's ancestry
         # so semantic-release sees the latest tag and the CHANGELOG stays in
-        # sync. The merge commit carries [skip ci] so the resulting push to
-        # the upstream branch does not retrigger this workflow.
+        # sync. The push will retrigger this workflow on the upstream branch;
+        # that re-run is intentional and a no-op in steady state — semantic-
+        # release sees the freshly back-merged tag at HEAD and exits without
+        # publishing a new release. We deliberately do *not* mark the merge
+        # commit `[skip ci]`: that token is a workflow-level filter, which
+        # would leave required status checks `Pending` on any promotion PR
+        # tracking the upstream branch. Adopters who want to skip CI work on
+        # back-merge commits should use a job-level `if:` in their quality
+        # workflows (which reports `success` and clears the gate).
         if: |
           steps.flywheel.outputs.managed_branch == 'true' &&
           steps.flywheel.outputs.back_merge_targets != ''
@@ -71,7 +79,7 @@ jobs:
             if git merge --ff-only "$RELEASED_BRANCH" 2>/dev/null; then
               echo "Fast-forwarded $upstream to $RELEASED_BRANCH."
             else
-              git merge --no-ff -m "chore: back-merge $new_tag from $RELEASED_BRANCH into $upstream [skip ci]" "$RELEASED_BRANCH"
+              git merge --no-ff -m "chore: back-merge $new_tag from $RELEASED_BRANCH into $upstream" "$RELEASED_BRANCH"
             fi
             git push origin "$upstream"
             echo "::endgroup::"

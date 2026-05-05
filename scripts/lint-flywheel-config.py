@@ -12,7 +12,6 @@
 # result to its own colored output / fail-count. Always exits 0 — the
 # wrapper inspects RESULT FAIL lines to decide overall pass/fail. A
 # nonzero exit only indicates the script itself crashed.
-import re
 import sys
 
 import yaml
@@ -22,8 +21,12 @@ VALID_TYPES = {
     "style", "test", "docs", "build", "ci", "revert",
 }
 VALID_AUTO_MERGE_KEYS = VALID_TYPES | {f"{t}!" for t in VALID_TYPES}
-VALID_MERGE_STRATEGIES = {"squash", "merge", "rebase"}
-SEMVER_RE = re.compile(r"^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$")
+VALID_MERGE_STRATEGIES = {"squash", "rebase"}
+VALID_TOP_LEVEL_KEYS = {"streams", "merge_strategy", "release_files"}
+VALID_STREAM_KEYS = {"name", "branches"}
+VALID_BRANCH_KEYS = {"name", "release", "suffix", "auto_merge"}
+VALID_RELEASE_FILE_KEYS = {"path", "pattern", "replacement", "cmd"}
+VALID_RELEASE_MODES = {"none", "prerelease", "production"}
 
 
 def emit(status, msg):
@@ -50,6 +53,9 @@ def main():
         return
 
     root = data["flywheel"]
+    for k in root:
+        if k not in VALID_TOP_LEVEL_KEYS:
+            emit("FAIL", f"flywheel.{k}: unknown key — allowed: {', '.join(sorted(VALID_TOP_LEVEL_KEYS))}")
     streams = root.get("streams") or []
     if not streams:
         emit("FAIL", ".flywheel.yml has no streams[]")
@@ -58,26 +64,52 @@ def main():
 
     all_branches = []
     branch_to_streams = {}
-    prerelease_to_branches = {}
+    suffix_to_branches = {}
     stream_names = []
+    production_terminal_streams = []
 
     for s_idx, s in enumerate(streams):
+        if isinstance(s, dict):
+            for k in s:
+                if k not in VALID_STREAM_KEYS:
+                    emit("FAIL", f"stream #{s_idx}.{k}: unknown key — allowed: {', '.join(sorted(VALID_STREAM_KEYS))}")
         sname = s.get("name") or f"<unnamed stream #{s_idx}>"
         stream_names.append(sname)
         sbranches = s.get("branches") or []
         if not sbranches:
             emit("FAIL", f"stream {sname!r} has no branches")
             continue
+        production_in_stream = []
         for b_idx, b in enumerate(sbranches):
+            if isinstance(b, dict):
+                for k in b:
+                    if k not in VALID_BRANCH_KEYS:
+                        emit("FAIL", f"stream {sname!r} branch #{b_idx}.{k}: unknown key — allowed: {', '.join(sorted(VALID_BRANCH_KEYS))} (did you mean 'auto_merge' instead of 'auto-merge'?)")
             bname = b.get("name")
             if not bname:
                 emit("FAIL", f"stream {sname!r} branch #{b_idx} missing 'name'")
                 continue
             all_branches.append(bname)
             branch_to_streams.setdefault(bname, []).append(sname)
-            prerelease = b.get("prerelease")
-            if prerelease:
-                prerelease_to_branches.setdefault(prerelease, []).append((sname, bname))
+            release = b.get("release")
+            suffix = b.get("suffix")
+            if release is None:
+                emit("FAIL", f"branch {bname!r}: release is required — allowed: {', '.join(sorted(VALID_RELEASE_MODES))}")
+            elif release not in VALID_RELEASE_MODES:
+                emit("FAIL", f"branch {bname!r}: release {release!r} invalid — must be one of {', '.join(sorted(VALID_RELEASE_MODES))}")
+            else:
+                if release == "prerelease":
+                    if suffix is None:
+                        emit("FAIL", f"branch {bname!r}: suffix is required when release is 'prerelease'")
+                    elif not isinstance(suffix, str) or not suffix:
+                        emit("FAIL", f"branch {bname!r}: suffix must be a non-empty string identifier (e.g. 'dev')")
+                    else:
+                        suffix_to_branches.setdefault(suffix, []).append((sname, bname))
+                else:
+                    if suffix is not None:
+                        emit("FAIL", f"branch {bname!r}: suffix is only valid when release is 'prerelease' (got release: {release!r})")
+                    if release == "production":
+                        production_in_stream.append(bname)
             am = b.get("auto_merge", [])
             if not isinstance(am, list):
                 emit("FAIL", f"branch {bname!r} auto_merge must be a list")
@@ -87,6 +119,19 @@ def main():
                         emit("FAIL", f"branch {bname!r} auto_merge contains unrecognized type {entry!r}")
             if b_idx == len(sbranches) - 1 and len(sbranches) > 1:
                 emit("NOTE", f"branch {bname!r} is the terminal branch of stream {sname!r} (releases on push, no auto-promotion)")
+        if len(production_in_stream) > 1:
+            emit("FAIL", f"stream {sname!r}: multiple production branches ({', '.join(production_in_stream)}) — only the last branch in a stream should be the production release branch")
+        terminal = sbranches[-1] if sbranches else None
+        if terminal:
+            terminal_release = terminal.get("release")
+            if terminal_release == "production":
+                production_terminal_streams.append(sname)
+            elif terminal_release == "none":
+                tname = terminal.get("name", "<unnamed>")
+                emit("FAIL", f"stream {sname!r}: terminal branch {tname!r} has release: none — the terminal branch must be release: prerelease or release: production")
+
+    if len(production_terminal_streams) > 1:
+        emit("FAIL", f"multiple streams have a terminal production branch: {', '.join(production_terminal_streams)} — tag collision is unavoidable in a single repo, give all but one stream a prerelease terminal branch")
 
     seen = set()
     for n in stream_names:
@@ -98,10 +143,10 @@ def main():
         if len(slist) > 1:
             emit("FAIL", f"branch {bname!r} listed in multiple streams: {', '.join(slist)} — branches must belong to exactly one stream")
 
-    for label, occurrences in prerelease_to_branches.items():
+    for label, occurrences in suffix_to_branches.items():
         if len(occurrences) > 1:
             spots = ", ".join(f"{s}/{b}" for s, b in occurrences)
-            emit("FAIL", f"prerelease label {label!r} used by multiple branches ({spots}) — tags would collide")
+            emit("FAIL", f"suffix {label!r} used by multiple prerelease branches ({spots}) — tags would collide")
 
     ms = root.get("merge_strategy")
     if ms is None:
@@ -109,13 +154,56 @@ def main():
     elif ms not in VALID_MERGE_STRATEGIES:
         emit("FAIL", f"merge_strategy {ms!r} invalid — must be one of {', '.join(sorted(VALID_MERGE_STRATEGIES))}")
 
-    iv = root.get("initial_version")
-    if iv is None:
-        emit("WARN", "initial_version not set — Flywheel will default to 0.1.0")
-    elif not isinstance(iv, str) or not SEMVER_RE.match(iv):
-        emit("FAIL", f"initial_version {iv!r} is not valid semver (e.g. '0.1.0')")
+    if "release_files" in root:
+        validate_release_files(root["release_files"])
 
     print("BRANCHES " + " ".join(all_branches))
+
+
+def validate_release_files(value):
+    if not isinstance(value, list):
+        emit("FAIL", "flywheel.release_files: must be a list of file-edit entries")
+        return
+    if len(value) == 0:
+        emit("FAIL", "flywheel.release_files: if present, must be a non-empty list (omit the key entirely to disable)")
+        return
+    for idx, item in enumerate(value):
+        path_label = f"flywheel.release_files[{idx}]"
+        if not isinstance(item, dict):
+            emit("FAIL", f"{path_label}: must be an object")
+            continue
+        for k in item:
+            if k not in VALID_RELEASE_FILE_KEYS:
+                emit("FAIL", f"{path_label}.{k}: unknown key — allowed: {', '.join(sorted(VALID_RELEASE_FILE_KEYS))}")
+        file_path = item.get("path")
+        if not isinstance(file_path, str) or not file_path:
+            emit("FAIL", f"{path_label}.path: required non-empty string")
+            continue
+        has_pattern = "pattern" in item or "replacement" in item
+        has_cmd = "cmd" in item
+        if has_pattern and has_cmd:
+            emit("FAIL", f"{path_label}: must use either {{ pattern, replacement }} or {{ cmd }}, not both")
+            continue
+        if not has_pattern and not has_cmd:
+            emit("FAIL", f"{path_label}: must declare either {{ pattern, replacement }} (declarative) or {{ cmd }} (exec)")
+            continue
+        if has_pattern:
+            pattern = item.get("pattern")
+            replacement = item.get("replacement")
+            if not isinstance(pattern, str) or not pattern:
+                emit("FAIL", f"{path_label}.pattern: required non-empty string when using declarative form")
+                continue
+            if not isinstance(replacement, str):
+                emit("FAIL", f"{path_label}.replacement: required string when using declarative form")
+                continue
+            if "|" in pattern or "|" in replacement:
+                emit("FAIL", f"{path_label}: pattern/replacement may not contain \"|\" — Flywheel uses \"|\" as the sed delimiter")
+                continue
+        else:
+            cmd = item.get("cmd")
+            if not isinstance(cmd, str) or not cmd:
+                emit("FAIL", f"{path_label}.cmd: required non-empty string when using exec form")
+                continue
 
 
 if __name__ == "__main__":

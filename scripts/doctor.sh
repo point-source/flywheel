@@ -3,14 +3,52 @@
 #
 # Read-only. Exits 0 if every check passes, 1 if any FAIL is reported.
 # Usage:
-#   ./scripts/doctor.sh [owner/repo]
+#   ./scripts/doctor.sh [--skip-credentials] [owner/repo]
 # If owner/repo is omitted, uses 'gh repo view' on the current directory.
+#
+# --skip-credentials skips the FLYWHEEL_GH_APP_ID / FLYWHEEL_GH_APP_PRIVATE_KEY
+# checks. Use it from CI runs that already proved the credentials work by
+# minting an App installation token (the mint failing is itself a hard
+# error, so a downstream listing check is redundant). Without the flag,
+# doctor expects to be run with a token that can list repo Variables and
+# Secrets — i.e. an admin PAT.
 #
 # Dependencies: git, gh, jq, python3 with PyYAML.
 
 set -uo pipefail
 
-REPO="${1:-}"
+skip_credentials=0
+REPO=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --skip-credentials) skip_credentials=1; shift ;;
+    -h|--help)
+      cat <<'EOF'
+doctor.sh — validate that a repo is correctly configured for Flywheel.
+
+Usage: ./scripts/doctor.sh [--skip-credentials] [owner/repo]
+
+If owner/repo is omitted, uses 'gh repo view' on the current directory.
+
+  --skip-credentials  Skip the FLYWHEEL_GH_APP_ID / FLYWHEEL_GH_APP_PRIVATE_KEY
+                      checks. Use this from CI runs that already proved the
+                      credentials work by minting an App installation token.
+                      Without the flag, doctor expects a token that can list
+                      repo Variables and Secrets (an admin PAT).
+EOF
+      exit 0
+      ;;
+    -*) echo "error: unknown flag '$1'" >&2; exit 1 ;;
+    *)
+      if [[ -n "$REPO" ]]; then
+        echo "error: unexpected extra argument '$1'" >&2
+        exit 1
+      fi
+      REPO="$1"; shift
+      ;;
+  esac
+done
+
 fails=0
 warns=0
 
@@ -82,7 +120,7 @@ if [[ -n "$yml" ]]; then
     linter="$doctor_dir/lint-flywheel-config.py"
   else
     linter="$(mktemp)"
-    if ! curl -fsSL "https://raw.githubusercontent.com/point-source/flywheel/v1/scripts/lint-flywheel-config.py" -o "$linter" 2>/dev/null; then
+    if ! curl -fsSL "https://raw.githubusercontent.com/point-source/flywheel/main/scripts/lint-flywheel-config.py" -o "$linter" 2>/dev/null; then
       linter=""
     fi
   fi
@@ -129,34 +167,53 @@ if [[ "${#branches[@]}" -gt 0 ]]; then
   done
 fi
 
-# 3. App-token secrets. Listing secrets requires an admin PAT with the
-# 'secrets:read' scope; GitHub App installation tokens are NOT permitted
-# to read secrets via the API regardless of granted permissions. When the
-# listing fails, downgrade to a warning rather than a hard fail so doctor
-# can still pass when invoked with App credentials.
-bold "Repo secrets"
-if secrets_json="$(gh api "repos/$REPO/actions/secrets" 2>/dev/null)"; then
-  for name in FLYWHEEL_GH_APP_ID FLYWHEEL_GH_APP_PRIVATE_KEY; do
-    if echo "$secrets_json" | jq -e --arg n "$name" '.secrets[] | select(.name == $n)' >/dev/null; then
-      ok "$name set"
-    else
-      fail "$name missing — Flywheel requires GitHub App tokens (PATs are not supported)"
-    fi
-  done
-  if echo "$secrets_json" | jq -e '.secrets[] | select(.name == "GH_PAT")' >/dev/null; then
-    warn "GH_PAT secret present — Flywheel does not use it; remove if it's left over from an older setup"
-  fi
+# 3. App-token credentials. The App ID lives in a repo Variable (it's public
+# information, visible on the App's settings page); the private key lives in
+# a repo Secret. Listing either requires an admin PAT — GitHub App
+# installation tokens are NOT permitted to read variables or secrets
+# regardless of granted permissions. CI flows that already minted an App
+# token before invoking doctor should pass --skip-credentials; the mint
+# itself is the credential check.
+bold "Repo App-token credentials"
+if [[ $skip_credentials -eq 1 ]]; then
+  printf '  \033[36mi\033[0m skipped (--skip-credentials) — caller is responsible for verifying FLYWHEEL_GH_APP_ID and FLYWHEEL_GH_APP_PRIVATE_KEY out of band\n'
 else
-  warn "could not list repo secrets — verify FLYWHEEL_GH_APP_ID and FLYWHEEL_GH_APP_PRIVATE_KEY are set in repo Settings → Secrets and variables → Actions (App tokens cannot list secrets)"
+  if vars_json="$(gh api "repos/$REPO/actions/variables" 2>/dev/null)"; then
+    if echo "$vars_json" | jq -e '.variables[] | select(.name == "FLYWHEEL_GH_APP_ID")' >/dev/null; then
+      ok "FLYWHEEL_GH_APP_ID variable set"
+    else
+      fail "FLYWHEEL_GH_APP_ID variable missing — set with: gh variable set FLYWHEEL_GH_APP_ID --body <app-id> --repo $REPO"
+    fi
+  else
+    fail "could not list repo variables — listing requires an admin PAT (App installation tokens cannot list variables); re-run with 'gh auth login' as a repo admin, or pass --skip-credentials if invoking from CI that already minted an App token"
+  fi
+
+  if secrets_json="$(gh api "repos/$REPO/actions/secrets" 2>/dev/null)"; then
+    if echo "$secrets_json" | jq -e '.secrets[] | select(.name == "FLYWHEEL_GH_APP_PRIVATE_KEY")' >/dev/null; then
+      ok "FLYWHEEL_GH_APP_PRIVATE_KEY secret set"
+    else
+      fail "FLYWHEEL_GH_APP_PRIVATE_KEY secret missing — Flywheel requires GitHub App tokens (PATs are not supported)"
+    fi
+    if echo "$secrets_json" | jq -e '.secrets[] | select(.name == "GH_PAT")' >/dev/null; then
+      warn "GH_PAT secret present — Flywheel does not use it; remove if it's left over from an older setup"
+    fi
+  else
+    fail "could not list repo secrets — listing requires an admin PAT (App installation tokens cannot list secrets); re-run with 'gh auth login' as a repo admin, or pass --skip-credentials if invoking from CI that already minted an App token"
+  fi
 fi
 
-# 4. Repo settings: allow_auto_merge.
+# 4. Repo settings: allow_auto_merge, delete_branch_on_merge.
 bold "Repo settings"
-if allow_auto_merge="$(gh api "repos/$REPO" -q .allow_auto_merge 2>/dev/null)"; then
-  if [[ "$allow_auto_merge" == "true" ]]; then
+if repo_settings="$(gh api "repos/$REPO" 2>/dev/null)"; then
+  if [[ "$(echo "$repo_settings" | jq -r .allow_auto_merge)" == "true" ]]; then
     ok "allow_auto_merge enabled"
   else
     fail "allow_auto_merge disabled — enable in Settings → General → Pull Requests → Allow auto-merge"
+  fi
+  if [[ "$(echo "$repo_settings" | jq -r .delete_branch_on_merge)" == "true" ]]; then
+    ok "delete_branch_on_merge enabled (head branches auto-delete on merge)"
+  else
+    warn "delete_branch_on_merge disabled — recommended on to enforce one-PR-per-branch (Settings → General → 'Automatically delete head branches', or: gh api -X PATCH repos/$REPO -f delete_branch_on_merge=true)"
   fi
 else
   fail "could not read repo settings"
@@ -187,6 +244,29 @@ for wf in flywheel-pr.yml flywheel-push.yml; do
     warn "$path does not use app-id input or actions/create-github-app-token — Flywheel expects App-token plumbing"
   fi
 done
+
+# 5b. Quality workflows (any non-flywheel workflow on pull_request) should
+# also subscribe to merge_group — otherwise the merge queue stalls forever
+# waiting for a check that never fires. Local-only check; remote scan would
+# need a directory listing API call per workflow.
+if [[ $remote_only -eq 0 ]]; then
+  bold "Quality workflows include merge_group trigger"
+  found_any=0
+  for path in .github/workflows/*.yml .github/workflows/*.yaml; do
+    [[ -f "$path" ]] || continue
+    base="$(basename "$path")"
+    case "$base" in flywheel-*.yml|flywheel-*.yaml) continue ;; esac
+    if grep -qE '^[[:space:]]*pull_request:' "$path"; then
+      found_any=1
+      if grep -qE '^[[:space:]]*merge_group:' "$path"; then
+        ok "$path triggers on merge_group"
+      else
+        warn "$path triggers on pull_request but not merge_group — required-check workflows must include merge_group: to unblock the merge queue"
+      fi
+    fi
+  done
+  [[ $found_any -eq 0 ]] && ok "no non-flywheel pull_request workflows to inspect"
+fi
 
 # 6. Branch ruleset(s) covering each managed branch.
 bold "Branch protection rulesets"

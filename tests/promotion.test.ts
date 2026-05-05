@@ -15,26 +15,32 @@ const config: FlywheelConfig = {
       branches: [
         {
           name: "develop",
-          prerelease: "dev",
+          release: "prerelease",
+          suffix: "dev",
           auto_merge: ["fix", "fix!", "feat", "chore"],
         },
         {
           name: "staging",
-          prerelease: "rc",
+          release: "prerelease",
+          suffix: "rc",
           auto_merge: ["fix", "chore"],
         },
-        { name: "main", auto_merge: [] },
+        { name: "main", release: "production", auto_merge: [] },
       ],
     },
     {
       name: "customer-acme",
       branches: [
-        { name: "customer-acme", prerelease: "acme", auto_merge: ["fix"] },
+        {
+          name: "customer-acme",
+          release: "prerelease",
+          suffix: "acme",
+          auto_merge: ["fix"],
+        },
       ],
     },
   ],
   merge_strategy: "squash",
-  initial_version: "0.1.0",
 };
 
 const date = (iso: string) => iso;

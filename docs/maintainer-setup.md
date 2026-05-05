@@ -2,12 +2,12 @@
 
 This file documents the one-time steps required to operate the Flywheel repository itself.
 
-## Required secrets
+## Required App credentials
 
 Flywheel uses a GitHub App installation token. Personal Access Tokens are not supported.
 
-- `FLYWHEEL_GH_APP_ID` — numeric ID of the GitHub App installed on this repo.
-- `FLYWHEEL_GH_APP_PRIVATE_KEY` — PEM-format private key for that App.
+- `FLYWHEEL_GH_APP_ID` — numeric ID of the GitHub App installed on this repo. Stored as a repo **Variable** (it's not sensitive — visible on the App's settings page).
+- `FLYWHEEL_GH_APP_PRIVATE_KEY` — PEM-format private key for that App. Stored as a repo **Secret**.
 
 The App needs:
 
@@ -67,7 +67,7 @@ The action references itself once published. Until the first release, workflows 
 2. Open `rewrite/flywheel → main` PR. Merge.
 3. semantic-release fires on the push to `main` and cuts `v1.0.0`. GitHub Release published.
 4. Manually move the floating `v1` tag to that commit (Phase 6's `release-major-tag.yml` automates this going forward).
-5. Open a follow-up PR flipping `flywheel-pr.yml` and `flywheel-push.yml` from `uses: ./` to `uses: point-source/flywheel@v1`. From here on, flywheel consumes itself from the marketplace.
+5. Open a follow-up PR flipping `flywheel-pr.yml` and `flywheel-push.yml` from `uses: ./` to `uses: point-source/flywheel@v2`. From here on, flywheel consumes itself from the marketplace.
 
 ## Marketplace listing
 

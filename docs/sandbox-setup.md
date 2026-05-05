@@ -51,11 +51,12 @@ never against `flywheel` itself or any production target.
    - **Install** the App on `point-source/flywheel-sandbox` (and only that
      repo — don't grant org-wide access).
 
-6. **Store the App credentials as repo secrets** on `point-source/flywheel`
+6. **Store the App credentials** on `point-source/flywheel`
    (Settings → Secrets and variables → Actions):
    - `FLYWHEEL_E2E_APP_ID` — the `flywheel-build-e2e` App ID (numeric).
+     Store as a repo **Variable** (it's not sensitive).
    - `FLYWHEEL_E2E_APP_PRIVATE_KEY` — the App's private key, PEM format
-     including the `BEGIN/END` lines.
+     including the `BEGIN/END` lines. Store as a repo **Secret**.
 
    The `Integration tests` workflow (`.github/workflows/integration.yml`)
    uses [`actions/create-github-app-token`](https://github.com/actions/create-github-app-token)
@@ -93,15 +94,14 @@ the sandbox repo must carry its own `flywheel-pr.yml` and `flywheel-push.yml`
 workflows, pinned to `point-source/flywheel@develop` (Layer 3 validates
 already-merged code).
 
-The adopter templates ship as the canonical source — repin and copy:
+The adopter templates ship as the canonical source. Run `init.sh` with
+`--version develop` so the placeholder gets pinned to the develop branch
+instead of the latest released major:
 
 ```bash
 # From a clone of point-source/flywheel-sandbox (on a feature branch):
-cp /path/to/flywheel/scripts/templates/flywheel-pr.yml .github/workflows/
-cp /path/to/flywheel/scripts/templates/flywheel-push.yml .github/workflows/
-sed -i '' 's|point-source/flywheel@v1|point-source/flywheel@develop|' \
-  .github/workflows/flywheel-{pr,push}.yml
-git add .github/workflows && git commit -m "ci: install flywheel workflows for Layer 3"
+/path/to/flywheel/scripts/init.sh --version develop --skip-secrets --skip-rulesets
+git add .flywheel.yml .github/workflows && git commit -m "ci: install flywheel workflows for Layer 3"
 git push origin <branch>
 # Then merge to e2e-main, and forward to e2e-staging, e2e-develop, e2e-customer-acme.
 # pull_request events read workflows from the BASE branch — every managed
@@ -129,14 +129,14 @@ create the version tag itself.
 `scripts/templates/flywheel-push.yml` carries two adopter-relevant
 details that aren't obvious — keep them when copying:
 
-- `actions/checkout@v4` is invoked with `persist-credentials: false`.
+- `actions/checkout@v6` is invoked with `persist-credentials: false`.
   Without this flag, checkout writes the workflow's default
   `GITHUB_TOKEN` into `http.<url>.extraheader`, which shadows the App
   installation token semantic-release embeds in its push URL — the push
   then fails as `github-actions[bot]` even though the App token was
   passed.
 - The `Run semantic-release` step co-installs the plugin set inline
-  (`@semantic-release/changelog`, `/git`, `/github`,
+  (`@semantic-release/changelog`, `/exec`, `/git`, `/github`,
   `/commit-analyzer`, `/release-notes-generator`) via `npx -p`. Plugins
   referenced in the generated `.releaserc.json` are not auto-resolved
   by `npx semantic-release` alone — the run errors with `MODULE_NOT_FOUND`.

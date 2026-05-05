@@ -42,6 +42,9 @@ describe.skipIf(!hasSandboxToken)("e2e/07: promotion PR upserts (accumulates) ac
     await runTeardown();
   });
 
+  // Per-test timeout: this test sequences two PR merges, two waitForRunAfter
+  // calls (180s each) and two pollUntil calls (90s each), so it cannot fit in
+  // the suite-default 180s. 600s gives headroom without masking regressions.
   it("two sequential fix merges produce one promotion PR with both commits in body", async () => {
     const priorPromotions = await sandboxGh().listOpenPRs({
       head: E2E_STAGING,
@@ -112,5 +115,5 @@ describe.skipIf(!hasSandboxToken)("e2e/07: promotion PR upserts (accumulates) ac
 
     const newOnes = updated.filter((p) => !priorNumbers.has(p.number));
     expect(newOnes).toHaveLength(1);
-  });
+  }, 600_000);
 });

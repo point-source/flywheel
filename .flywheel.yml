@@ -2,11 +2,29 @@ flywheel:
   streams:
     - name: main-line
       branches:
+        # develop is the prerelease channel: pushes cut v*-dev.N tags
+        # via semantic-release. Merging develop → main triggers the
+        # real release on main; the back-merge step in flywheel-push.yml
+        # then replays the chore(release) commit + tag back into develop
+        # so its tag ancestry stays in sync and the next dev cycle
+        # computes versions from the most recent release.
+        - name: develop
+          release: prerelease
+          suffix: dev
+          auto_merge:
+            - feat
+            - fix
+            - fix!
+            - chore
+            - refactor
+            - perf
+            - style
+            - test
+            - docs
+            - ci
+            - build
         - name: main
-          # main is the only branch in this stream → releases happen on every
-          # qualifying push to main; no promotion PRs are created. This is
-          # intentional for the action repo: Flywheel releases the action
-          # itself, and major bumps go through human review.
+          release: production
           auto_merge:
             - feat
             - fix
@@ -20,4 +38,3 @@ flywheel:
             - ci
             - build
   merge_strategy: squash
-  initial_version: 0.1.0
