@@ -8,16 +8,6 @@ const TOP_LEVEL_KEYS = new Set([
   "merge_strategy",
 ]);
 
-// Legacy keys reported as a warning (not error) with a migration hint.
-// Keep in sync with LEGACY_TOP_LEVEL_KEYS in scripts/lint-flywheel-config.py
-// — config-parity test asserts both validators reach the same verdict.
-const LEGACY_TOP_LEVEL_KEYS = new Map<string, string>([
-  [
-    "initial_version",
-    "set the baseline by tagging instead: git tag v<X.Y.Z> <sha> && git push origin v<X.Y.Z> (see docs/adopter-setup.md §0.1, §8)",
-  ],
-]);
-
 const BRANCH_KEYS = new Set(["name", "prerelease", "auto_merge"]);
 const STREAM_KEYS = new Set(["name", "branches"]);
 const MERGE_STRATEGIES = new Set(["squash", "rebase"]);
@@ -55,11 +45,7 @@ export function loadConfig(yamlText: string): ConfigLoadResult {
   const root = raw.flywheel as Record<string, unknown>;
 
   for (const key of Object.keys(root)) {
-    if (TOP_LEVEL_KEYS.has(key)) continue;
-    const legacyHint = LEGACY_TOP_LEVEL_KEYS.get(key);
-    if (legacyHint) {
-      warnings.push(`flywheel.${key}: legacy v1 key, no longer used — ${legacyHint}`);
-    } else {
+    if (!TOP_LEVEL_KEYS.has(key)) {
       errors.push(
         `flywheel.${key}: unknown key. Allowed keys: ${[...TOP_LEVEL_KEYS].sort().join(", ")}.`,
       );
