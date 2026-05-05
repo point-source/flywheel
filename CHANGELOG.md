@@ -1,3 +1,10 @@
+# [2.1.0-dev.6](https://github.com/point-source/flywheel/compare/v2.1.0-dev.5...v2.1.0-dev.6) (2026-05-05)
+
+
+### Features
+
+* **scripts:** doctor merge_group check + init --force/required-checks prompt + soften legacy keys ([#40](https://github.com/point-source/flywheel/issues/40)) ([cc1c1a7](https://github.com/point-source/flywheel/commit/cc1c1a738a8168b13dfadc7ebe495c57cb4b2fb3))
+
 # [2.1.0-dev.5](https://github.com/point-source/flywheel/compare/v2.1.0-dev.4...v2.1.0-dev.5) (2026-05-05)
 
 
