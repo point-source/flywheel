@@ -275,7 +275,7 @@ jobs:
             if git merge --ff-only "$RELEASED_BRANCH" 2>/dev/null; then
               echo "Fast-forwarded $upstream to $RELEASED_BRANCH."
             else
-              git merge --no-ff -m "chore: back-merge $new_tag from $RELEASED_BRANCH into $upstream [skip ci]" "$RELEASED_BRANCH"
+              git merge --no-ff -m "chore: back-merge $new_tag from $RELEASED_BRANCH into $upstream" "$RELEASED_BRANCH"
             fi
             git push origin "$upstream"
           done
@@ -366,11 +366,30 @@ on:
   merge_group:    # required for merge queue compatibility
 jobs:
   test:
+    # See "Skipping CI on Flywheel-emitted commits" below for why this `if:`
+    # is shipped active by default. Remove it to run the full check on every
+    # commit — including release / back-merge / promotion-PR ones.
+    if: |
+      !startsWith(github.event.head_commit.message || '', 'chore(release):') &&
+      !startsWith(github.event.head_commit.message || '', 'chore: back-merge') &&
+      !contains(github.event.pull_request.title || '', ': promote ')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
       - run: ./your-test-script.sh
 ```
+
+#### Skipping CI on Flywheel-emitted commits
+
+The `quality.yml` template (and the inline copy above) ships with a job-level `if:` that skips the check on three classes of commits where running real tests adds no signal:
+
+- `chore(release): X.Y.Z` — semantic-release version bump (`@semantic-release/git`'s output).
+- `chore: back-merge ...` — Flywheel propagating a release tag into upstream branches.
+- The bot-managed promotion PR (its title contains `: promote `).
+
+A job-level `if:` that evaluates `false` reports `success` to the required-status-checks rule (per [GitHub's docs on handling skipped but required checks](https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/collaborating-on-repositories-with-code-quality-features/troubleshooting-required-status-checks#handling-skipped-but-required-checks)). This is the GitHub-blessed alternative to `[skip ci]` — which is a *workflow-level* commit-message filter and would leave required checks `Pending` forever, blocking promotion PRs whose head SHA is one of these commits.
+
+If your test suite specifically validates a release artifact (e.g. you build and smoke-test the published package), delete the `if:` clause for `chore(release):` so those commits run the full check. The other two clauses are safe to leave on for almost any adopter.
 
 > **Existing project?** If managed branches already have protection rules or rulesets, you have two options: (a) re-run `apply-rulesets.sh` (below), which replaces them with Flywheel-compatible rulesets that include the App as bypass actor; or (b) edit existing rules in place via the GitHub UI and add the Flywheel App to the bypass list with `bypass_mode: always`. See [§0.3](#03-confirm-bot-identity-can-push-to-protected-branches) for the full list of rules that need bypass.
 

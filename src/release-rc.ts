@@ -29,7 +29,22 @@ const DEFAULT_PLUGINS: unknown[] = [
   // Plugin position is load-bearing: prepareCmd must run before
   // @semantic-release/git commits the assets.
   EXEC_PLUGIN,
-  [GIT_PLUGIN, { assets: ["CHANGELOG.md"] }],
+  // `message` overrides the plugin's default, which appends `[skip ci]` to the
+  // chore(release) commit. We don't want that token: GitHub Actions treats
+  // `[skip ci]` as a workflow-level commit-message filter, which leaves
+  // required status checks in `Pending` forever on any PR whose head is the
+  // release commit (e.g. promotion PRs tracking a stream's source branch).
+  // Job-level `if:` in adopter quality workflows is the correct way to skip
+  // work on these commits — a job-level skip reports `success` to the
+  // required-checks rule. See:
+  // https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/collaborating-on-repositories-with-code-quality-features/troubleshooting-required-status-checks#handling-skipped-but-required-checks
+  [
+    GIT_PLUGIN,
+    {
+      assets: ["CHANGELOG.md"],
+      message: "chore(release): ${nextRelease.version}\n\n${nextRelease.notes}",
+    },
+  ],
   "@semantic-release/github",
 ];
 
@@ -57,12 +72,12 @@ function buildPlugins(releaseFiles: ReleaseFile[] | undefined): unknown[] {
       return [EXEC_PLUGIN, { prepareCmd }];
     }
     if (Array.isArray(entry) && entry[0] === GIT_PLUGIN) {
-      const config = entry[1] as { assets: string[] };
+      const config = entry[1] as { assets: string[]; message: string };
       const merged = [...config.assets];
       for (const path of extraAssets) {
         if (!merged.includes(path)) merged.push(path);
       }
-      return [GIT_PLUGIN, { assets: merged }];
+      return [GIT_PLUGIN, { ...config, assets: merged }];
     }
     return entry;
   });
