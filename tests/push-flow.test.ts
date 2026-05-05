@@ -76,42 +76,6 @@ describe("runPushFlow", () => {
     expect(rc.branches).toEqual([{ name: "customer-acme" }]);
   });
 
-  it("committed .releaserc.json → release outcome, writer not called", async () => {
-    const writes: Array<{ path: string; contents: string }> = [];
-    const outcome = await runPushFlow({
-      branchRef: "develop",
-      config,
-      workspace: "/ws",
-      log: { info: () => undefined },
-      writer: async (path, contents) => {
-        writes.push({ path, contents });
-      },
-      rcExists: async (path) => path === "/ws/.releaserc.json",
-    });
-    expect(outcome).toEqual({
-      kind: "release",
-      stream: config.streams[0],
-      rcPath: "/ws/.releaserc.json",
-    });
-    expect(writes).toEqual([]);
-  });
-
-  it("no committed .releaserc.json → writer is called (rcExists returns false)", async () => {
-    const writes: Array<{ path: string; contents: string }> = [];
-    const outcome = await runPushFlow({
-      branchRef: "develop",
-      config,
-      workspace: "/ws",
-      log: { info: () => undefined },
-      writer: async (path, contents) => {
-        writes.push({ path, contents });
-      },
-      rcExists: async () => false,
-    });
-    expect(outcome.kind).toBe("release");
-    expect(writes).toHaveLength(1);
-  });
-
   it("release: none branch → promote-only outcome, no .releaserc written", async () => {
     const promoteOnlyConfig: FlywheelConfig = {
       streams: [

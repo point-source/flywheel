@@ -1,4 +1,9 @@
-import type { Branch, FlywheelConfig, Stream } from "./types.js";
+import type {
+  Branch,
+  FlywheelConfig,
+  ReleaseFile,
+  Stream,
+} from "./types.js";
 
 export interface SemanticReleaseBranch {
   name: string;
@@ -12,16 +17,19 @@ export interface ReleaseRc {
   plugins: unknown[];
 }
 
+const EXEC_PLUGIN = "@semantic-release/exec";
+const GIT_PLUGIN = "@semantic-release/git";
+
 const DEFAULT_PLUGINS: unknown[] = [
   "@semantic-release/commit-analyzer",
   "@semantic-release/release-notes-generator",
   "@semantic-release/changelog",
-  // Loaded but no-op when adopters don't reference it. Available so a
-  // committed .releaserc.json (see push-flow's leave-alone-if-committed
-  // path) can use @semantic-release/exec for prepareCmd-style version-file
-  // updates without forking flywheel-push.yml.
-  "@semantic-release/exec",
-  ["@semantic-release/git", { assets: ["CHANGELOG.md"] }],
+  // No-op when release_files is unset; replaced inline with a configured
+  // [EXEC_PLUGIN, { prepareCmd }] entry when release_files declares any files.
+  // Plugin position is load-bearing: prepareCmd must run before
+  // @semantic-release/git commits the assets.
+  EXEC_PLUGIN,
+  [GIT_PLUGIN, { assets: ["CHANGELOG.md"] }],
   "@semantic-release/github",
 ];
 
@@ -34,7 +42,60 @@ export function generateReleaseRc(
   const branches = releasingBranches
     .map((b) => mapBranch(b, releasingBranches.length === 1))
     .filter((b): b is SemanticReleaseBranch => b !== null);
-  return { tagFormat, branches, plugins: [...DEFAULT_PLUGINS] };
+  const plugins = buildPlugins(config.release_files);
+  return { tagFormat, branches, plugins };
+}
+
+function buildPlugins(releaseFiles: ReleaseFile[] | undefined): unknown[] {
+  if (!releaseFiles || releaseFiles.length === 0) {
+    return [...DEFAULT_PLUGINS];
+  }
+  const prepareCmd = buildPrepareCmd(releaseFiles);
+  const extraAssets = releaseFiles.map((f) => f.path);
+  return DEFAULT_PLUGINS.map((entry) => {
+    if (entry === EXEC_PLUGIN) {
+      return [EXEC_PLUGIN, { prepareCmd }];
+    }
+    if (Array.isArray(entry) && entry[0] === GIT_PLUGIN) {
+      const config = entry[1] as { assets: string[] };
+      const merged = [...config.assets];
+      for (const path of extraAssets) {
+        if (!merged.includes(path)) merged.push(path);
+      }
+      return [GIT_PLUGIN, { assets: merged }];
+    }
+    return entry;
+  });
+}
+
+// Build a single shell command that bumps every release_files entry.
+// Single BUILD= prefix shared across entries; && chains so any failure aborts.
+// semantic-release's @semantic-release/exec templates the string with Lodash
+// at runtime — that's what expands ${nextRelease.version} and ${nextRelease.channel || ''}.
+// $BUILD is a bash variable assigned inline; semantic-release passes it through
+// untouched because it doesn't match Lodash's interpolate syntax.
+function buildPrepareCmd(releaseFiles: ReleaseFile[]): string {
+  const buildPrefix = "BUILD=$(( $(git tag --list 'v*' | wc -l) + 1 ))";
+  const parts = releaseFiles.map(renderEntry);
+  return [buildPrefix, ...parts].join(" && ");
+}
+
+function renderEntry(entry: ReleaseFile): string {
+  if ("cmd" in entry) {
+    return substitutePlaceholders(entry.cmd);
+  }
+  const replacement = substitutePlaceholders(entry.replacement);
+  return (
+    `sed -i.bak -E "s|${entry.pattern}|${replacement}|" ${entry.path}` +
+    ` && rm ${entry.path}.bak`
+  );
+}
+
+function substitutePlaceholders(input: string): string {
+  return input
+    .replace(/\$\{version\}/g, "${nextRelease.version}")
+    .replace(/\$\{channel\}/g, "${nextRelease.channel || ''}")
+    .replace(/\$\{build\}/g, "${BUILD}");
 }
 
 export function chooseTagFormat(target: Stream, allStreams: Stream[]): string {

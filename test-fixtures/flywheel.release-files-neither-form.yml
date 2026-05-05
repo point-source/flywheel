@@ -1,0 +1,8 @@
+flywheel:
+  streams:
+    - name: main-line
+      branches:
+        - { name: main, release: production, auto_merge: [] }
+  release_files:
+    - path: pubspec.yaml
+  merge_strategy: squash

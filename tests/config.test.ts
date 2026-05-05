@@ -184,6 +184,107 @@ flywheel:
     expect(result.errors[0]).toContain("failed to parse YAML");
   });
 
+  describe("release_files", () => {
+    it("parses a declarative entry into the config", () => {
+      const result = loadConfig(fx("flywheel.release-files-declarative.yml"));
+      expect(result.errors).toEqual([]);
+      expect(result.config!.release_files).toEqual([
+        {
+          path: "pubspec.yaml",
+          pattern: "^version: .*",
+          replacement: "version: ${version}+${build}",
+        },
+      ]);
+    });
+
+    it("parses an exec entry into the config", () => {
+      const result = loadConfig(fx("flywheel.release-files-exec.yml"));
+      expect(result.errors).toEqual([]);
+      expect(result.config!.release_files).toEqual([
+        { path: "pyproject.toml", cmd: 'python -c "print(123)"' },
+      ]);
+    });
+
+    it("parses mixed declarative + exec entries in declaration order", () => {
+      const result = loadConfig(fx("flywheel.release-files-mixed.yml"));
+      expect(result.errors).toEqual([]);
+      expect(result.config!.release_files).toHaveLength(2);
+      expect(result.config!.release_files![0]).toMatchObject({ path: "pubspec.yaml" });
+      expect(result.config!.release_files![1]).toMatchObject({ path: "pyproject.toml" });
+    });
+
+    it("rejects entry that has both pattern/replacement and cmd", () => {
+      const result = loadConfig(fx("flywheel.release-files-both-forms.yml"));
+      expect(result.config).toBeNull();
+      expect(result.errors.some((e) => e.includes("not both"))).toBe(true);
+    });
+
+    it("rejects entry that has neither pattern/replacement nor cmd", () => {
+      const result = loadConfig(fx("flywheel.release-files-neither-form.yml"));
+      expect(result.config).toBeNull();
+      expect(result.errors.some((e) => e.includes("must declare either"))).toBe(true);
+    });
+
+    it("rejects entry missing path", () => {
+      const result = loadConfig(fx("flywheel.release-files-missing-path.yml"));
+      expect(result.config).toBeNull();
+      expect(result.errors.some((e) => e.includes("path: required"))).toBe(true);
+    });
+
+    it("rejects empty pattern", () => {
+      const result = loadConfig(fx("flywheel.release-files-empty-pattern.yml"));
+      expect(result.config).toBeNull();
+      expect(result.errors.some((e) => e.includes("pattern: required non-empty string"))).toBe(true);
+    });
+
+    it("rejects pattern containing the sed delimiter |", () => {
+      const yamlText = `
+flywheel:
+  streams:
+    - name: only
+      branches:
+        - { name: main, release: production, auto_merge: [] }
+  release_files:
+    - path: pubspec.yaml
+      pattern: '^a|b'
+      replacement: 'x'
+  merge_strategy: squash
+`;
+      const result = loadConfig(yamlText);
+      expect(result.config).toBeNull();
+      expect(result.errors.some((e) => e.includes("sed delimiter"))).toBe(true);
+    });
+
+    it("rejects empty release_files list", () => {
+      const yamlText = `
+flywheel:
+  streams:
+    - name: only
+      branches:
+        - { name: main, release: production, auto_merge: [] }
+  release_files: []
+  merge_strategy: squash
+`;
+      const result = loadConfig(yamlText);
+      expect(result.config).toBeNull();
+      expect(result.errors.some((e) => e.includes("non-empty list"))).toBe(true);
+    });
+
+    it("absent release_files is fine — config has no release_files key", () => {
+      const yamlText = `
+flywheel:
+  streams:
+    - name: only
+      branches:
+        - { name: main, release: production, auto_merge: [] }
+  merge_strategy: squash
+`;
+      const result = loadConfig(yamlText);
+      expect(result.errors).toEqual([]);
+      expect(result.config!.release_files).toBeUndefined();
+    });
+  });
+
   it("rejects merge_strategy: merge with descriptive error", () => {
     const yamlText = `
 flywheel:

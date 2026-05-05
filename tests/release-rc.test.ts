@@ -127,6 +127,136 @@ describe("generateReleaseRc", () => {
     ]);
   });
 
+  describe("release_files", () => {
+    const baseConfig: FlywheelConfig = {
+      ...baseRc,
+      streams: [
+        {
+          name: "main-line",
+          branches: [{ name: "main", release: "production", auto_merge: [] }],
+        },
+      ],
+    };
+
+    it("absent → plugin chain unchanged from default", () => {
+      const rc = generateReleaseRc(baseConfig.streams[0]!, baseConfig);
+      expect(rc.plugins).toEqual([
+        "@semantic-release/commit-analyzer",
+        "@semantic-release/release-notes-generator",
+        "@semantic-release/changelog",
+        "@semantic-release/exec",
+        ["@semantic-release/git", { assets: ["CHANGELOG.md"] }],
+        "@semantic-release/github",
+      ]);
+    });
+
+    it("declarative entry → exec plugin gets sed prepareCmd; file added to git assets", () => {
+      const rc = generateReleaseRc(baseConfig.streams[0]!, {
+        ...baseConfig,
+        release_files: [
+          {
+            path: "pubspec.yaml",
+            pattern: "^version: .*",
+            replacement: "version: ${version}+${build}",
+          },
+        ],
+      });
+      expect(rc.plugins).toContainEqual([
+        "@semantic-release/exec",
+        {
+          prepareCmd:
+            "BUILD=$(( $(git tag --list 'v*' | wc -l) + 1 )) && " +
+            'sed -i.bak -E "s|^version: .*|version: ${nextRelease.version}+${BUILD}|" pubspec.yaml && ' +
+            "rm pubspec.yaml.bak",
+        },
+      ]);
+      expect(rc.plugins).toContainEqual([
+        "@semantic-release/git",
+        { assets: ["CHANGELOG.md", "pubspec.yaml"] },
+      ]);
+    });
+
+    it("exec entry → adopter cmd preserved verbatim except for placeholder substitution", () => {
+      const rc = generateReleaseRc(baseConfig.streams[0]!, {
+        ...baseConfig,
+        release_files: [
+          { path: "pyproject.toml", cmd: 'python bump.py "${version}" "${channel}"' },
+        ],
+      });
+      expect(rc.plugins).toContainEqual([
+        "@semantic-release/exec",
+        {
+          prepareCmd:
+            "BUILD=$(( $(git tag --list 'v*' | wc -l) + 1 )) && " +
+            "python bump.py \"${nextRelease.version}\" \"${nextRelease.channel || ''}\"",
+        },
+      ]);
+    });
+
+    it("multiple entries (mixed forms) → single exec plugin, &&-chained, all paths in git assets", () => {
+      const rc = generateReleaseRc(baseConfig.streams[0]!, {
+        ...baseConfig,
+        release_files: [
+          {
+            path: "pubspec.yaml",
+            pattern: "^version: .*",
+            replacement: "version: ${version}+${build}",
+          },
+          { path: "scripts/bump.sh", cmd: 'echo "${version}" > VERSION' },
+        ],
+      });
+      const execEntries = rc.plugins.filter(
+        (p) => Array.isArray(p) && p[0] === "@semantic-release/exec",
+      );
+      expect(execEntries).toHaveLength(1);
+      const prepareCmd = (execEntries[0] as [string, { prepareCmd: string }])[1]
+        .prepareCmd;
+      expect(prepareCmd).toMatch(/^BUILD=\$\(\( \$\(git tag --list 'v\*'.*\) \+ 1 \)\) && /);
+      expect(prepareCmd).toContain("sed -i.bak -E");
+      expect(prepareCmd).toContain('echo "${nextRelease.version}" > VERSION');
+      expect(rc.plugins).toContainEqual([
+        "@semantic-release/git",
+        { assets: ["CHANGELOG.md", "pubspec.yaml", "scripts/bump.sh"] },
+      ]);
+    });
+
+    it("git assets dedupe: file already in default assets is not duplicated", () => {
+      const rc = generateReleaseRc(baseConfig.streams[0]!, {
+        ...baseConfig,
+        release_files: [
+          {
+            path: "CHANGELOG.md",
+            pattern: "^## .*",
+            replacement: "## ${version}",
+          },
+        ],
+      });
+      expect(rc.plugins).toContainEqual([
+        "@semantic-release/git",
+        { assets: ["CHANGELOG.md"] },
+      ]);
+    });
+
+    it("channel placeholder maps to ${nextRelease.channel || ''} (not just ${nextRelease.channel})", () => {
+      const rc = generateReleaseRc(baseConfig.streams[0]!, {
+        ...baseConfig,
+        release_files: [
+          {
+            path: "version.txt",
+            pattern: "^.*$",
+            replacement: "${version}-${channel}",
+          },
+        ],
+      });
+      const execEntry = rc.plugins.find(
+        (p): p is [string, { prepareCmd: string }] =>
+          Array.isArray(p) && p[0] === "@semantic-release/exec",
+      )!;
+      expect(execEntry[1].prepareCmd).toContain("${nextRelease.channel || ''}");
+      expect(execEntry[1].prepareCmd).not.toContain("${nextRelease.channel}-");
+    });
+  });
+
   it("branches array preserves declaration order", () => {
     const config: FlywheelConfig = {
       ...baseRc,

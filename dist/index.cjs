@@ -27791,10 +27791,12 @@ function isBumping(type2, breaking) {
 // src/config.ts
 var TOP_LEVEL_KEYS = /* @__PURE__ */ new Set([
   "streams",
-  "merge_strategy"
+  "merge_strategy",
+  "release_files"
 ]);
 var BRANCH_KEYS = /* @__PURE__ */ new Set(["name", "release", "suffix", "auto_merge"]);
 var STREAM_KEYS = /* @__PURE__ */ new Set(["name", "branches"]);
+var RELEASE_FILE_KEYS = /* @__PURE__ */ new Set(["path", "pattern", "replacement", "cmd"]);
 var MERGE_STRATEGIES = /* @__PURE__ */ new Set(["squash", "rebase"]);
 var RELEASE_MODES = /* @__PURE__ */ new Set(["none", "prerelease", "production"]);
 function loadConfig(yamlText) {
@@ -27827,6 +27829,7 @@ function loadConfig(yamlText) {
   }
   const streams = parseStreams(root.streams, errors);
   const mergeStrategy = parseMergeStrategy(root.merge_strategy, errors);
+  const releaseFiles = parseReleaseFiles(root.release_files, errors);
   if (streams && streams.length > 0) {
     validateStreams(streams, errors, notices);
   }
@@ -27836,7 +27839,8 @@ function loadConfig(yamlText) {
   return {
     config: {
       streams,
-      merge_strategy: mergeStrategy
+      merge_strategy: mergeStrategy,
+      ...releaseFiles ? { release_files: releaseFiles } : {}
     },
     errors,
     warnings,
@@ -27964,6 +27968,78 @@ function parseReleaseMode(value, path, errors) {
     return "production";
   }
   return value;
+}
+function parseReleaseFiles(value, errors) {
+  if (value === void 0) return void 0;
+  if (!Array.isArray(value)) {
+    errors.push("flywheel.release_files: must be a list of file-edit entries.");
+    return void 0;
+  }
+  if (value.length === 0) {
+    errors.push("flywheel.release_files: if present, must be a non-empty list (omit the key entirely to disable).");
+    return void 0;
+  }
+  const parsed = [];
+  value.forEach((item, idx) => {
+    const path = `flywheel.release_files[${idx}]`;
+    if (!isObject2(item)) {
+      errors.push(`${path}: must be an object.`);
+      return;
+    }
+    for (const key of Object.keys(item)) {
+      if (!RELEASE_FILE_KEYS.has(key)) {
+        errors.push(
+          `${path}.${key}: unknown key. Allowed: ${[...RELEASE_FILE_KEYS].sort().join(", ")}.`
+        );
+      }
+    }
+    const filePath = item.path;
+    if (typeof filePath !== "string" || filePath.length === 0) {
+      errors.push(`${path}.path: required non-empty string.`);
+      return;
+    }
+    const hasPattern = item.pattern !== void 0 || item.replacement !== void 0;
+    const hasCmd = item.cmd !== void 0;
+    if (hasPattern && hasCmd) {
+      errors.push(
+        `${path}: must use either { pattern, replacement } or { cmd }, not both.`
+      );
+      return;
+    }
+    if (!hasPattern && !hasCmd) {
+      errors.push(
+        `${path}: must declare either { pattern, replacement } (declarative) or { cmd } (exec).`
+      );
+      return;
+    }
+    if (hasPattern) {
+      const pattern = item.pattern;
+      const replacement = item.replacement;
+      if (typeof pattern !== "string" || pattern.length === 0) {
+        errors.push(`${path}.pattern: required non-empty string when using declarative form.`);
+        return;
+      }
+      if (typeof replacement !== "string") {
+        errors.push(`${path}.replacement: required string when using declarative form.`);
+        return;
+      }
+      if (pattern.includes("|") || replacement.includes("|")) {
+        errors.push(
+          `${path}: pattern/replacement may not contain "|" \u2014 Flywheel uses "|" as the sed delimiter.`
+        );
+        return;
+      }
+      parsed.push({ path: filePath, pattern, replacement });
+    } else {
+      const cmd = item.cmd;
+      if (typeof cmd !== "string" || cmd.length === 0) {
+        errors.push(`${path}.cmd: required non-empty string when using exec form.`);
+        return;
+      }
+      parsed.push({ path: filePath, cmd });
+    }
+  });
+  return parsed.length > 0 ? parsed : void 0;
 }
 function parseMergeStrategy(value, errors) {
   if (value === void 0) return "squash";
@@ -28387,23 +28463,62 @@ var import_promises = require("node:fs/promises");
 var import_node_path = require("node:path");
 
 // src/release-rc.ts
+var EXEC_PLUGIN = "@semantic-release/exec";
+var GIT_PLUGIN = "@semantic-release/git";
 var DEFAULT_PLUGINS = [
   "@semantic-release/commit-analyzer",
   "@semantic-release/release-notes-generator",
   "@semantic-release/changelog",
-  // Loaded but no-op when adopters don't reference it. Available so a
-  // committed .releaserc.json (see push-flow's leave-alone-if-committed
-  // path) can use @semantic-release/exec for prepareCmd-style version-file
-  // updates without forking flywheel-push.yml.
-  "@semantic-release/exec",
-  ["@semantic-release/git", { assets: ["CHANGELOG.md"] }],
+  // No-op when release_files is unset; replaced inline with a configured
+  // [EXEC_PLUGIN, { prepareCmd }] entry when release_files declares any files.
+  // Plugin position is load-bearing: prepareCmd must run before
+  // @semantic-release/git commits the assets.
+  EXEC_PLUGIN,
+  [GIT_PLUGIN, { assets: ["CHANGELOG.md"] }],
   "@semantic-release/github"
 ];
 function generateReleaseRc(targetStream, config) {
   const tagFormat = chooseTagFormat(targetStream, config.streams);
   const releasingBranches = targetStream.branches.filter((b) => b.release !== "none");
   const branches = releasingBranches.map((b) => mapBranch(b, releasingBranches.length === 1)).filter((b) => b !== null);
-  return { tagFormat, branches, plugins: [...DEFAULT_PLUGINS] };
+  const plugins = buildPlugins(config.release_files);
+  return { tagFormat, branches, plugins };
+}
+function buildPlugins(releaseFiles) {
+  if (!releaseFiles || releaseFiles.length === 0) {
+    return [...DEFAULT_PLUGINS];
+  }
+  const prepareCmd = buildPrepareCmd(releaseFiles);
+  const extraAssets = releaseFiles.map((f) => f.path);
+  return DEFAULT_PLUGINS.map((entry) => {
+    if (entry === EXEC_PLUGIN) {
+      return [EXEC_PLUGIN, { prepareCmd }];
+    }
+    if (Array.isArray(entry) && entry[0] === GIT_PLUGIN) {
+      const config = entry[1];
+      const merged = [...config.assets];
+      for (const path of extraAssets) {
+        if (!merged.includes(path)) merged.push(path);
+      }
+      return [GIT_PLUGIN, { assets: merged }];
+    }
+    return entry;
+  });
+}
+function buildPrepareCmd(releaseFiles) {
+  const buildPrefix = "BUILD=$(( $(git tag --list 'v*' | wc -l) + 1 ))";
+  const parts = releaseFiles.map(renderEntry);
+  return [buildPrefix, ...parts].join(" && ");
+}
+function renderEntry(entry) {
+  if ("cmd" in entry) {
+    return substitutePlaceholders(entry.cmd);
+  }
+  const replacement = substitutePlaceholders(entry.replacement);
+  return `sed -i.bak -E "s|${entry.pattern}|${replacement}|" ${entry.path} && rm ${entry.path}.bak`;
+}
+function substitutePlaceholders(input) {
+  return input.replace(/\$\{version\}/g, "${nextRelease.version}").replace(/\$\{channel\}/g, "${nextRelease.channel || ''}").replace(/\$\{build\}/g, "${BUILD}");
 }
 function chooseTagFormat(target, allStreams) {
   const primary = pickPrimaryStream(allStreams);
@@ -28446,15 +28561,8 @@ async function runPushFlow(deps) {
     );
     return { kind: "promote-only", stream };
   }
-  const rcPath = (0, import_node_path.join)(deps.workspace, ".releaserc.json");
-  const rcExists = deps.rcExists ?? defaultRcExists;
-  if (await rcExists(rcPath)) {
-    deps.log.info(
-      `push: ${rcPath} already committed \u2014 using adopter-provided config. branches/tagFormat must be kept in sync with .flywheel.yml manually.`
-    );
-    return { kind: "release", stream, rcPath };
-  }
   const rc = generateReleaseRc(stream, deps.config);
+  const rcPath = (0, import_node_path.join)(deps.workspace, ".releaserc.json");
   const writer = deps.writer ?? defaultWriter;
   await writer(rcPath, JSON.stringify(rc, null, 2));
   deps.log.info(
@@ -28479,14 +28587,6 @@ function getUpstreamBranches(config, branchRef) {
 }
 async function defaultWriter(path, contents) {
   await (0, import_promises.writeFile)(path, contents, "utf8");
-}
-async function defaultRcExists(path) {
-  try {
-    await (0, import_promises.access)(path);
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 // src/promotion.ts
