@@ -1,3 +1,10 @@
+# [2.1.0-dev.9](https://github.com/point-source/flywheel/compare/v2.1.0-dev.8...v2.1.0-dev.9) (2026-05-05)
+
+
+### Bug Fixes
+
+* stop emitting skip-ci in release and back-merge commits ([#50](https://github.com/point-source/flywheel/issues/50)) ([cbbfd77](https://github.com/point-source/flywheel/commit/cbbfd7702f854eb64a5d71e92a29588bc0ac928a))
+
 # [2.1.0-dev.8](https://github.com/point-source/flywheel/compare/v2.1.0-dev.7...v2.1.0-dev.8) (2026-05-05)
 
 
