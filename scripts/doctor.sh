@@ -193,6 +193,29 @@ for wf in flywheel-pr.yml flywheel-push.yml; do
   fi
 done
 
+# 5b. Quality workflows (any non-flywheel workflow on pull_request) should
+# also subscribe to merge_group — otherwise the merge queue stalls forever
+# waiting for a check that never fires. Local-only check; remote scan would
+# need a directory listing API call per workflow.
+if [[ $remote_only -eq 0 ]]; then
+  bold "Quality workflows include merge_group trigger"
+  found_any=0
+  for path in .github/workflows/*.yml .github/workflows/*.yaml; do
+    [[ -f "$path" ]] || continue
+    base="$(basename "$path")"
+    case "$base" in flywheel-*.yml|flywheel-*.yaml) continue ;; esac
+    if grep -qE '^[[:space:]]*pull_request:' "$path"; then
+      found_any=1
+      if grep -qE '^[[:space:]]*merge_group:' "$path"; then
+        ok "$path triggers on merge_group"
+      else
+        warn "$path triggers on pull_request but not merge_group — required-check workflows must include merge_group: to unblock the merge queue"
+      fi
+    fi
+  done
+  [[ $found_any -eq 0 ]] && ok "no non-flywheel pull_request workflows to inspect"
+fi
+
 # 6. Branch ruleset(s) covering each managed branch.
 bold "Branch protection rulesets"
 if rulesets_json="$(gh api "repos/$REPO/rulesets" 2>/dev/null)"; then

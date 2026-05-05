@@ -26,6 +26,13 @@ VALID_TOP_LEVEL_KEYS = {"streams", "merge_strategy"}
 VALID_STREAM_KEYS = {"name", "branches"}
 VALID_BRANCH_KEYS = {"name", "prerelease", "auto_merge"}
 
+# Top-level keys recognized as legacy v1 syntax. Reported as WARN with a
+# migration hint instead of FAIL — config still works without them, and a
+# generic "unknown key" message strands adopters who followed older docs.
+LEGACY_TOP_LEVEL_KEYS = {
+    "initial_version": "set the baseline by tagging instead: git tag v<X.Y.Z> <sha> && git push origin v<X.Y.Z> (see docs/adopter-setup.md §0.1, §8)",
+}
+
 
 def emit(status, msg):
     print(f"RESULT {status} {msg}")
@@ -52,7 +59,11 @@ def main():
 
     root = data["flywheel"]
     for k in root:
-        if k not in VALID_TOP_LEVEL_KEYS:
+        if k in VALID_TOP_LEVEL_KEYS:
+            continue
+        if k in LEGACY_TOP_LEVEL_KEYS:
+            emit("WARN", f"flywheel.{k}: legacy v1 key, no longer used — {LEGACY_TOP_LEVEL_KEYS[k]}")
+        else:
             emit("FAIL", f"flywheel.{k}: unknown key — allowed: {', '.join(sorted(VALID_TOP_LEVEL_KEYS))}")
     streams = root.get("streams") or []
     if not streams:
