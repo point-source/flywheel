@@ -1,3 +1,10 @@
+# [2.1.0-dev.5](https://github.com/point-source/flywheel/compare/v2.1.0-dev.4...v2.1.0-dev.5) (2026-05-05)
+
+
+### Bug Fixes
+
+* **init:** propagate App ID to apply-rulesets.sh ([#38](https://github.com/point-source/flywheel/issues/38)) ([f44ac10](https://github.com/point-source/flywheel/commit/f44ac100cf4df3392219fbe7d12665e383f10bea))
+
 # [2.1.0-dev.4](https://github.com/point-source/flywheel/compare/v2.1.0-dev.3...v2.1.0-dev.4) (2026-05-04)
 
 
