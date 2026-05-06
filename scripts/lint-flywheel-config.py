@@ -21,8 +21,7 @@ VALID_TYPES = {
     "style", "test", "docs", "build", "ci", "revert",
 }
 VALID_AUTO_MERGE_KEYS = VALID_TYPES | {f"{t}!" for t in VALID_TYPES}
-VALID_MERGE_STRATEGIES = {"squash", "rebase"}
-VALID_TOP_LEVEL_KEYS = {"streams", "merge_strategy", "release_files"}
+VALID_TOP_LEVEL_KEYS = {"streams", "release_files"}
 VALID_STREAM_KEYS = {"name", "branches"}
 VALID_BRANCH_KEYS = {"name", "release", "suffix", "auto_merge"}
 VALID_RELEASE_FILE_KEYS = {"path", "pattern", "replacement", "cmd"}
@@ -147,12 +146,6 @@ def main():
         if len(occurrences) > 1:
             spots = ", ".join(f"{s}/{b}" for s, b in occurrences)
             emit("FAIL", f"suffix {label!r} used by multiple prerelease branches ({spots}) — tags would collide")
-
-    ms = root.get("merge_strategy")
-    if ms is None:
-        emit("WARN", "merge_strategy not set — explicit is safer")
-    elif ms not in VALID_MERGE_STRATEGIES:
-        emit("FAIL", f"merge_strategy {ms!r} invalid — must be one of {', '.join(sorted(VALID_MERGE_STRATEGIES))}")
 
     if "release_files" in root:
         validate_release_files(root["release_files"])

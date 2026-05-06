@@ -115,7 +115,9 @@ Issues 3 and 4 are open. Issue 4 is currently a hard block on the release pipeli
 
 ## Status table
 
-| # | Issue | Status | Mitigation |
+> **Status note:** Hybrid mode (landed in PR #66) supersedes the squash-era mitigations listed below — see [Resolved by hybrid mode](#resolved-by-hybrid-mode) at the end of this doc for the current resolution status. The table below is preserved as historical context for the squash-era state.
+
+| # | Issue | Squash-era status | Squash-era mitigation |
 |---|---|---|---|
 | 1 | Skip-ci marker propagation | ✅ Resolved | History rewrite + `flywheel/conventional-commit` active block |
 | 2 | Back-merge CHANGELOG / release_files conflict | 🟡 Code shipped, live test interrupted | Back-pick (PR #63 + PR #64) |

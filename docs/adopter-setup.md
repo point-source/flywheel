@@ -68,9 +68,9 @@ grep -rE '(git tag|gh release create|semantic-release|release-please|changesets)
 Two checks specific to repos that already have branch protection:
 
 - **Required signed commits / signed tags.** The App identity Flywheel uses doesn't sign. If "Require signed commits" is enabled on a managed branch, `semantic-release`'s release commit and tag are rejected. Either disable the rule on managed branches, or add the Flywheel App as a bypass actor for that specific rule.
-- **Existing protection rules without the App as bypass actor.** The App must be a bypass actor (`bypass_mode: always`) on PR-required, linear-history, no-force-push, and no-deletion rules — same as greenfield, except brownfield repos already have those rules and the App isn't on the list yet. Two options: (a) re-run `scripts/apply-rulesets.sh` with `--app-id <your-app-id>`, which replaces the ruleset with a Flywheel-shaped one (see §5); or (b) edit the existing ruleset in place via the GitHub UI and add the App under "Bypass list".
+- **Existing protection rules without the App as bypass actor.** The App must be a bypass actor (`bypass_mode: always`) on the PR-required, no-force-push, and no-deletion rules — same as greenfield, except brownfield repos already have those rules and the App isn't on the list yet. Two options: (a) re-run `scripts/apply-rulesets.sh` with `--app-id <your-app-id>`, which replaces the ruleset with a Flywheel-shaped one (see §5); or (b) edit the existing ruleset in place via the GitHub UI and add the App under "Bypass list".
 
-Without this, expect `EGITNOPERMISSION` on the release push and a linear-history violation on the back-merge — see §8 troubleshooting.
+Without this, expect `EGITNOPERMISSION` ("changes must be made through a pull request") on both `semantic-release`'s release push and the back-merge push — see §8 troubleshooting.
 
 ### 0.4 Audit recent commit history
 
@@ -396,7 +396,7 @@ If your test suite specifically validates a release artifact (e.g. you build and
 
 ### Recommended rulesets
 
-1. **Protect managed branches** — target every branch listed in `.flywheel.yml`. Require PRs, require status checks (your quality check names plus `flywheel/conventional-commit`, which `apply-rulesets.sh` requires by default — see "Skipping CI" below for what that check enforces), block force push, block deletion, require linear history. **Bypass actor: your Flywheel GitHub App, in `bypass_mode: always` — required on every managed branch.** Without this, two pushes get rejected: `semantic-release`'s version commit + tag (PR-only rule → `EGITNOPERMISSION`) and the back-merge merge commit into upstream branches (linear-history rule). `scripts/apply-rulesets.sh --app-id <id>` configures this for the whole ruleset.
+1. **Protect managed branches** — target every branch listed in `.flywheel.yml`. Require PRs, require status checks (your quality check names plus `flywheel/conventional-commit`, which `apply-rulesets.sh` requires by default — see "Skipping CI" below for what that check enforces), block force push, block deletion. **Bypass actor: your Flywheel GitHub App, in `bypass_mode: always` — required on every managed branch.** Without this, both `semantic-release`'s version commit + tag push and the back-merge merge commit are rejected by the PR-only rule (`EGITNOPERMISSION`). `scripts/apply-rulesets.sh --app-id <id>` configures this for the whole ruleset. (Linear history is intentionally not applied: under hybrid mode, promotion + back-merge land as merge commits, which the rule would reject.)
 2. **Merge queue** on managed branches. Stricter branches (`main`) use group size 1; `develop`-style branches can batch up to 5.
 3. **Protect `v*` tag namespace** — only the bot may create or delete version tags. Prevents agents from minting arbitrary version tags. The App is added as a bypass actor here too so it can mint the release tag.
 4. **Branch naming (optional)** — require feature branches to match `(feat|fix|chore|refactor|perf|style|test|docs|build|ci|revert)/.*`.
@@ -552,5 +552,5 @@ Merge the PR. On the resulting push, confirm:
 **PR opened by Flywheel doesn't trigger your quality checks.** Make sure your check workflows include `merge_group:` as well as `pull_request:` — without it, the merge queue stalls waiting for a check that never fires (see the snippet above).
 
 **Back-merge step failed pushing to an upstream branch.** Two common causes:
-- The App isn't a bypass actor on the upstream branch's ruleset, so its merge commit is rejected by the linear-history rule. Re-run `scripts/apply-rulesets.sh <owner/repo> --app-id <id>` — it covers every managed branch in one go.
+- The App isn't a bypass actor on the upstream branch's ruleset, so its merge-commit push is rejected by the PR-only rule (`EGITNOPERMISSION` / "changes must be made through a pull request"). Re-run `scripts/apply-rulesets.sh <owner/repo> --app-id <id>` — it covers every managed branch in one go.
 - The merge has conflicts (the upstream branch and the released branch both modified the same file in incompatible ways). The step fails loudly with `git merge` output. Resolve manually by opening a PR from the released branch into the upstream branch, fix the conflict, merge it, and re-run the failed step or trigger the next release.

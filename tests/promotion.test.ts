@@ -73,14 +73,16 @@ describe("computePendingCommits — the highest-stakes logic", () => {
     expect(pending.map((c) => c.sha)).toEqual(["d000000"]);
   });
 
-  it("rebase-merged already-promoted commits do not reappear (titles match exactly)", () => {
-    // With rebase merge, source commit titles propagate verbatim to target.
+  it("already-promoted commits with identical titles on target are not re-promoted", () => {
+    // Title-equality dedup: covers cherry-picks across streams, identical
+    // chore/lint titles produced independently on each side, and (under
+    // hybrid mode) source commits made reachable on target via a merge.
     const sourceCommits = [
       makeCommit("a", "fix: shared title", date("2026-01-01T10:00:00Z")),
       makeCommit("b", "feat: only on source", date("2026-01-02T10:00:00Z")),
     ];
     const targetCommits = [
-      makeCommit("a-rebased", "fix: shared title", date("2026-01-01T11:00:00Z")),
+      makeCommit("a-on-target", "fix: shared title", date("2026-01-01T11:00:00Z")),
     ];
 
     const pending = computePendingCommits({

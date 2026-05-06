@@ -40,7 +40,7 @@ mode. No special infrastructure required.
 | `tests/dogfood-config.test.ts` | 3 | Validates the repo's own `.flywheel.yml`; asserts `feat!` is excluded from `main`'s `auto_merge` |
 | `tests/release-rc.test.ts` | 8 | `.releaserc.json` shape; `chooseTagFormat` primary-vs-secondary; plugin merging without dropping defaults; declaration order |
 | `tests/pr-flow.test.ts` | 11 | PR title/body rewrite; label application; both label-flip directions; auto-merge → direct-merge fallback (success and both-fail paths); idempotency; unmanaged base ref; invalid-title check |
-| `tests/promotion.test.ts` | 12 | Promotion PR create/upsert; `computePendingCommits` squash-merge dedup; rebase-merge dedup; `(#NN)` suffix stripping; terminal/single-branch no-op |
+| `tests/promotion.test.ts` | 12 | Promotion PR create/upsert; `computePendingCommits` squash-merge dedup; identical-title dedup; `(#NN)` suffix stripping; terminal/single-branch no-op |
 | `tests/push-flow.test.ts` | 3 | `.releaserc.json` write to workspace; managed-vs-unmanaged branch routing |
 | `tests/preflight.test.ts` | 8 | App permission preflight: missing/insufficient permissions detected; helpful error message formatting |
 
@@ -49,17 +49,18 @@ mode. No special infrastructure required.
 Three areas are called out because they protect against failures that are
 either hard to recover from or easy to regress silently.
 
-#### `computePendingCommits` squash and rebase merge dedup
+#### `computePendingCommits` squash + identical-title dedup
 
 `tests/promotion.test.ts:42-118`. The promotion PR generator must not
-re-promote commits that have already been squashed or rebased onto the target.
-Two flavors are tested:
+re-promote commits that have already landed on target. Three flavors are tested:
 
 - **Squash**: source has commits A/B/C, the prior promotion PR squash-merged
   onto target as a single commit titled `feat: promote develop → staging
   (#NN)`. After a new commit D lands on source, only D is pending.
-- **Rebase**: source titles propagate verbatim to target after rebase. Tests
-  assert title-equality match dedups correctly.
+- **Identical title**: source and target each have a commit with the same
+  title (e.g. cherry-picks across streams, or independent identical chores).
+  Title-equality match dedups correctly. Under hybrid mode this also covers
+  the case where merged-in source commits appear verbatim on target.
 - **`(#NN)` suffix**: GitHub appends the PR number on squash. The matcher
   strips it before comparing.
 
@@ -101,7 +102,7 @@ no errors.
 | App permission preflight (action-side validation) | ✅ | `preflight.test.ts` |
 | Invalid-title check creation | ✅ | `pr-flow.test.ts` |
 | Promotion PR create / upsert / chore-only no-op | ✅ | `promotion.test.ts` |
-| Promotion dedup (squash + rebase + `(#NN)`) | ✅ | `promotion.test.ts` |
+| Promotion dedup (squash + identical-title + `(#NN)`) | ✅ | `promotion.test.ts` |
 | Idempotent re-run on the same event | ✅ | `pr-flow.test.ts` |
 | `semantic-release` invocation itself | ❌ | not flywheel's surface; tested via Layer 3 once available |
 

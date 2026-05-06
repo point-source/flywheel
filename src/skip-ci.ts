@@ -1,14 +1,21 @@
 // GitHub Actions recognizes six magic strings in commit messages as
 // workflow-suppression directives. When any of these appear anywhere in
 // a commit message, GitHub silently skips every workflow that would have
-// triggered for the push. The marker also propagates through default
-// squash-merge commit bodies (which concatenate the squashed commits'
-// messages) — so a single contaminated PR can suppress all workflows on
-// the merge target, breaking semantic-release and back-merge.
+// triggered for the push.
+//
+// Feature PRs into a stream branch always squash, and GitHub's default
+// squash_merge_commit_message: COMMIT_MESSAGES concatenates every squashed
+// commit's body into the squash commit body. A single contaminated commit
+// would propagate the marker into the squash on the stream branch and
+// silently suppress every workflow there — breaking semantic-release and
+// the promotion-PR upsert. Promotion + back-merge use true merge (each
+// commit kept individually as its own ancestor), so markers don't
+// concatenate on those edges; the only path that needs blocking is the
+// feature-PR squash.
 //
 // We detect these markers in PR titles, PR bodies, and every commit's
-// title/body in the PR, and fail the conventional-commit check before
-// the marker can reach the merge commit.
+// title/body in the PR, and fail the conventional-commit check at PR-open
+// time — before the marker can reach any squash commit.
 //
 // Reference: https://docs.github.com/en/actions/managing-workflow-runs/skipping-workflow-runs
 
