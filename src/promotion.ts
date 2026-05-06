@@ -56,8 +56,8 @@ export async function runPromotion(deps: PromotionDeps): Promise<PromotionOutcom
   const target = stream.branches[branchIdx + 1]!;
 
   const [sourceCommits, targetCommits] = await Promise.all([
-    gh.listBranchCommits(source.name, 200),
-    gh.listBranchCommits(target.name, 200),
+    gh.listBranchCommits(source.name),
+    gh.listBranchCommits(target.name),
   ]);
 
   const pending = computePendingCommits({

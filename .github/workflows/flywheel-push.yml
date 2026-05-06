@@ -30,12 +30,12 @@ jobs:
         run: |
           npx --yes \
             -p semantic-release@24 \
-            -p @semantic-release/commit-analyzer \
-            -p @semantic-release/release-notes-generator \
-            -p @semantic-release/changelog \
-            -p @semantic-release/exec \
-            -p @semantic-release/git \
-            -p @semantic-release/github \
+            -p @semantic-release/commit-analyzer@13 \
+            -p @semantic-release/release-notes-generator@14 \
+            -p @semantic-release/changelog@6 \
+            -p @semantic-release/exec@7 \
+            -p @semantic-release/git@10 \
+            -p @semantic-release/github@11 \
             semantic-release
         env:
           GITHUB_TOKEN: ${{ steps.flywheel.outputs.token }}

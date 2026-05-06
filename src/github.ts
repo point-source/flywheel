@@ -69,7 +69,7 @@ export interface GitHubClient {
   mergePR(prNumber: number, method: MergeMethod): Promise<MergeResult>;
 
   listPullCommits(prNumber: number): Promise<Commit[]>;
-  listBranchCommits(branch: string, perPage?: number): Promise<Commit[]>;
+  listBranchCommits(branch: string): Promise<Commit[]>;
 
   listOpenPRs(opts: { head: string; base: string }): Promise<PRSummary[]>;
   createPR(opts: { title: string; body: string; head: string; base: string }): Promise<PRSummary>;
@@ -195,14 +195,14 @@ export function createGitHubClient(token: string, repoFullName?: string): GitHub
       });
     },
 
-    async listBranchCommits(branch, perPage = 100) {
-      const all = await octokit.rest.repos.listCommits({
+    async listBranchCommits(branch) {
+      const all = await octokit.paginate(octokit.rest.repos.listCommits, {
         owner,
         repo,
         sha: branch,
-        per_page: perPage,
+        per_page: 100,
       });
-      return all.data.map((c) => {
+      return all.map((c) => {
         const message = c.commit.message;
         const { title, body } = splitMessage(message);
         return {

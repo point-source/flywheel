@@ -28216,14 +28216,14 @@ function createGitHubClient(token, repoFullName) {
         };
       });
     },
-    async listBranchCommits(branch, perPage = 100) {
-      const all = await octokit.rest.repos.listCommits({
+    async listBranchCommits(branch) {
+      const all = await octokit.paginate(octokit.rest.repos.listCommits, {
         owner,
         repo,
         sha: branch,
-        per_page: perPage
+        per_page: 100
       });
-      return all.data.map((c) => {
+      return all.map((c) => {
         const message = c.commit.message;
         const { title, body } = splitMessage(message);
         return {
@@ -28690,8 +28690,8 @@ async function runPromotion(deps) {
   const source = stream.branches[branchIdx];
   const target = stream.branches[branchIdx + 1];
   const [sourceCommits, targetCommits] = await Promise.all([
-    gh.listBranchCommits(source.name, 200),
-    gh.listBranchCommits(target.name, 200)
+    gh.listBranchCommits(source.name),
+    gh.listBranchCommits(target.name)
   ]);
   const pending = computePendingCommits({
     sourceCommits,
@@ -29041,10 +29041,17 @@ var CONFIG_FILE = ".flywheel.yml";
 async function run() {
   const event = getInput("event", { required: true });
   const appId = getInput("app-id", { required: true });
-  const privateKey = getInput("app-private-key", { required: true });
+  const privateKey = getInput("app-private-key");
   const ctx = context2;
   const owner = ctx.repo.owner;
   const repo = ctx.repo.repo;
+  if (!privateKey || privateKey.trim() === "") {
+    notice(
+      "Flywheel: app-private-key is empty. This is expected for fork PRs (GitHub does not pass secrets to fork PR workflows). Skipping the conductor \u2014 title rewrite, auto-merge labels, and promotion PR upserts will not run on this PR. The PR can still be merged manually."
+    );
+    setOutput("managed_branch", "false");
+    return;
+  }
   let auth6;
   try {
     auth6 = await mintInstallationToken(appId, privateKey, owner, repo);
