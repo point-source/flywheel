@@ -725,7 +725,7 @@ TypeScript, compiled to a single bundled JavaScript file for distribution. Publi
 1. Read `.flywheel.yml` — find which stream contains the pushed branch
 2. If pushed branch is the last branch in its stream — exit (terminal branch; no promotion PR; does not affect whether a release occurs)
 3. Identify next branch in stream array as the promotion target
-4. Collect pending commits. Promotion PRs land as true merge commits, so source ancestry is preserved on target and `git log target..source` would in principle suffice. The current implementation still uses commit-message matching (with `(#NN)` suffix stripping plus a date cutoff at the most recent `promote source → target` commit) — a holdover from the squash era that remains correct under merge mode and is scheduled for simplification in a follow-up.
+4. Collect pending commits. Promotion PRs land as true merge commits, so source ancestry is preserved on target; pending detection approximates `git log target..source` by SHA set-difference over the two branches' reachable histories, with a normalized-title fallback (with `(#NN)` suffix stripping) that catches cross-stream cherry-picks and the initial-seed case where SHAs don't yet overlap.
 5. If no qualifying commits (only non-bumping types since last promotion) — exit without creating or updating the promotion PR. This is intentional: chore/style/docs/etc. commits have no release significance on their own and will be included in the next promotion PR when a qualifying commit joins them. The promotion PR is a signal that something worth releasing is ready to move forward.
 6. Determine most impactful commit type from pending commits using precedence order
 7. Generate accumulated changelog from pending commits
