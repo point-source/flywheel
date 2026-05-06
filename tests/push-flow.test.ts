@@ -19,7 +19,6 @@ const config: FlywheelConfig = {
       ],
     },
   ],
-  merge_strategy: "squash",
 };
 
 describe("runPushFlow", () => {
@@ -88,7 +87,6 @@ describe("runPushFlow", () => {
           ],
         },
       ],
-      merge_strategy: "squash",
     };
     const writes: Array<{ path: string; contents: string }> = [];
     const outcome = await runPushFlow({
@@ -117,7 +115,6 @@ describe("getUpstreamBranches", () => {
         ],
       },
     ],
-    merge_strategy: "squash",
   };
 
   it("terminal branch → returns all earlier branches in stream order", () => {

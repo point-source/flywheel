@@ -87,7 +87,7 @@ Recognized types: `feat`, `fix`, `chore`, `refactor`, `perf`, `style`, `test`, `
 
 **Open PRs only when ready to merge.** A branch is your private work-in-progress; a PR is a request to merge. There is no "draft" intermediate state in this workflow. Iterate on the branch (push, run checks locally, etc.); when the work is ready, push and open the PR. Once open, Flywheel will rewrite the title, label it, and — if eligible — auto-merge as soon as required checks pass.
 
-**One PR per branch; the branch dies on merge.** After your PR merges (or after any PR carrying your commits merges — e.g. a maintainer squashed them into a cleanup PR) the branch is done. Cut a new branch off the latest `develop` for your next change. The repo has `delete_branch_on_merge` enabled so the remote branch disappears automatically; if you still have it locally, delete it (`git branch -D <name>`) before starting new work. Reusing a merged branch causes phantom rebase conflicts because the squashed upstream commit has a different patch-id than your originals.
+**One PR per branch; the branch dies on merge.** After your PR merges (or after any PR carrying your commits merges — e.g. a maintainer squashed them into a cleanup PR) the branch is done. Cut a new branch off the latest `develop` for your next change. The repo currently has `delete_branch_on_merge` disabled while issue #60 (targeted auto-delete that preserves stream branches) is open, so you must delete merged branches yourself (`git branch -D <name>` locally; `git push origin --delete <name>` for the remote). Reusing a merged branch causes phantom rebase conflicts because the squashed upstream commit has a different patch-id than your originals.
 
 **Automating the local cleanup.** Two one-time setup steps make the local-side hands-off:
 
@@ -140,7 +140,6 @@ When your change could meaningfully break adopters (schema changes, validation s
          branches:
            - name: main
              auto_merge: [fix, chore, docs]
-     merge_strategy: squash
    ```
 3. Copy `flywheel-pr.yml` / `flywheel-push.yml` from [`docs/adopter-setup.md`](./docs/adopter-setup.md), but replace
    ```yaml

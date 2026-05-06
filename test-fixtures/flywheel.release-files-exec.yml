@@ -6,4 +6,3 @@ flywheel:
   release_files:
     - path: pyproject.toml
       cmd: 'python -c "print(123)"'
-  merge_strategy: squash

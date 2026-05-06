@@ -36,7 +36,7 @@ export type MergeResult =
   | { ok: true; sha: string }
   | { ok: false; reason: string; status?: number };
 
-export type MergeMethod = "SQUASH" | "REBASE" | "MERGE";
+export type MergeMethod = "SQUASH" | "MERGE";
 
 export interface CreateCheckOptions {
   name: string;
@@ -156,7 +156,7 @@ export function createGitHubClient(token: string, repoFullName?: string): GitHub
           owner,
           repo,
           pull_number,
-          merge_method: method.toLowerCase() as "squash" | "rebase" | "merge",
+          merge_method: method.toLowerCase() as "squash" | "merge",
         });
         return { ok: true, sha: res.data.sha };
       } catch (err: unknown) {

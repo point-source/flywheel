@@ -42,17 +42,15 @@ jobs:
       - name: Back-merge release into upstream branches
         # Only runs when this push triggered a release (a tag was created at
         # HEAD by semantic-release) and the stream has upstream branches.
-        # Brings the chore(release) commit + tag into each upstream's ancestry
-        # so semantic-release sees the latest tag and the CHANGELOG stays in
-        # sync. The push will retrigger this workflow on the upstream branch;
-        # that re-run is intentional and a no-op in steady state — semantic-
-        # release sees the freshly back-merged tag at HEAD and exits without
-        # publishing a new release. We deliberately do *not* mark the merge
-        # commit `[skip ci]`: that token is a workflow-level filter, which
-        # would leave required status checks `Pending` on any promotion PR
-        # tracking the upstream branch. Adopters who want to skip CI work on
-        # back-merge commits should use a job-level `if:` in their quality
-        # workflows (which reports `success` and clears the gate).
+        # Replays main's chore(release) commit + tag into each upstream via a
+        # true `git merge` so ancestry is preserved and the next prerelease
+        # cycle computes from a synced state. We deliberately do *not* mark
+        # the back-merge commit `[skip ci]`: that token is a workflow-level
+        # filter, which would leave required status checks `Pending` on any
+        # promotion PR tracking the upstream branch. Adopters who want to
+        # skip CI work on back-merge commits should use a job-level `if:` in
+        # their quality workflows (which reports `success` and clears the
+        # gate).
         if: |
           steps.flywheel.outputs.managed_branch == 'true' &&
           steps.flywheel.outputs.back_merge_targets != ''
@@ -71,6 +69,16 @@ jobs:
           new_tag="$(echo "$new_tags" | head -n1)"
           git config user.name  'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          # Configure git auth for fetch + push using the App installation token.
+          # The checkout step ran with persist-credentials: false intentionally
+          # (so the workflow's read-scope default GITHUB_TOKEN couldn't shadow
+          # semantic-release's own push URL during step 3). The back-merge step
+          # needs write scope, so set the extraheader explicitly here using the
+          # App token (already exported as GITHUB_TOKEN). Mirror's actions/checkout's
+          # mechanism. The runner is torn down after the job, so persisting in
+          # .git/config has no security cost.
+          auth_header="Authorization: Basic $(printf 'x-access-token:%s' "$GITHUB_TOKEN" | base64 | tr -d '\n')"
+          git config "http.https://github.com/.extraheader" "$auth_header"
           IFS=',' read -ra UPSTREAMS <<< "$BACK_MERGE_TARGETS"
           for upstream in "${UPSTREAMS[@]}"; do
             echo "::group::Back-merge $RELEASED_BRANCH ($new_tag) → $upstream"

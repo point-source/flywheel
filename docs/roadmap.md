@@ -42,3 +42,59 @@ jobs:
 
 Status: open. Revisit after `init.sh` / `doctor.sh` adoption telemetry exists, so the decision is informed by which step in `docs/adopter-setup.md` adopters actually trip on.
 
+## Simplify `computePendingCommits` now that ancestry is preserved
+
+Under hybrid mode, promotion PRs land as true merge commits, so source commits become reachable from target and `git log target..source` is reliable. The current implementation in `src/promotion.ts:171-209` still uses two squash-era strategies:
+
+- **Strategy A** (date cutoff) calls `findLastPromotionCommit()` whose regex `^[a-z]+(\([^)]+\))?!?: promote source → target$` matches the squash-merged title format. Under hybrid mode the target's prior promotion is a merge commit with subject `Merge pull request #N from ORG/branch` — the regex never matches, so Strategy A silently no-ops.
+- **Strategy B** (title set difference, with `(#NN)` suffix stripping) still produces correct results because develop's individual commits become reachable on target via the merge, so they appear in `targetCommits` and get filtered out.
+
+The dead Strategy A masks a silent failure mode if Strategy B ever regresses. Refactor target: replace both with `git log target..source` semantics. Keep a small fallback for cherry-picked / identical-title cases so cross-stream cherry-picks still dedup.
+
+Status: deferred. `src/promotion.ts:171-209`, `src/promotion.ts:191-209` (`findLastPromotionCommit`, `buildPromotionTitleRegex`).
+
+## Public fork PRs cannot run conduct
+
+`scripts/templates/flywheel-pr.yml:2` triggers on plain `pull_request:`. GitHub does not pass repo secrets (including `FLYWHEEL_GH_APP_PRIVATE_KEY`) to PRs from forks. `action.yml:14` marks `app-private-key` as `required: true`, so the action fails immediately on fork PRs.
+
+Two possible fixes:
+1. Add an early-exit branch in `src/main.ts` that detects an empty `app-private-key`, posts a neutral check explaining the limitation, and exits cleanly.
+2. Document explicitly that Flywheel-managed repos shouldn't accept fork PRs (e.g., via a PR template or branch-naming rule).
+
+Status: pre-existing. Flywheel hasn't had public-fork adopters yet; revisit if/when.
+
+## `listBranchCommits` is unpaginated at 200
+
+`src/promotion.ts:57-60` requests up to 200 commits per branch; `src/github.ts:189-207` does a single page (`octokit.rest.repos.listCommits` with `per_page`). Long-lived branches with >200 commits between promotions can:
+
+- Lose Strategy A's last-promotion marker (returns null → falls back to Strategy B).
+- Treat already-promoted commits whose target-side mirror is older than 200 commits as pending (false positive in Strategy B).
+
+Both manifest as duplicate or noisy promotion PR bodies on slow-moving streams. Fix: paginate or compute against the last release tag instead of a fixed window.
+
+Status: pre-existing. Hybrid-mode-friendly fix is to combine this with the `computePendingCommits` simplification above.
+
+## Multi-stream tag namespace not fully protected
+
+`scripts/rulesets/tag-namespace.json:7` matches only `refs/tags/v*`. Secondary streams emit tags like `customer-acme/v1.2.3` (per `src/release-rc.ts:123-126`) which fall outside the protection — anyone with push scope can delete or force-update them.
+
+Fix: extend `include` to `["refs/tags/v*", "refs/tags/*/v*"]`, or generate the include list per-stream from `.flywheel.yml` in `scripts/apply-rulesets.sh`.
+
+Status: pre-existing.
+
+## semantic-release plugin majors unpinned
+
+`scripts/templates/flywheel-push.yml:31-39` (and the dogfood copy `.github/workflows/flywheel-push.yml:31-39`) pin `semantic-release@24` but leave every `@semantic-release/*` plugin at floating major:
+
+```yaml
+npx --yes \
+  -p semantic-release@24 \
+  -p @semantic-release/commit-analyzer \
+  -p @semantic-release/release-notes-generator \
+  ...
+```
+
+When a plugin major releases, every adopter pipeline picks it up on the next push and can break unexpectedly. Fix: pin each plugin to a known-good major (current state is `commit-analyzer@13`, `release-notes-generator@14`, `changelog@6`, `exec@7`, `git@10`, `github@11`).
+
+Status: pre-existing.
+

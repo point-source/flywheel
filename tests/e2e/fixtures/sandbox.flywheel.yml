@@ -27,5 +27,3 @@ flywheel:
           release: prerelease
           suffix: int
           auto_merge: [fix, chore, perf, style, test]
-
-  merge_strategy: squash

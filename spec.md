@@ -110,7 +110,7 @@ on: workflow_run build completed
 
 **Important:** The release flow and the promotion PR flow are independent reactions to the same push event. A branch that is last in its stream (the terminal branch) still releases — being last means no promotion PR is created, not that no release occurs. Releases happen on every push to any managed branch where semantic-release computes a new version. A single-branch stream releases immediately on every qualifying push with no promotion step.
 
-**Back-merge.** Whenever a release lands on a non-head branch in its stream (e.g. `main` in a `develop → staging → main` stream), Flywheel back-merges the new tag and the `chore(release)` commit into every upstream branch (`staging`, `develop`) before the workflow exits. This keeps the release tag in each upstream branch's ancestry — required for semantic-release on those branches to compute the next prerelease version correctly — and keeps `CHANGELOG.md` in sync. The back-merge push retriggers `flywheel-push.yml` on the upstream branch; that re-run is intentional and a no-op in steady state — semantic-release sees the freshly back-merged tag at HEAD and exits without publishing. Flywheel deliberately does **not** mark the merge commit `[skip ci]`: that token is a workflow-level commit-message filter and would leave required status checks `Pending` on any promotion PR tracking the upstream branch (per GitHub's [required-status-checks docs](https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/collaborating-on-repositories-with-code-quality-features/troubleshooting-required-status-checks#handling-skipped-but-required-checks)). Adopters who want to skip CI work on back-merge / release commits should use a job-level `if:` in their quality workflows — a job-level skip reports `success` to the required-checks rule and clears the gate. The App must be a bypass actor on each upstream branch's ruleset (already required by Flywheel's spec for the release push itself); without it, the back-merge push is rejected by the linear-history rule. Single-branch streams have no upstream branches and skip this step.
+**Back-merge.** Whenever a release lands on a non-head branch in its stream (e.g. `main` in a `develop → staging → main` stream), Flywheel back-merges the new tag and the `chore(release)` commit into every upstream branch (`staging`, `develop`) before the workflow exits. This keeps the release tag in each upstream branch's ancestry — required for semantic-release on those branches to compute the next prerelease version correctly — and keeps `CHANGELOG.md` in sync. The back-merge push retriggers `flywheel-push.yml` on the upstream branch; that re-run is intentional and a no-op in steady state — semantic-release sees the freshly back-merged tag at HEAD and exits without publishing. Flywheel deliberately does **not** mark the merge commit `[skip ci]`: that token is a workflow-level commit-message filter and would leave required status checks `Pending` on any promotion PR tracking the upstream branch (per GitHub's [required-status-checks docs](https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/collaborating-on-repositories-with-code-quality-features/troubleshooting-required-status-checks#handling-skipped-but-required-checks)). Adopters who want to skip CI work on back-merge / release commits should use a job-level `if:` in their quality workflows — a job-level skip reports `success` to the required-checks rule and clears the gate. The App must be a bypass actor on each upstream branch's ruleset (already required by Flywheel's spec for the release push itself); without it, the back-merge push is rejected by the PR-only rule. Single-branch streams have no upstream branches and skip this step.
 
 ---
 
@@ -182,13 +182,14 @@ flywheel:
             - fix
             - fix!
             - chore
-
-  # Merge strategy: squash (default) | rebase
-  # Note: 'merge' is intentionally omitted. The recommended branch ruleset
-  # requires linear history, which is incompatible with merge commits.
-  # If you need merge commits, disable the linear history ruleset requirement.
-  merge_strategy: squash
 ```
+
+Flywheel uses a hybrid merge strategy that is not adopter-configurable:
+
+- Feature PRs into a stream branch always **squash** so each merged PR contributes exactly one CHANGELOG entry and intermediate WIP commits stay invisible.
+- Promotion PRs (e.g. `develop` → `main`) always **merge** (true merge commit) so source ancestry is preserved. The back-merge step that follows a release similarly uses `git merge --ff-only || --no-ff` for the same reason.
+
+See [`docs/squash-merge-issues.md`](./docs/squash-merge-issues.md) for the bug class that drove this opinionated choice.
 
 ### Branch config fields
 
@@ -325,9 +326,9 @@ Three placeholders are available in `replacement` and `cmd`:
 | ------------ | ------------------------------------ | -------------------------------------------------------------------------------------------------- |
 | `${version}` | `${nextRelease.version}`             | Full semver string (e.g. `1.2.3`, `1.2.3-rc.1`).                                                   |
 | `${channel}` | `${nextRelease.channel \|\| ''}`     | Prerelease channel (`rc`, `dev`, …); empty string on production releases.                          |
-| `${build}`   | `${BUILD}` (shell variable)          | Monotonic integer = `$(git tag --list 'v*' \| wc -l) + 1`. Required for Play Store / App Store.    |
+| `${build}`   | `${BUILD}` (shell variable)          | Monotonic integer = `$(git tag --list 'v*' '*/v*' \| wc -l) + 1`. Required for Play Store / App Store. Counts unscoped + stream-scoped tags so multi-stream repos get a single monotonic build counter. |
 
-All entries share a single `prepareCmd` that begins `BUILD=$(( $(git tag --list 'v*' | wc -l) + 1 ))` and `&&`-chains every entry. Failure of any step aborts the release. Plugin order is preserved — `@semantic-release/exec` runs after `@semantic-release/changelog` and before `@semantic-release/git`, so file edits land in the same release commit as the changelog.
+All entries share a single `prepareCmd` that begins `BUILD=$(( $(git tag --list 'v*' '*/v*' | wc -l) + 1 ))` and `&&`-chains every entry. Failure of any step aborts the release. Plugin order is preserved — `@semantic-release/exec` runs after `@semantic-release/changelog` and before `@semantic-release/git`, so file edits land in the same release commit as the changelog.
 
 The build number is **tag-count-based**: it counts existing `v*` tags repo-wide and adds one. This is monotonic across rc and prod releases (a property the Play Store and App Store require) but is not a "build number per branch" — every release, regardless of channel, increments it. Adopters who need a different scheme should use the `cmd` form to compute their own.
 
@@ -675,7 +676,7 @@ The check name registered in branch protection must match the job name exactly (
 
 ### Ruleset 1 — Protect managed branches
 
-Target all branches listed in `.flywheel.yml`. Enable: require PRs, require status checks (add your quality check names), block force push, block deletion, require linear history. **Bypass actor: the Flywheel GitHub App, in `bypass_mode: always` — required.** Without this, two pushes are rejected: semantic-release's `chore(release)` commit + tag (rejected by "changes must be made through a pull request" → `EGITNOPERMISSION`) and the back-merge merge commit into upstream branches (rejected by linear-history). `scripts/apply-rulesets.sh --app-id <id>` writes this for you and applies it to every managed branch in the stream.
+Target all branches listed in `.flywheel.yml`. Enable: require PRs, require status checks (add your quality check names), block force push, block deletion. **Bypass actor: the Flywheel GitHub App, in `bypass_mode: always` — required.** Without this, both pushes the App makes are rejected by the PR-only rule (`EGITNOPERMISSION` / "changes must be made through a pull request"): semantic-release's `chore(release)` commit + tag, and the back-merge merge commit into upstream branches. `scripts/apply-rulesets.sh --app-id <id>` writes this for you and applies it to every managed branch in the stream. (Linear history is intentionally not applied: promotion + back-merge produce merge commits under hybrid mode.)
 
 ### Ruleset 2 — Merge queue
 
@@ -724,7 +725,7 @@ TypeScript, compiled to a single bundled JavaScript file for distribution. Publi
 1. Read `.flywheel.yml` — find which stream contains the pushed branch
 2. If pushed branch is the last branch in its stream — exit (terminal branch; no promotion PR; does not affect whether a release occurs)
 3. Identify next branch in stream array as the promotion target
-4. Collect pending commits using commit message matching rather than SHA ancestry. Because the default `merge_strategy: squash` produces new SHAs on the target branch, SHA-based ancestry (`git log target..source`) will incorrectly show already-promoted commits as pending. Instead, Flywheel compares commit messages (conventional commit title lines) between source and target, excluding messages already present in target branch history since the last Flywheel promotion tag.
+4. Collect pending commits. Promotion PRs land as true merge commits, so source ancestry is preserved on target and `git log target..source` would in principle suffice. The current implementation still uses commit-message matching (with `(#NN)` suffix stripping plus a date cutoff at the most recent `promote source → target` commit) — a holdover from the squash era that remains correct under merge mode and is scheduled for simplification in a follow-up.
 5. If no qualifying commits (only non-bumping types since last promotion) — exit without creating or updating the promotion PR. This is intentional: chore/style/docs/etc. commits have no release significance on their own and will be included in the next promotion PR when a qualifying commit joins them. The promotion PR is a signal that something worth releasing is ready to move forward.
 6. Determine most impactful commit type from pending commits using precedence order
 7. Generate accumulated changelog from pending commits

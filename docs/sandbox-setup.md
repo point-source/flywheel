@@ -34,8 +34,9 @@ never against `flywheel` itself or any production target.
 
 4. **Branch protection.**
    - On every branch listed above: block force pushes, block deletions.
-   - On `e2e-main`, `e2e-staging`, `e2e-customer-acme`: require linear history
-     (squash-only), require a passing PR before merging.
+   - On `e2e-main`, `e2e-staging`, `e2e-customer-acme`: require a passing PR
+     before merging. (Linear history is intentionally not applied: under
+     hybrid mode, promotion + back-merge produce merge commits.)
    - Allow auto-merge in repo settings (Settings → General → Pull Requests).
 
 5. **Use the `flywheel-build-e2e` GitHub App for auth.** A single App

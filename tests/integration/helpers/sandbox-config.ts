@@ -48,5 +48,4 @@ export const sandboxConfig: FlywheelConfig = {
       ],
     },
   ],
-  merge_strategy: "squash",
 };

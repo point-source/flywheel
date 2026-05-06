@@ -8,4 +8,3 @@ flywheel:
       pattern: '^version: .*'
       replacement: 'version: ${version}'
       cmd: 'echo do not use both'
-  merge_strategy: squash

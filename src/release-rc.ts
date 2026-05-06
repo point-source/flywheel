@@ -97,7 +97,10 @@ function buildPlugins(releaseFiles: ReleaseFile[] | undefined): unknown[] {
 // $BUILD is a bash variable assigned inline; semantic-release passes it through
 // untouched because it doesn't match Lodash's interpolate syntax.
 function buildPrepareCmd(releaseFiles: ReleaseFile[]): string {
-  const buildPrefix = "BUILD=$(( $(git tag --list 'v*' | wc -l) + 1 ))";
+  // Count both unscoped (`v*`) and stream-scoped (`<stream>/v*`) tags so
+  // multi-stream repos produce a monotonic build number across all streams.
+  // The 'v*' glob alone misses customer-acme/v1.2.3 and similar.
+  const buildPrefix = "BUILD=$(( $(git tag --list 'v*' '*/v*' | wc -l) + 1 ))";
   const parts = releaseFiles.map(renderEntry);
   return [buildPrefix, ...parts].join(" && ");
 }

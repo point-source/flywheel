@@ -11,14 +11,12 @@ import { ALLOWED_AUTO_MERGE_ENTRIES } from "./conventional.js";
 
 const TOP_LEVEL_KEYS = new Set([
   "streams",
-  "merge_strategy",
   "release_files",
 ]);
 
 const BRANCH_KEYS = new Set(["name", "release", "suffix", "auto_merge"]);
 const STREAM_KEYS = new Set(["name", "branches"]);
 const RELEASE_FILE_KEYS = new Set(["path", "pattern", "replacement", "cmd"]);
-const MERGE_STRATEGIES = new Set(["squash", "rebase"]);
 const RELEASE_MODES = new Set<ReleaseMode>(["none", "prerelease", "production"]);
 
 export interface ConfigLoadResult {
@@ -62,7 +60,6 @@ export function loadConfig(yamlText: string): ConfigLoadResult {
   }
 
   const streams = parseStreams(root.streams, errors);
-  const mergeStrategy = parseMergeStrategy(root.merge_strategy, errors);
   const releaseFiles = parseReleaseFiles(root.release_files, errors);
 
   if (streams && streams.length > 0) {
@@ -76,7 +73,6 @@ export function loadConfig(yamlText: string): ConfigLoadResult {
   return {
     config: {
       streams: streams!,
-      merge_strategy: mergeStrategy,
       ...(releaseFiles ? { release_files: releaseFiles } : {}),
     },
     errors,
@@ -290,17 +286,6 @@ function parseReleaseFiles(value: unknown, errors: string[]): ReleaseFile[] | un
     }
   });
   return parsed.length > 0 ? parsed : undefined;
-}
-
-function parseMergeStrategy(value: unknown, errors: string[]) {
-  if (value === undefined) return "squash" as const;
-  if (typeof value !== "string" || !MERGE_STRATEGIES.has(value)) {
-    errors.push(
-      `flywheel.merge_strategy: must be "squash" or "rebase" (got ${JSON.stringify(value)}).`,
-    );
-    return "squash" as const;
-  }
-  return value as "squash" | "rebase";
 }
 
 function validateStreams(

@@ -37,4 +37,3 @@ flywheel:
             - docs
             - ci
             - build
-  merge_strategy: squash
