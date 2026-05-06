@@ -19,6 +19,13 @@
 
 * **pr-flow:** leave promotion PRs to runPromotion (use MERGE, not SQUASH) ([#79](https://github.com/point-source/flywheel/issues/79)) ([0ad50df](https://github.com/point-source/flywheel/commit/0ad50dff9756f39ebe2f8483a0d7118ae64bc128)), closes [#74](https://github.com/point-source/flywheel/issues/74) [#77](https://github.com/point-source/flywheel/issues/77)
 
+## [1.0.1](https://github.com/point-source/flywheel/compare/v1.0.0...v1.0.1) (2026-05-06)
+
+
+### Bug Fixes
+
+* promote develop → main ([#74](https://github.com/point-source/flywheel/issues/74)) ([bedf3cd](https://github.com/point-source/flywheel/commit/bedf3cd424dfbfc8161a5f4e900fef8757196d77)), closes [#60](https://github.com/point-source/flywheel/issues/60) [#72](https://github.com/point-source/flywheel/issues/72) [#70](https://github.com/point-source/flywheel/issues/70) [#73](https://github.com/point-source/flywheel/issues/73) [#71](https://github.com/point-source/flywheel/issues/71) [#75](https://github.com/point-source/flywheel/issues/75) [#76](https://github.com/point-source/flywheel/issues/76)
+
 ## [1.0.1-dev.1](https://github.com/point-source/flywheel/compare/v1.0.0...v1.0.1-dev.1) (2026-05-06)
 
 
