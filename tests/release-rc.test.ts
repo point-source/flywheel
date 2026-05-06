@@ -164,22 +164,25 @@ describe("generateReleaseRc", () => {
     });
 
     it("declarative entry → exec plugin gets sed prepareCmd; file added to git assets", () => {
-      const rc = generateReleaseRc(baseConfig.streams[0]!, {
-        ...baseConfig,
-        release_files: [
-          {
-            path: "pubspec.yaml",
-            pattern: "^version: .*",
-            replacement: "version: ${version}+${build}",
-          },
-        ],
-      });
+      const rc = generateReleaseRc(
+        baseConfig.streams[0]!,
+        {
+          ...baseConfig,
+          release_files: [
+            {
+              path: "pubspec.yaml",
+              pattern: "^version: .*",
+              replacement: "version: ${version}+${build}",
+            },
+          ],
+        },
+        7,
+      );
       expect(rc.plugins).toContainEqual([
         "@semantic-release/exec",
         {
           prepareCmd:
-            "BUILD=$(( $(git tag --list 'v*' '*/v*' | wc -l) + 1 )) && " +
-            'sed -i.bak -E "s|^version: .*|version: ${nextRelease.version}+${BUILD}|" pubspec.yaml && ' +
+            'sed -i.bak -E "s|^version: .*|version: ${nextRelease.version}+7|" pubspec.yaml && ' +
             "rm pubspec.yaml.bak",
         },
       ]);
@@ -200,32 +203,35 @@ describe("generateReleaseRc", () => {
         "@semantic-release/exec",
         {
           prepareCmd:
-            "BUILD=$(( $(git tag --list 'v*' '*/v*' | wc -l) + 1 )) && " +
             "python bump.py \"${nextRelease.version}\" \"${nextRelease.channel || ''}\"",
         },
       ]);
     });
 
     it("multiple entries (mixed forms) → single exec plugin, &&-chained, all paths in git assets", () => {
-      const rc = generateReleaseRc(baseConfig.streams[0]!, {
-        ...baseConfig,
-        release_files: [
-          {
-            path: "pubspec.yaml",
-            pattern: "^version: .*",
-            replacement: "version: ${version}+${build}",
-          },
-          { path: "scripts/bump.sh", cmd: 'echo "${version}" > VERSION' },
-        ],
-      });
+      const rc = generateReleaseRc(
+        baseConfig.streams[0]!,
+        {
+          ...baseConfig,
+          release_files: [
+            {
+              path: "pubspec.yaml",
+              pattern: "^version: .*",
+              replacement: "version: ${version}+${build}",
+            },
+            { path: "scripts/bump.sh", cmd: 'echo "${version}" > VERSION' },
+          ],
+        },
+        42,
+      );
       const execEntries = rc.plugins.filter(
         (p) => Array.isArray(p) && p[0] === "@semantic-release/exec",
       );
       expect(execEntries).toHaveLength(1);
       const prepareCmd = (execEntries[0] as [string, { prepareCmd: string }])[1]
         .prepareCmd;
-      expect(prepareCmd).toMatch(/^BUILD=\$\(\( \$\(git tag --list 'v\*' '\*\/v\*'.*\) \+ 1 \)\) && /);
       expect(prepareCmd).toContain("sed -i.bak -E");
+      expect(prepareCmd).toContain("+42|");
       expect(prepareCmd).toContain('echo "${nextRelease.version}" > VERSION');
       expect(rc.plugins).toContainEqual([
         "@semantic-release/git",
@@ -234,6 +240,61 @@ describe("generateReleaseRc", () => {
           message: GIT_MESSAGE,
         },
       ]);
+    });
+
+    // Regression for #95: previously rendered `${BUILD}` into prepareCmd and
+    // relied on a bash-assigned $BUILD to satisfy it at runtime. semantic-release's
+    // @semantic-release/exec runs the cmd through lodash.template, whose
+    // hardcoded ES-template pass evaluates ${BUILD} as a JS expression and
+    // ReferenceErrors before bash ever sees it.
+    it("${build} is inlined as a literal integer (not ${BUILD} bash variable)", () => {
+      const rc = generateReleaseRc(
+        baseConfig.streams[0]!,
+        {
+          ...baseConfig,
+          release_files: [
+            {
+              path: "pubspec.yaml",
+              pattern: "^version: .*",
+              replacement: "version: ${version}+${build}",
+            },
+          ],
+        },
+        12,
+      );
+      const execEntry = rc.plugins.find(
+        (p): p is [string, { prepareCmd: string }] =>
+          Array.isArray(p) && p[0] === "@semantic-release/exec",
+      )!;
+      expect(execEntry[1].prepareCmd).not.toContain("${BUILD}");
+      expect(execEntry[1].prepareCmd).not.toContain("BUILD=");
+      expect(execEntry[1].prepareCmd).toContain("+12|");
+    });
+
+    it("throws when ${build} is referenced but no buildNumber is supplied", () => {
+      expect(() =>
+        generateReleaseRc(baseConfig.streams[0]!, {
+          ...baseConfig,
+          release_files: [
+            {
+              path: "pubspec.yaml",
+              pattern: "^version: .*",
+              replacement: "version: ${version}+${build}",
+            },
+          ],
+        }),
+      ).toThrow(/\$\{build\}/);
+    });
+
+    it("buildNumber is not required when no entry references ${build}", () => {
+      expect(() =>
+        generateReleaseRc(baseConfig.streams[0]!, {
+          ...baseConfig,
+          release_files: [
+            { path: "version.txt", pattern: "^.*$", replacement: "${version}" },
+          ],
+        }),
+      ).not.toThrow();
     });
 
     it("git assets dedupe: file already in default assets is not duplicated", () => {

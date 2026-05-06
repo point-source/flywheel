@@ -1,8 +1,12 @@
+import { execFile } from "node:child_process";
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { promisify } from "node:util";
 
 import type { FlywheelConfig, Stream } from "./types.js";
-import { generateReleaseRc } from "./release-rc.js";
+import { generateReleaseRc, usesBuildPlaceholder } from "./release-rc.js";
+
+const execFileAsync = promisify(execFile);
 
 export interface PushFlowDeps {
   branchRef: string;
@@ -10,6 +14,7 @@ export interface PushFlowDeps {
   workspace: string;
   log: PushLogger;
   writer?: (path: string, contents: string) => Promise<void>;
+  buildNumberProvider?: (workspace: string) => Promise<number>;
 }
 
 export interface PushLogger {
@@ -38,7 +43,8 @@ export async function runPushFlow(deps: PushFlowDeps): Promise<PushFlowOutcome> 
     return { kind: "promote-only", stream };
   }
 
-  const rc = generateReleaseRc(stream, deps.config);
+  const buildNumber = await maybeComputeBuildNumber(deps);
+  const rc = generateReleaseRc(stream, deps.config, buildNumber);
   const rcPath = join(deps.workspace, ".releaserc.json");
   const writer = deps.writer ?? defaultWriter;
   await writer(rcPath, JSON.stringify(rc, null, 2));
@@ -78,4 +84,23 @@ export function getUpstreamBranches(
 
 async function defaultWriter(path: string, contents: string): Promise<void> {
   await writeFile(path, contents, "utf8");
+}
+
+async function maybeComputeBuildNumber(deps: PushFlowDeps): Promise<number | undefined> {
+  if (!deps.config.release_files || !usesBuildPlaceholder(deps.config.release_files)) {
+    return undefined;
+  }
+  const provider = deps.buildNumberProvider ?? defaultBuildNumberProvider;
+  return provider(deps.workspace);
+}
+
+// Counts both unscoped (`v*`) and stream-scoped (`<stream>/v*`) tags so
+// multi-stream repos produce a monotonic build number across all streams.
+// The 'v*' glob alone misses customer-acme/v1.2.3 and similar.
+async function defaultBuildNumberProvider(workspace: string): Promise<number> {
+  const { stdout } = await execFileAsync("git", ["tag", "--list", "v*", "*/v*"], {
+    cwd: workspace,
+  });
+  const count = stdout.split("\n").filter((line) => line.length > 0).length;
+  return count + 1;
 }
