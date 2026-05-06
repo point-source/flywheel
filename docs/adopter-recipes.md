@@ -35,7 +35,7 @@ The `path` still drives the `assets` list; the `cmd` is run verbatim after place
 | ------------ | ------------------------------------ | -------------------------------------------------------------------------------------------------- |
 | `${version}` | semver string (e.g. `1.2.3-rc.1`)    | Always present.                                                                                    |
 | `${channel}` | `rc`, `dev`, …                       | Empty string on production releases.                                                               |
-| `${build}`   | monotonic integer                    | `git tag --list 'v*' \| wc -l + 1`. Counts every prior release (rc and prod). Required by Play/App Store. |
+| `${build}`   | monotonic integer                    | `git tag --list 'v*' '*/v*' \| wc -l + 1`. Counts every prior release (rc and prod, including stream-scoped tags). Required by Play/App Store. |
 
 ## sed portability
 

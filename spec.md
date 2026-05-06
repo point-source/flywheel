@@ -326,9 +326,9 @@ Three placeholders are available in `replacement` and `cmd`:
 | ------------ | ------------------------------------ | -------------------------------------------------------------------------------------------------- |
 | `${version}` | `${nextRelease.version}`             | Full semver string (e.g. `1.2.3`, `1.2.3-rc.1`).                                                   |
 | `${channel}` | `${nextRelease.channel \|\| ''}`     | Prerelease channel (`rc`, `dev`, …); empty string on production releases.                          |
-| `${build}`   | `${BUILD}` (shell variable)          | Monotonic integer = `$(git tag --list 'v*' \| wc -l) + 1`. Required for Play Store / App Store.    |
+| `${build}`   | `${BUILD}` (shell variable)          | Monotonic integer = `$(git tag --list 'v*' '*/v*' \| wc -l) + 1`. Required for Play Store / App Store. Counts unscoped + stream-scoped tags so multi-stream repos get a single monotonic build counter. |
 
-All entries share a single `prepareCmd` that begins `BUILD=$(( $(git tag --list 'v*' | wc -l) + 1 ))` and `&&`-chains every entry. Failure of any step aborts the release. Plugin order is preserved — `@semantic-release/exec` runs after `@semantic-release/changelog` and before `@semantic-release/git`, so file edits land in the same release commit as the changelog.
+All entries share a single `prepareCmd` that begins `BUILD=$(( $(git tag --list 'v*' '*/v*' | wc -l) + 1 ))` and `&&`-chains every entry. Failure of any step aborts the release. Plugin order is preserved — `@semantic-release/exec` runs after `@semantic-release/changelog` and before `@semantic-release/git`, so file edits land in the same release commit as the changelog.
 
 The build number is **tag-count-based**: it counts existing `v*` tags repo-wide and adds one. This is monotonic across rc and prod releases (a property the Play Store and App Store require) but is not a "build number per branch" — every release, regardless of channel, increments it. Adopters who need a different scheme should use the `cmd` form to compute their own.
 

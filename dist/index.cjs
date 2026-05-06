@@ -28562,7 +28562,7 @@ function buildPlugins(releaseFiles) {
   });
 }
 function buildPrepareCmd(releaseFiles) {
-  const buildPrefix = "BUILD=$(( $(git tag --list 'v*' | wc -l) + 1 ))";
+  const buildPrefix = "BUILD=$(( $(git tag --list 'v*' '*/v*' | wc -l) + 1 ))";
   const parts = releaseFiles.map(renderEntry);
   return [buildPrefix, ...parts].join(" && ");
 }
