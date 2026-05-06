@@ -69,6 +69,16 @@ jobs:
           new_tag="$(echo "$new_tags" | head -n1)"
           git config user.name  'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          # Configure git auth for fetch + push using the App installation token.
+          # The checkout step ran with persist-credentials: false intentionally
+          # (so the workflow's read-scope default GITHUB_TOKEN couldn't shadow
+          # semantic-release's own push URL during step 3). The back-merge step
+          # needs write scope, so set the extraheader explicitly here using the
+          # App token (already exported as GITHUB_TOKEN). Mirror's actions/checkout's
+          # mechanism. The runner is torn down after the job, so persisting in
+          # .git/config has no security cost.
+          auth_header="Authorization: Basic $(printf 'x-access-token:%s' "$GITHUB_TOKEN" | base64 | tr -d '\n')"
+          git config "http.https://github.com/.extraheader" "$auth_header"
           IFS=',' read -ra UPSTREAMS <<< "$BACK_MERGE_TARGETS"
           for upstream in "${UPSTREAMS[@]}"; do
             echo "::group::Back-merge $RELEASED_BRANCH ($new_tag) → $upstream"

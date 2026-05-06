@@ -31,8 +31,9 @@ Flywheel protects its own `main` branch with the four rulesets from spec §Branc
 - Require status checks: `verify`, plus any future quality checks
 - Block force pushes
 - Block deletions
-- Require linear history (incompatible with merge commits — squash only)
 - Bypass actor: the Flywheel GitHub App only
+
+(Linear history is intentionally not applied: under hybrid mode, promotion + back-merge produce merge commits, which the rule would reject.)
 
 ### Ruleset 2 — Merge queue on `main`
 - Group size 1 (strict)
