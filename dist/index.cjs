@@ -27791,13 +27791,11 @@ function isBumping(type2, breaking) {
 // src/config.ts
 var TOP_LEVEL_KEYS = /* @__PURE__ */ new Set([
   "streams",
-  "merge_strategy",
   "release_files"
 ]);
 var BRANCH_KEYS = /* @__PURE__ */ new Set(["name", "release", "suffix", "auto_merge"]);
 var STREAM_KEYS = /* @__PURE__ */ new Set(["name", "branches"]);
 var RELEASE_FILE_KEYS = /* @__PURE__ */ new Set(["path", "pattern", "replacement", "cmd"]);
-var MERGE_STRATEGIES = /* @__PURE__ */ new Set(["squash", "rebase"]);
 var RELEASE_MODES = /* @__PURE__ */ new Set(["none", "prerelease", "production"]);
 function loadConfig(yamlText) {
   const errors = [];
@@ -27828,7 +27826,6 @@ function loadConfig(yamlText) {
     }
   }
   const streams = parseStreams(root.streams, errors);
-  const mergeStrategy = parseMergeStrategy(root.merge_strategy, errors);
   const releaseFiles = parseReleaseFiles(root.release_files, errors);
   if (streams && streams.length > 0) {
     validateStreams(streams, errors, notices);
@@ -27839,7 +27836,6 @@ function loadConfig(yamlText) {
   return {
     config: {
       streams,
-      merge_strategy: mergeStrategy,
       ...releaseFiles ? { release_files: releaseFiles } : {}
     },
     errors,
@@ -28041,16 +28037,6 @@ function parseReleaseFiles(value, errors) {
   });
   return parsed.length > 0 ? parsed : void 0;
 }
-function parseMergeStrategy(value, errors) {
-  if (value === void 0) return "squash";
-  if (typeof value !== "string" || !MERGE_STRATEGIES.has(value)) {
-    errors.push(
-      `flywheel.merge_strategy: must be "squash" or "rebase" (got ${JSON.stringify(value)}).`
-    );
-    return "squash";
-  }
-  return value;
-}
 function validateStreams(streams, errors, notices) {
   const streamNameCounts = /* @__PURE__ */ new Map();
   for (const s of streams) {
@@ -28167,7 +28153,7 @@ function createGitHubClient(token, repoFullName) {
         if (status !== 404) throw err;
       }
     },
-    async enableAutoMerge(pullRequestId, mergeMethod2) {
+    async enableAutoMerge(pullRequestId, mergeMethod) {
       try {
         await octokit.graphql(
           `mutation Enable($id: ID!, $mergeMethod: PullRequestMergeMethod!) {
@@ -28175,7 +28161,7 @@ function createGitHubClient(token, repoFullName) {
               pullRequest { id }
             }
           }`,
-          { id: pullRequestId, mergeMethod: mergeMethod2 }
+          { id: pullRequestId, mergeMethod }
         );
         return { ok: true };
       } catch (err) {
@@ -28397,7 +28383,7 @@ async function runPrFlow({ pr, config, gh, log }) {
   if (eligible) {
     await gh.addLabels(pr.number, [FLYWHEEL_AUTO_MERGE_LABEL]);
     await gh.removeLabel(pr.number, FLYWHEEL_NEEDS_REVIEW_LABEL);
-    const method = mergeMethod(config);
+    const method = "SQUASH";
     const result = await gh.enableAutoMerge(pr.nodeId, method);
     if (result.ok) {
       log.info(`PR #${pr.number}: auto-merge enabled (${method.toLowerCase()}).`);
@@ -28452,9 +28438,6 @@ function findBranch(config, baseRef) {
     }
   }
   return null;
-}
-function mergeMethod(config) {
-  return config.merge_strategy === "rebase" ? "REBASE" : "SQUASH";
 }
 function formatTitle(parsed, breakingFromBodies) {
   const breaking = parsed.breaking || breakingFromBodies;
@@ -28721,7 +28704,7 @@ async function runPromotion(deps) {
     eligible,
     targetBranch: target
   });
-  const method = mergeMethodFor(config);
+  const method = "MERGE";
   const existing = await gh.listOpenPRs({ head: source.name, base: target.name });
   if (existing.length === 0) {
     const created = await gh.createPR({
@@ -28853,9 +28836,6 @@ async function applyLabel(gh, prNumber, label) {
   await gh.addLabels(prNumber, [label]);
   const opposite = label === FLYWHEEL_AUTO_MERGE_LABEL ? FLYWHEEL_NEEDS_REVIEW_LABEL : FLYWHEEL_AUTO_MERGE_LABEL;
   await gh.removeLabel(prNumber, opposite);
-}
-function mergeMethodFor(config) {
-  return config.merge_strategy === "rebase" ? "REBASE" : "SQUASH";
 }
 function locateBranch(config, branchRef) {
   for (const stream of config.streams) {
@@ -28989,7 +28969,6 @@ async function run() {
     });
     setOutput("managed_branch", outcome.kind === "release" ? "true" : "false");
     setOutput("back_merge_targets", getUpstreamBranches(config, branchRef).join(","));
-    setOutput("merge_strategy", config.merge_strategy);
     await runPromotion({
       branchRef,
       config,

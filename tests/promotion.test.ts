@@ -40,7 +40,6 @@ const config: FlywheelConfig = {
       ],
     },
   ],
-  merge_strategy: "squash",
 };
 
 const date = (iso: string) => iso;
@@ -182,6 +181,24 @@ describe("runPromotion — orchestration", () => {
     expect(gh.createdPRs[0]!.title).toBe("fix: promote develop → staging");
     expect(gh.prLabels[999]).toContain(FLYWHEEL_AUTO_MERGE_LABEL);
     expect(gh.autoMergeEnabledFor).toContain("PR_node_999");
+  });
+
+  it("promotion PRs always request MERGE (true merge commit) for auto-merge", async () => {
+    const gh = createFakeGh({
+      branchCommits: {
+        develop: [
+          makeCommit("c1", "fix: small fix", date("2026-01-05T10:00:00Z")),
+        ],
+        staging: [makeCommit("s1", "chore: old", date("2025-12-01T10:00:00Z"))],
+      },
+    });
+    const { log } = silentLogger();
+
+    await runPromotion({ branchRef: "develop", config, gh, log });
+
+    const enableCall = gh.calls.find((c) => c.method === "enableAutoMerge");
+    expect(enableCall).toBeDefined();
+    expect((enableCall!.args as { method: string }).method).toBe("MERGE");
   });
 
   it("breaking change in pending → title gets `!`, label tier evaluated for `feat!`", async () => {

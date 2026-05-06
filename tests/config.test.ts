@@ -25,7 +25,6 @@ describe("loadConfig", () => {
     expect(result.config!.streams[0]!.branches[1]!.suffix).toBe("rc");
     expect(result.config!.streams[0]!.branches[2]!.release).toBe("production");
     expect(result.config!.streams[0]!.branches[2]!.suffix).toBeUndefined();
-    expect(result.config!.merge_strategy).toBe("squash");
   });
 
   it("flags branch in multiple streams (rule 1)", () => {
@@ -248,7 +247,6 @@ flywheel:
     - path: pubspec.yaml
       pattern: '^a|b'
       replacement: 'x'
-  merge_strategy: squash
 `;
       const result = loadConfig(yamlText);
       expect(result.config).toBeNull();
@@ -263,7 +261,6 @@ flywheel:
       branches:
         - { name: main, release: production, auto_merge: [] }
   release_files: []
-  merge_strategy: squash
 `;
       const result = loadConfig(yamlText);
       expect(result.config).toBeNull();
@@ -277,7 +274,6 @@ flywheel:
     - name: only
       branches:
         - { name: main, release: production, auto_merge: [] }
-  merge_strategy: squash
 `;
       const result = loadConfig(yamlText);
       expect(result.errors).toEqual([]);
@@ -285,7 +281,7 @@ flywheel:
     });
   });
 
-  it("rejects merge_strategy: merge with descriptive error", () => {
+  it("flags merge_strategy as an unknown top-level key (field has been removed)", () => {
     const yamlText = `
 flywheel:
   streams:
@@ -294,10 +290,12 @@ flywheel:
         - name: main
           release: production
           auto_merge: []
-  merge_strategy: merge
+  merge_strategy: squash
 `;
     const result = loadConfig(yamlText);
     expect(result.config).toBeNull();
-    expect(result.errors.some((e) => e.includes('merge_strategy'))).toBe(true);
+    expect(
+      result.errors.some((e) => e.includes("flywheel.merge_strategy: unknown key")),
+    ).toBe(true);
   });
 });

@@ -118,7 +118,6 @@ flywheel:
       branches:
         - name: main
           auto_merge: [fix, chore, docs]
-  merge_strategy: squash
 ```
 
 A single-branch stream releases on every qualifying push and creates no promotion PRs. This is the simplest valid configuration.
@@ -141,7 +140,6 @@ flywheel:
         - name: main
           release: production
           auto_merge: []   # all PRs require human approval
-  merge_strategy: squash
 ```
 
 A multi-stream example with a customer variant:
@@ -164,7 +162,6 @@ flywheel:
           release: prerelease
           suffix: acme
           auto_merge: [fix, fix!, chore]
-  merge_strategy: squash
 ```
 
 ## 3. Add the Flywheel workflows

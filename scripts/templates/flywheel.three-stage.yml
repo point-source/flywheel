@@ -13,4 +13,3 @@ flywheel:
         - name: main
           release: production
           auto_merge: []
-  merge_strategy: squash
