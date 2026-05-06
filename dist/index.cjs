@@ -10833,7 +10833,7 @@ var require_mock_interceptor = __commonJS({
 var require_mock_client = __commonJS({
   "node_modules/undici/lib/mock/mock-client.js"(exports2, module2) {
     "use strict";
-    var { promisify } = require("node:util");
+    var { promisify: promisify2 } = require("node:util");
     var Client = require_client();
     var { buildMockDispatch } = require_mock_utils();
     var {
@@ -10873,7 +10873,7 @@ var require_mock_client = __commonJS({
         return new MockInterceptor(opts, this[kDispatches]);
       }
       async [kClose]() {
-        await promisify(this[kOriginalClose])();
+        await promisify2(this[kOriginalClose])();
         this[kConnected] = 0;
         this[kMockAgent][Symbols.kClients].delete(this[kOrigin]);
       }
@@ -10886,7 +10886,7 @@ var require_mock_client = __commonJS({
 var require_mock_pool = __commonJS({
   "node_modules/undici/lib/mock/mock-pool.js"(exports2, module2) {
     "use strict";
-    var { promisify } = require("node:util");
+    var { promisify: promisify2 } = require("node:util");
     var Pool = require_pool();
     var { buildMockDispatch } = require_mock_utils();
     var {
@@ -10926,7 +10926,7 @@ var require_mock_pool = __commonJS({
         return new MockInterceptor(opts, this[kDispatches]);
       }
       async [kClose]() {
-        await promisify(this[kOriginalClose])();
+        await promisify2(this[kOriginalClose])();
         this[kConnected] = 0;
         this[kMockAgent][Symbols.kClients].delete(this[kOrigin]);
       }
@@ -28792,8 +28792,10 @@ function groupCommits(commits, fallbackTitle) {
 }
 
 // src/push-flow.ts
+var import_node_child_process = require("node:child_process");
 var import_promises = require("node:fs/promises");
 var import_node_path = require("node:path");
+var import_node_util = require("node:util");
 
 // src/release-rc.ts
 var EXEC_PLUGIN = "@semantic-release/exec";
@@ -28832,18 +28834,23 @@ var DEFAULT_PLUGINS = [
   ],
   "@semantic-release/github"
 ];
-function generateReleaseRc(targetStream, config) {
+function generateReleaseRc(targetStream, config, buildNumber) {
   const tagFormat = chooseTagFormat(targetStream, config.streams);
   const releasingBranches = targetStream.branches.filter((b) => b.release !== "none");
   const branches = releasingBranches.map((b) => mapBranch(b, releasingBranches.length === 1)).filter((b) => b !== null);
-  const plugins = buildPlugins(config.release_files);
+  const plugins = buildPlugins(config.release_files, buildNumber);
   return { tagFormat, branches, plugins };
 }
-function buildPlugins(releaseFiles) {
+function usesBuildPlaceholder(releaseFiles) {
+  return releaseFiles.some(
+    (entry) => "cmd" in entry ? entry.cmd.includes("${build}") : entry.replacement.includes("${build}")
+  );
+}
+function buildPlugins(releaseFiles, buildNumber) {
   if (!releaseFiles || releaseFiles.length === 0) {
     return [...DEFAULT_PLUGINS];
   }
-  const prepareCmd = buildPrepareCmd(releaseFiles);
+  const prepareCmd = buildPrepareCmd(releaseFiles, buildNumber);
   const extraAssets = releaseFiles.map((f) => f.path);
   return DEFAULT_PLUGINS.map((entry) => {
     if (entry === EXEC_PLUGIN) {
@@ -28860,20 +28867,25 @@ function buildPlugins(releaseFiles) {
     return entry;
   });
 }
-function buildPrepareCmd(releaseFiles) {
-  const buildPrefix = "BUILD=$(( $(git tag --list 'v*' '*/v*' | wc -l) + 1 ))";
-  const parts = releaseFiles.map(renderEntry);
-  return [buildPrefix, ...parts].join(" && ");
+function buildPrepareCmd(releaseFiles, buildNumber) {
+  return releaseFiles.map((e) => renderEntry(e, buildNumber)).join(" && ");
 }
-function renderEntry(entry) {
+function renderEntry(entry, buildNumber) {
   if ("cmd" in entry) {
-    return substitutePlaceholders(entry.cmd);
+    return substitutePlaceholders(entry.cmd, buildNumber);
   }
-  const replacement = substitutePlaceholders(entry.replacement);
+  const replacement = substitutePlaceholders(entry.replacement, buildNumber);
   return `sed -i.bak -E "s|${entry.pattern}|${replacement}|" ${entry.path} && rm ${entry.path}.bak`;
 }
-function substitutePlaceholders(input) {
-  return input.replace(/\$\{version\}/g, "${nextRelease.version}").replace(/\$\{channel\}/g, "${nextRelease.channel || ''}").replace(/\$\{build\}/g, "${BUILD}");
+function substitutePlaceholders(input, buildNumber) {
+  const withVersionAndChannel = input.replace(/\$\{version\}/g, "${nextRelease.version}").replace(/\$\{channel\}/g, "${nextRelease.channel || ''}");
+  if (!withVersionAndChannel.includes("${build}")) return withVersionAndChannel;
+  if (buildNumber === void 0) {
+    throw new Error(
+      "release_files uses ${build} placeholder but no buildNumber was provided to generateReleaseRc"
+    );
+  }
+  return withVersionAndChannel.replace(/\$\{build\}/g, String(buildNumber));
 }
 function chooseTagFormat(target, allStreams) {
   const primary = pickPrimaryStream(allStreams);
@@ -28901,6 +28913,7 @@ function mapBranch(branch, isOnlyBranchInStream) {
 }
 
 // src/push-flow.ts
+var execFileAsync = (0, import_node_util.promisify)(import_node_child_process.execFile);
 async function runPushFlow(deps) {
   const stream = findStreamForBranch(deps.config, deps.branchRef);
   if (!stream) {
@@ -28916,7 +28929,8 @@ async function runPushFlow(deps) {
     );
     return { kind: "promote-only", stream };
   }
-  const rc = generateReleaseRc(stream, deps.config);
+  const buildNumber = await maybeComputeBuildNumber(deps);
+  const rc = generateReleaseRc(stream, deps.config, buildNumber);
   const rcPath = (0, import_node_path.join)(deps.workspace, ".releaserc.json");
   const writer = deps.writer ?? defaultWriter;
   await writer(rcPath, JSON.stringify(rc, null, 2));
@@ -28942,6 +28956,20 @@ function getUpstreamBranches(config, branchRef) {
 }
 async function defaultWriter(path, contents) {
   await (0, import_promises.writeFile)(path, contents, "utf8");
+}
+async function maybeComputeBuildNumber(deps) {
+  if (!deps.config.release_files || !usesBuildPlaceholder(deps.config.release_files)) {
+    return void 0;
+  }
+  const provider = deps.buildNumberProvider ?? defaultBuildNumberProvider;
+  return provider(deps.workspace);
+}
+async function defaultBuildNumberProvider(workspace) {
+  const { stdout } = await execFileAsync("git", ["tag", "--list", "v*", "*/v*"], {
+    cwd: workspace
+  });
+  const count = stdout.split("\n").filter((line) => line.length > 0).length;
+  return count + 1;
 }
 
 // src/rulesets.ts
