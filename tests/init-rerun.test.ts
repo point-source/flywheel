@@ -38,31 +38,58 @@ const realInitSh = join(repoRoot, "scripts/init.sh");
 const realTemplates = join(repoRoot, "scripts/templates");
 const TEST_VERSION = "v9.99.0-rerun-test";
 
+// Stub differentiates repo-vs-org by scanning args for --org. Defaults
+// preserve the legacy single-scope behavior (creds present at repo level)
+// so existing tests don't need to plumb the new env vars; org-scope tests
+// override via GH_ORG_*.
 const GH_STUB = `#!/usr/bin/env bash
 set -e
 printf '%s\\n' "$*" >> "$GH_STUB_LOG"
+is_org=0
+for arg in "$@"; do
+  [[ "$arg" == "--org" ]] && is_org=1
+done
 case "$1 $2" in
   "repo view")
     echo "test-owner/test-repo"
     ;;
   "secret list")
-    printf '%s\\n' "FLYWHEEL_GH_APP_PRIVATE_KEY"
+    if [[ $is_org -eq 1 ]]; then
+      printf '%s\\n' "\${GH_ORG_SECRET_LIST-}"
+    else
+      printf '%s\\n' "\${GH_REPO_SECRET_LIST-FLYWHEEL_GH_APP_PRIVATE_KEY}"
+    fi
     ;;
   "variable list")
-    printf '%s\\n' "FLYWHEEL_GH_APP_ID"
+    if [[ $is_org -eq 1 ]]; then
+      printf '%s\\n' "\${GH_ORG_VARIABLE_LIST-}"
+    else
+      printf '%s\\n' "\${GH_REPO_VARIABLE_LIST-FLYWHEEL_GH_APP_ID}"
+    fi
     ;;
   "secret set"|"variable set")
     cat >/dev/null
     ;;
   "variable get")
-    if [[ -n "\${GH_VARIABLE_VALUE:-}" ]]; then
-      printf '%s' "$GH_VARIABLE_VALUE"
+    if [[ $is_org -eq 1 ]]; then
+      if [[ -n "\${GH_ORG_VARIABLE_VALUE:-}" ]]; then
+        printf '%s' "\$GH_ORG_VARIABLE_VALUE"
+      else
+        exit 1
+      fi
     else
-      exit 1
+      if [[ -n "\${GH_VARIABLE_VALUE:-}" ]]; then
+        printf '%s' "\$GH_VARIABLE_VALUE"
+      else
+        exit 1
+      fi
     fi
     ;;
   "api -X")
     cat >/dev/null
+    ;;
+  "api users/test-owner")
+    printf '%s\\n' "\${GH_OWNER_TYPE:-User}"
     ;;
 esac
 `;
@@ -177,6 +204,67 @@ describe("init.sh re-run resolves App ID via repo variable", () => {
 
       const ghLog = readFileSync(s.ghLog, "utf8");
       expect(ghLog).toMatch(/^variable get FLYWHEEL_GH_APP_ID/m);
+
+      expect(out).toContain("scripts/apply-rulesets.sh test-owner/test-repo");
+      expect(out).not.toContain("--app-id");
+    } finally {
+      teardown(s);
+    }
+  });
+
+  // When the App credentials live at org level (e.g. one App installed
+  // org-wide, with FLYWHEEL_GH_APP_ID/FLYWHEEL_GH_APP_PRIVATE_KEY set on
+  // the org with visibility=all), a re-run from any repo in the org should:
+  //   1) detect the creds via `gh {variable,secret} list --org $owner`
+  //      and not double-prompt,
+  //   2) recover the App ID via `gh variable get FLYWHEEL_GH_APP_ID --org`
+  //      after the repo-level get returns empty,
+  //   3) pass --app-id through to apply-rulesets.sh.
+  it("recovers --app-id from org-level variable when owner is org and repo level missing", () => {
+    const s = setup();
+    try {
+      const out = runInit(s, {
+        GH_REPO_VARIABLE_LIST: "",
+        GH_REPO_SECRET_LIST: "",
+        GH_ORG_VARIABLE_LIST: "FLYWHEEL_GH_APP_ID",
+        GH_ORG_SECRET_LIST: "FLYWHEEL_GH_APP_PRIVATE_KEY",
+        GH_OWNER_TYPE: "Organization",
+        GH_VARIABLE_VALUE: "",
+        GH_ORG_VARIABLE_VALUE: "654321",
+      });
+
+      const ghLog = readFileSync(s.ghLog, "utf8");
+      // Existence-check fan-out: repo first, then org.
+      expect(ghLog).toMatch(/^variable list --org test-owner/m);
+      expect(ghLog).toMatch(/^secret list --org test-owner/m);
+      // App ID readback: repo miss → org hit.
+      expect(ghLog).toMatch(/^variable get FLYWHEEL_GH_APP_ID --repo test-owner\/test-repo$/m);
+      expect(ghLog).toMatch(/^variable get FLYWHEEL_GH_APP_ID --org test-owner$/m);
+
+      expect(out).toContain("already set (org-level)");
+      expect(out).toContain(
+        "scripts/apply-rulesets.sh test-owner/test-repo --app-id 654321",
+      );
+    } finally {
+      teardown(s);
+    }
+  });
+
+  // Symmetric to the above but for User-owned repos: the script must not
+  // attempt org-level lookups when the owner isn't an Organization, since
+  // the gh API rejects /orgs/<user>/... and admin:org isn't applicable.
+  it("does not probe org-level when owner is a user account", () => {
+    const s = setup();
+    try {
+      const out = runInit(s, {
+        GH_REPO_VARIABLE_LIST: "",
+        GH_REPO_SECRET_LIST: "",
+        GH_OWNER_TYPE: "User",
+        GH_VARIABLE_VALUE: "",
+      });
+
+      const ghLog = readFileSync(s.ghLog, "utf8");
+      expect(ghLog).not.toMatch(/--org/);
 
       expect(out).toContain("scripts/apply-rulesets.sh test-owner/test-repo");
       expect(out).not.toContain("--app-id");

@@ -167,38 +167,109 @@ if [[ "${#branches[@]}" -gt 0 ]]; then
   done
 fi
 
-# 3. App-token credentials. The App ID lives in a repo Variable (it's public
+# 3. App-token credentials. The App ID lives in a Variable (it's public
 # information, visible on the App's settings page); the private key lives in
-# a repo Secret. Listing either requires an admin PAT — GitHub App
+# a Secret. Both can live at repo level OR at org level (with visibility=all
+# or visibility=selected including this repo) — GitHub resolves repo → org at
+# workflow run time. Listing either requires an admin PAT — GitHub App
 # installation tokens are NOT permitted to read variables or secrets
 # regardless of granted permissions. CI flows that already minted an App
 # token before invoking doctor should pass --skip-credentials; the mint
 # itself is the credential check.
-bold "Repo App-token credentials"
+
+OWNER="${REPO%%/*}"
+OWNER_TYPE_RESOLVED=0
+OWNER_TYPE=""
+detect_owner_type() {
+  if [[ $OWNER_TYPE_RESOLVED -eq 0 ]]; then
+    OWNER_TYPE="$(gh api "users/$OWNER" --jq .type 2>/dev/null || true)"
+    OWNER_TYPE_RESOLVED=1
+  fi
+}
+
+# Returns 0 if the named org-level resource exists AND is reachable from $REPO
+# (via visibility=all, visibility=private when the repo is private, or
+# visibility=selected with $REPO in the selected list). Echoes a one-word
+# reason on success ("all", "private", or "selected") for the OK message.
+# $1 = "variables" or "secrets"
+# $2 = resource name
+org_resource_visible_to_repo() {
+  local kind="$1" name="$2" resp visibility priv
+  detect_owner_type
+  [[ "$OWNER_TYPE" == "Organization" ]] || return 1
+  resp="$(gh api "orgs/$OWNER/actions/$kind/$name" 2>/dev/null)" || return 1
+  visibility="$(echo "$resp" | jq -r .visibility 2>/dev/null || echo "")"
+  case "$visibility" in
+    all)
+      echo "all"
+      return 0
+      ;;
+    private)
+      priv="$(gh api "repos/$REPO" --jq .private 2>/dev/null || echo "")"
+      if [[ "$priv" == "true" ]]; then
+        echo "private"
+        return 0
+      fi
+      return 1
+      ;;
+    selected)
+      if gh api "orgs/$OWNER/actions/$kind/$name/repositories" \
+           --jq '.repositories[].full_name' 2>/dev/null \
+           | grep -qx "$REPO"; then
+        echo "selected"
+        return 0
+      fi
+      return 1
+      ;;
+    *) return 1 ;;
+  esac
+}
+
+bold "App-token credentials"
 if [[ $skip_credentials -eq 1 ]]; then
   printf '  \033[36mi\033[0m skipped (--skip-credentials) — caller is responsible for verifying FLYWHEEL_GH_APP_ID and FLYWHEEL_GH_APP_PRIVATE_KEY out of band\n'
 else
+  # FLYWHEEL_GH_APP_ID — repo level first, then org level.
+  found_var_at=""
   if vars_json="$(gh api "repos/$REPO/actions/variables" 2>/dev/null)"; then
     if echo "$vars_json" | jq -e '.variables[] | select(.name == "FLYWHEEL_GH_APP_ID")' >/dev/null; then
-      ok "FLYWHEEL_GH_APP_ID variable set"
-    else
-      fail "FLYWHEEL_GH_APP_ID variable missing — set with: gh variable set FLYWHEEL_GH_APP_ID --body <app-id> --repo $REPO"
+      found_var_at="repo"
     fi
   else
     fail "could not list repo variables — listing requires an admin PAT (App installation tokens cannot list variables); re-run with 'gh auth login' as a repo admin, or pass --skip-credentials if invoking from CI that already minted an App token"
   fi
+  if [[ -z "$found_var_at" ]]; then
+    if visibility="$(org_resource_visible_to_repo variables FLYWHEEL_GH_APP_ID)"; then
+      found_var_at="org ($visibility)"
+    fi
+  fi
+  if [[ -n "$found_var_at" ]]; then
+    ok "FLYWHEEL_GH_APP_ID variable set ($found_var_at)"
+  else
+    fail "FLYWHEEL_GH_APP_ID variable missing — set with: gh variable set FLYWHEEL_GH_APP_ID --body <app-id> --repo $REPO  (or --org $OWNER --visibility all for org-wide)"
+  fi
 
+  # FLYWHEEL_GH_APP_PRIVATE_KEY — repo level first, then org level.
+  found_secret_at=""
   if secrets_json="$(gh api "repos/$REPO/actions/secrets" 2>/dev/null)"; then
     if echo "$secrets_json" | jq -e '.secrets[] | select(.name == "FLYWHEEL_GH_APP_PRIVATE_KEY")' >/dev/null; then
-      ok "FLYWHEEL_GH_APP_PRIVATE_KEY secret set"
-    else
-      fail "FLYWHEEL_GH_APP_PRIVATE_KEY secret missing — Flywheel requires GitHub App tokens (PATs are not supported)"
+      found_secret_at="repo"
     fi
     if echo "$secrets_json" | jq -e '.secrets[] | select(.name == "GH_PAT")' >/dev/null; then
       warn "GH_PAT secret present — Flywheel does not use it; remove if it's left over from an older setup"
     fi
   else
     fail "could not list repo secrets — listing requires an admin PAT (App installation tokens cannot list secrets); re-run with 'gh auth login' as a repo admin, or pass --skip-credentials if invoking from CI that already minted an App token"
+  fi
+  if [[ -z "$found_secret_at" ]]; then
+    if visibility="$(org_resource_visible_to_repo secrets FLYWHEEL_GH_APP_PRIVATE_KEY)"; then
+      found_secret_at="org ($visibility)"
+    fi
+  fi
+  if [[ -n "$found_secret_at" ]]; then
+    ok "FLYWHEEL_GH_APP_PRIVATE_KEY secret set ($found_secret_at)"
+  else
+    fail "FLYWHEEL_GH_APP_PRIVATE_KEY secret missing — Flywheel requires GitHub App tokens (PATs are not supported)"
   fi
 fi
 
