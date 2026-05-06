@@ -1,3 +1,10 @@
+# [1.0.0-dev.3](https://github.com/point-source/flywheel/compare/v1.0.0-dev.2...v1.0.0-dev.3) (2026-05-06)
+
+
+### Bug Fixes
+
+* minimal template + ${build} glob for v1.0.0 adopter readiness ([#69](https://github.com/point-source/flywheel/issues/69)) ([8565dba](https://github.com/point-source/flywheel/commit/8565dba8074c23b1e2ac9016b933649d256440fd))
+
 # [1.0.0-dev.2](https://github.com/point-source/flywheel/compare/v1.0.0-dev.1...v1.0.0-dev.2) (2026-05-06)
 
 
