@@ -1,3 +1,10 @@
+## [1.0.1](https://github.com/point-source/flywheel/compare/v1.0.0...v1.0.1) (2026-05-06)
+
+
+### Bug Fixes
+
+* promote develop → main ([#74](https://github.com/point-source/flywheel/issues/74)) ([bedf3cd](https://github.com/point-source/flywheel/commit/bedf3cd424dfbfc8161a5f4e900fef8757196d77)), closes [#60](https://github.com/point-source/flywheel/issues/60) [#72](https://github.com/point-source/flywheel/issues/72) [#70](https://github.com/point-source/flywheel/issues/70) [#73](https://github.com/point-source/flywheel/issues/73) [#71](https://github.com/point-source/flywheel/issues/71) [#75](https://github.com/point-source/flywheel/issues/75) [#76](https://github.com/point-source/flywheel/issues/76)
+
 ## [1.0.1-dev.1](https://github.com/point-source/flywheel/compare/v1.0.0...v1.0.1-dev.1) (2026-05-06)
 
 
