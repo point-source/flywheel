@@ -21,6 +21,8 @@ outputs:
     description: "'true' when the pushed branch should run semantic-release; 'false' otherwise (branch not in a stream, or branch has release: none)."
   back_merge_targets:
     description: "Comma-separated list of upstream branches in the same stream that should receive a back-merge after this branch releases. Empty when there are no upstream branches (single-branch stream, or this is the head of its stream)."
+  merge_strategy:
+    description: "The configured merge_strategy from .flywheel.yml ('squash' or 'rebase'). Consumed by the back-merge step to choose the right propagation mechanism."
 runs:
   using: node24
   main: dist/index.cjs
