@@ -1,3 +1,15 @@
+## [1.0.2](https://github.com/point-source/flywheel/compare/v1.0.1...v1.0.2) (2026-05-06)
+
+
+### Bug Fixes
+
+* **pr-flow:** leave promotion PRs to runPromotion (use MERGE, not SQUASH) ([#79](https://github.com/point-source/flywheel/issues/79)) ([0ad50df](https://github.com/point-source/flywheel/commit/0ad50dff9756f39ebe2f8483a0d7118ae64bc128)), closes [#74](https://github.com/point-source/flywheel/issues/74) [#77](https://github.com/point-source/flywheel/issues/77)
+* prevent stream-branch deletion + auto-sync rulesets ([#60](https://github.com/point-source/flywheel/issues/60)) ([#72](https://github.com/point-source/flywheel/issues/72)) ([8942f18](https://github.com/point-source/flywheel/commit/8942f1865e1ab5cdd51d74358e7c60beec779e25))
+* **promotion:** aggregate Closes refs into promotion PR body ([#82](https://github.com/point-source/flywheel/issues/82)) ([f445ee6](https://github.com/point-source/flywheel/commit/f445ee651545f4ff8b12516b8c8b24b6f51f74c1)), closes [#NN](https://github.com/point-source/flywheel/issues/NN) [#NN](https://github.com/point-source/flywheel/issues/NN) [#NN](https://github.com/point-source/flywheel/issues/NN) [#N](https://github.com/point-source/flywheel/issues/N) [owner/repo#N](https://github.com/owner/repo/issues/N) [#78](https://github.com/point-source/flywheel/issues/78) [#NN](https://github.com/point-source/flywheel/issues/NN)
+* **promotion:** handle equal-tip promote 422 gracefully ([#71](https://github.com/point-source/flywheel/issues/71)) ([#75](https://github.com/point-source/flywheel/issues/75)) ([79bdf6e](https://github.com/point-source/flywheel/commit/79bdf6e0bfba2556fea0cacb7279dc9d8f6d4a90))
+* **rulesets:** split bypass scope so App can't auto-delete stream branches ([#83](https://github.com/point-source/flywheel/issues/83)) ([c1d0157](https://github.com/point-source/flywheel/commit/c1d015709d33f8c541c43bdb640ccd9140f4e335)), closes [#74](https://github.com/point-source/flywheel/issues/74) [#81](https://github.com/point-source/flywheel/issues/81) [post-#81](https://github.com/post-/issues/81) [pre-#81](https://github.com/pre-/issues/81) [#81](https://github.com/point-source/flywheel/issues/81)
+* sanitize @-mentions in release body ([#70](https://github.com/point-source/flywheel/issues/70)) ([#73](https://github.com/point-source/flywheel/issues/73)) ([6cf2c1a](https://github.com/point-source/flywheel/commit/6cf2c1a610094fa830dc8a9f90bdcc57754a50e3))
+
 ## [1.0.1-dev.4](https://github.com/point-source/flywheel/compare/v1.0.1-dev.3...v1.0.1-dev.4) (2026-05-06)
 
 
