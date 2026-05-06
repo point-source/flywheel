@@ -2,10 +2,17 @@
 # apply-rulesets.sh — apply Flywheel branch + tag protection rulesets to a repo.
 #
 # Reads .flywheel.yml in the current directory, extracts every managed branch,
-# and applies two rulesets via the GitHub Rulesets API:
-#   1. Flywheel managed branches — require PRs, block deletion / force-push.
-#      Optionally requires named status checks.
-#   2. Flywheel tag namespace (v*) — block deletion / force-push of v* tags.
+# and applies three rulesets via the GitHub Rulesets API:
+#   1. Flywheel managed branches — block deletion / force-push of every
+#      managed branch. NO bypass actors (not even the App), so GitHub's
+#      delete_branch_on_merge cannot wipe a stream branch when the App
+#      auto-merges a promotion or feature PR — see #81.
+#   2. Flywheel managed branches — review — require PRs (and optionally
+#      named status checks) to land on a managed branch. The App is on
+#      this ruleset's bypass list so semantic-release can push the
+#      chore(release) commit and back-merge directly without going
+#      through a PR.
+#   3. Flywheel tag namespace (v*) — block deletion / force-push of v* tags.
 #      Optionally adds a GitHub App as a bypass actor so the bot can mint tags.
 #
 # Usage:
@@ -115,29 +122,44 @@ apply_ruleset() {
   fi
 }
 
-echo "Applying managed-branches ruleset to $branch_count branch(es) in $REPO..."
+echo "Applying destruction-protection ruleset to $branch_count branch(es) in $REPO..."
 
-managed_payload="$(jq \
+# Destruction ruleset: deletion + non_fast_forward for every managed branch.
+# No bypass entry — not even the App. The App's auto-merge flow can fire
+# GitHub's delete_branch_on_merge against a stream branch (the PR head); a
+# bypass entry here would let that deletion through. See #81.
+destruction_payload="$(jq \
   --argjson branches "$branch_refs_json" \
   '.conditions.ref_name.include = $branches' \
   "$SCRIPT_DIR/rulesets/managed-branches.json")"
 
+apply_ruleset "$destruction_payload"
+
+echo "Applying review ruleset to $branch_count branch(es) in $REPO..."
+
+review_payload="$(jq \
+  --argjson branches "$branch_refs_json" \
+  '.conditions.ref_name.include = $branches' \
+  "$SCRIPT_DIR/rulesets/managed-branches-review.json")"
+
 if [[ -n "$REQUIRED_CHECKS" ]]; then
   checks_json="$(echo "$REQUIRED_CHECKS" | jq -R 'split(",") | map({context: .})')"
-  managed_payload="$(echo "$managed_payload" | jq \
+  review_payload="$(echo "$review_payload" | jq \
     --argjson checks "$checks_json" \
     '.rules += [{"type":"required_status_checks","parameters":{"required_status_checks":$checks,"strict_required_status_checks_policy":false}}]')"
 fi
 
-# Without a bypass entry the App cannot push semantic-release's version
-# commit/tag back to a managed branch (the PR-only rule blocks direct pushes).
+# Bypass goes on the review ruleset only. semantic-release pushes the
+# chore(release) commit and the back-merge directly to develop/main; the
+# pull_request rule on this ruleset would block those without bypass.
+# The destruction ruleset above stays unbypassed.
 if [[ -n "$APP_ID" ]]; then
-  managed_payload="$(echo "$managed_payload" | jq \
+  review_payload="$(echo "$review_payload" | jq \
     --arg app_id "$APP_ID" \
     '.bypass_actors = [{"actor_id": ($app_id | tonumber), "actor_type": "Integration", "bypass_mode": "always"}]')"
 fi
 
-apply_ruleset "$managed_payload"
+apply_ruleset "$review_payload"
 
 echo "Applying tag-namespace ruleset to $REPO..."
 
