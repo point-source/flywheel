@@ -213,7 +213,7 @@ if repo_settings="$(gh api "repos/$REPO" 2>/dev/null)"; then
   if [[ "$(echo "$repo_settings" | jq -r .delete_branch_on_merge)" == "true" ]]; then
     ok "delete_branch_on_merge enabled (head branches auto-delete on merge)"
   else
-    warn "delete_branch_on_merge disabled — recommended on to enforce one-PR-per-branch (Settings → General → 'Automatically delete head branches', or: gh api -X PATCH repos/$REPO -f delete_branch_on_merge=true)"
+    warn "delete_branch_on_merge disabled — apply-rulesets.sh enables this alongside the deletion-blocking ruleset (re-run scripts/apply-rulesets.sh $REPO), or flip manually in Settings → General → 'Automatically delete head branches'"
   fi
 else
   fail "could not read repo settings"

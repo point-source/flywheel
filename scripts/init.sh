@@ -312,12 +312,12 @@ else
   fi
 fi
 
-# 4. Apply rulesets. Must run BEFORE step 5 (delete_branch_on_merge): the
-# managed-branches ruleset includes a {type: deletion} rule that prevents
-# GitHub's auto-delete-on-merge from clobbering long-lived stream branches
-# (develop, customer-acme, etc.) when a promotion PR or stream-targeted PR
-# merges. Without this ordering, the bootstrap window between enabling
-# delete_branch_on_merge and applying the ruleset is unprotected — see #60.
+# 4. Apply rulesets. The managed-branches ruleset includes a {type: deletion}
+# rule that prevents GitHub's auto-delete-on-merge from clobbering long-lived
+# stream branches (develop, customer-acme, etc.) when a promotion PR or
+# stream-targeted PR merges. apply-rulesets.sh also flips delete_branch_on_merge
+# on as part of the same run, so the two can never be on in the wrong order
+# (#60, #94).
 if [[ "$SKIP_RULESETS" -eq 0 && -x "${SCRIPT_DIR:-}/apply-rulesets.sh" ]]; then
   # Recover App ID for --app-id from the repo variable written on first-run.
   # Without --app-id, apply-rulesets.sh PUTs an empty bypass_actors and the
@@ -383,17 +383,6 @@ if [[ "$SKIP_RULESETS" -eq 0 && -x "${SCRIPT_DIR:-}/apply-rulesets.sh" ]]; then
 elif [[ "$SKIP_RULESETS" -eq 0 ]]; then
   echo "  apply-rulesets.sh not adjacent to init.sh — fetch the repo or run:"
   echo "    curl -fsSL https://raw.githubusercontent.com/point-source/flywheel/main/scripts/apply-rulesets.sh | bash -s -- $REPO"
-fi
-
-# 5. Repo setting: auto-delete head branches on merge. Enforces the
-# one-PR-per-branch workflow Flywheel assumes — without it, contributors
-# can accidentally reuse a merged branch and hit phantom rebase conflicts
-# against the squashed upstream commit. Stream branches are protected from
-# this by the managed-branches ruleset's {type: deletion} rule applied in §4.
-if gh api -X PATCH "repos/$REPO" -f delete_branch_on_merge=true >/dev/null 2>&1; then
-  echo "  enabled delete_branch_on_merge (head branches auto-delete on PR merge)."
-else
-  echo "  warning: could not set delete_branch_on_merge — set manually in Settings → General → Pull Requests, or check your gh permissions." >&2
 fi
 
 cat <<EOF
