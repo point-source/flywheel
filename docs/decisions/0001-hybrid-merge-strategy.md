@@ -1,6 +1,18 @@
-# Squash merge issues in flywheel
+# ADR 0001 — Hybrid merge strategy (squash feature PRs, merge promotion + back-merge)
 
-A running record of the bugs, near-misses, and design contortions that have come from `merge_strategy: squash` in flywheel's promotion + back-merge pipeline. Captured so future maintainers can weigh "switch to merge commits" against "keep squash and patch" with the actual evidence in front of them.
+- **Status:** Accepted
+- **Date:** 2026-05-06
+- **Supersedes:** the `merge_strategy: squash` configuration option (removed)
+
+## Decision
+
+Flywheel uses a non-configurable hybrid merge strategy: feature PRs into a stream branch **squash-merge**, while promotion PRs (e.g. `develop → main`) and the back-merge edge after a release use **true merge commits**. The `merge_strategy` config field has been removed and the `required_linear_history` rule has been dropped from the default managed-branches ruleset.
+
+See [Resolved by hybrid mode](#resolved-by-hybrid-mode) at the end for the per-issue resolution table. The rest of this document is the context — the bugs, near-misses, and design contortions under pure squash that drove the decision.
+
+## Context
+
+A running record of the bugs, near-misses, and design contortions that came from `merge_strategy: squash` in flywheel's promotion + back-merge pipeline. Captured so future maintainers can weigh "switch to merge commits" against "keep squash and patch" with the actual evidence in front of them.
 
 ## Why squash was chosen
 
