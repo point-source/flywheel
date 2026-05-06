@@ -403,7 +403,7 @@ If your test suite specifically validates a release artifact (e.g. you build and
 
 ### Auto-delete merged branches
 
-Independent of rulesets but worth setting at the same time: enable Settings → General → Pull Requests → "Automatically delete head branches" (the underlying repo property is `delete_branch_on_merge`). With it on, the source branch disappears the moment the PR merges — enforcing a one-PR-per-branch workflow and eliminating the "I'll just push more commits to my old branch" trap. Reusing a merged branch causes phantom rebase conflicts because the squashed commit on the target has a different patch-id than the original commits, even though the content is identical. `init.sh` flips this for you. Manually:
+Coupled with rulesets: enable Settings → General → Pull Requests → "Automatically delete head branches" (the underlying repo property is `delete_branch_on_merge`). With it on, the source branch disappears the moment the PR merges — enforcing a one-PR-per-branch workflow and eliminating the "I'll just push more commits to my old branch" trap. Reusing a merged branch causes phantom rebase conflicts because the squashed commit on the target has a different patch-id than the original commits, even though the content is identical. `apply-rulesets.sh` flips this for you immediately after applying the deletion-blocking ruleset, so the two can't end up on in the wrong order (#94). Manually:
 
 ```bash
 gh api -X PATCH repos/<owner>/<repo> -f delete_branch_on_merge=true

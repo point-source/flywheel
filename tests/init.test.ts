@@ -43,8 +43,8 @@ describe.skipIf(!ghAuthenticated())("init.sh deterministic file emission", () =>
       try {
         // gh repo view (which init.sh calls to resolve $REPO) needs a real
         // remote it can query. Pointing at the parent repo itself is safe:
-        // the only side-effect call (`gh api PATCH delete_branch_on_merge=true`)
-        // is idempotent against a setting that's already enabled here.
+        // with --skip-rulesets and --skip-secrets, init.sh has no remote
+        // side effects (delete_branch_on_merge moved to apply-rulesets.sh).
         execFileSync("git", ["init", "-q"], { cwd: work });
         execFileSync(
           "git",
