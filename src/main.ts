@@ -8,8 +8,9 @@ import { mintInstallationToken } from "./auth.js";
 import { loadConfig } from "./config.js";
 import { createGitHubClient, type PullRequest } from "./github.js";
 import { runPrFlow } from "./pr-flow.js";
-import { getUpstreamBranches, runPushFlow } from "./push-flow.js";
+import { getUpstreamBranches, runPushFlow, findStreamForBranch } from "./push-flow.js";
 import { runPromotion } from "./promotion.js";
+import { syncRulesets } from "./rulesets.js";
 import { findMissingPermissions, formatMissingPermissionsError } from "./preflight.js";
 
 const CONFIG_FILE = ".flywheel.yml";
@@ -92,6 +93,25 @@ async function run(): Promise<void> {
 
   if (event === "push") {
     const branchRef = github.context.ref.replace(/^refs\/heads\//, "");
+
+    // Sync rulesets when .flywheel.yml changed on a stream branch — keeps
+    // the managed-branches ruleset's include array aligned with the config
+    // as adopters add/remove streams or branches. Long-lived stream branches
+    // depend on the ruleset's {type: deletion} rule to survive merges that
+    // target them; without sync, new branches added to .flywheel.yml are
+    // unprotected. See #60.
+    if (
+      findStreamForBranch(config, branchRef) &&
+      pushTouchedConfig(github.context.payload, CONFIG_FILE)
+    ) {
+      try {
+        await syncRulesets({ api: gh.rulesets, config, log });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        core.warning(`ruleset sync failed (continuing): ${msg}`);
+      }
+    }
+
     const outcome = await runPushFlow({
       branchRef,
       config,
@@ -112,6 +132,17 @@ async function run(): Promise<void> {
   }
 
   core.setFailed(`Unknown event input: ${event}. Expected 'pull_request' or 'push'.`);
+}
+
+function pushTouchedConfig(payload: unknown, configFile: string): boolean {
+  const commits = (payload as { commits?: Array<{ added?: string[]; modified?: string[]; removed?: string[] }> } | null)?.commits;
+  if (!commits || commits.length === 0) return false;
+  for (const c of commits) {
+    if (c.added?.includes(configFile)) return true;
+    if (c.modified?.includes(configFile)) return true;
+    if (c.removed?.includes(configFile)) return true;
+  }
+  return false;
 }
 
 function readPullRequestFromContext(): PullRequest | null {
