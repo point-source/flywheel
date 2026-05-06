@@ -1,3 +1,10 @@
+## [1.0.1-dev.4](https://github.com/point-source/flywheel/compare/v1.0.1-dev.3...v1.0.1-dev.4) (2026-05-06)
+
+
+### Bug Fixes
+
+* **promotion:** aggregate Closes refs into promotion PR body ([#82](https://github.com/point-source/flywheel/issues/82)) ([f445ee6](https://github.com/point-source/flywheel/commit/f445ee651545f4ff8b12516b8c8b24b6f51f74c1)), closes [#NN](https://github.com/point-source/flywheel/issues/NN) [#NN](https://github.com/point-source/flywheel/issues/NN) [#NN](https://github.com/point-source/flywheel/issues/NN) [#N](https://github.com/point-source/flywheel/issues/N) [owner/repo#N](https://github.com/owner/repo/issues/N) [#78](https://github.com/point-source/flywheel/issues/78) [#NN](https://github.com/point-source/flywheel/issues/NN)
+
 ## [1.0.1-dev.3](https://github.com/point-source/flywheel/compare/v1.0.1-dev.2...v1.0.1-dev.3) (2026-05-06)
 
 
