@@ -235,6 +235,28 @@ function buildPromotionTitleRegex(source: string, target: string): RegExp {
   );
 }
 
+// True when (headRef → baseRef) is a configured promotion edge AND the title
+// matches the promotion-PR shape this module emits. pr-flow consults this so
+// it can leave promotion PRs to runPromotion (different merge method, body
+// owned by formatPromotionBody) instead of treating them as feature PRs.
+export function isPromotionPR(
+  config: FlywheelConfig,
+  headRef: string,
+  baseRef: string,
+  title: string,
+): boolean {
+  for (const stream of config.streams) {
+    for (let i = 0; i < stream.branches.length - 1; i++) {
+      const source = stream.branches[i]!;
+      const target = stream.branches[i + 1]!;
+      if (source.name === headRef && target.name === baseRef) {
+        return buildPromotionTitleRegex(source.name, target.name).test(title);
+      }
+    }
+  }
+  return false;
+}
+
 function normalizeTitle(title: string): string {
   return stripPrSuffix(title).trim();
 }

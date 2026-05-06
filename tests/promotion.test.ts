@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { runPromotion, computePendingCommits } from "../src/promotion.js";
+import { runPromotion, computePendingCommits, isPromotionPR } from "../src/promotion.js";
 import {
   FLYWHEEL_AUTO_MERGE_LABEL,
   FLYWHEEL_NEEDS_REVIEW_LABEL,
@@ -341,5 +341,33 @@ describe("runPromotion — orchestration", () => {
     await expect(
       runPromotion({ branchRef: "develop", config, gh, log }),
     ).rejects.toThrow(/Internal Server Error/);
+  });
+});
+
+describe("isPromotionPR — promotion PR detection used by pr-flow short-circuit", () => {
+  it("matches the canonical develop → main fix-typed promotion title", () => {
+    expect(isPromotionPR(config, "develop", "main", "fix: promote develop → main")).toBe(false);
+    // ^ develop → main is not adjacent in this fixture (staging is between).
+    expect(isPromotionPR(config, "staging", "main", "fix: promote staging → main")).toBe(true);
+    expect(isPromotionPR(config, "develop", "staging", "fix: promote develop → staging")).toBe(true);
+  });
+
+  it("accepts any conventional commit type prefix and breaking marker", () => {
+    expect(isPromotionPR(config, "staging", "main", "feat!: promote staging → main")).toBe(true);
+    expect(isPromotionPR(config, "staging", "main", "chore(release): promote staging → main")).toBe(true);
+  });
+
+  it("rejects when head/base are not a configured promotion edge even if title matches", () => {
+    expect(isPromotionPR(config, "feature/x", "main", "fix: promote develop → main")).toBe(false);
+    // staging → develop reverses the edge direction.
+    expect(isPromotionPR(config, "staging", "develop", "fix: promote staging → develop")).toBe(false);
+    // customer-acme is a single-branch stream — no promotion edges out of it.
+    expect(isPromotionPR(config, "customer-acme", "main", "fix: promote customer-acme → main")).toBe(false);
+  });
+
+  it("rejects when edge matches but title is not a promotion shape", () => {
+    expect(isPromotionPR(config, "staging", "main", "fix: regular bug fix")).toBe(false);
+    expect(isPromotionPR(config, "staging", "main", "promote staging → main")).toBe(false);
+    expect(isPromotionPR(config, "staging", "main", "fix: promote main → staging")).toBe(false);
   });
 });
