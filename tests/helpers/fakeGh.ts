@@ -133,6 +133,20 @@ export function createFakeGh(init: FakeGhInit = {}): FakeGh {
       log("createCheck", opts);
       createdChecks.push(opts);
     },
+
+    rulesets: {
+      async list() {
+        log("rulesets.list", {});
+        return [];
+      },
+      async get(id) {
+        log("rulesets.get", { id });
+        throw new Error("fakeGh.rulesets.get not stubbed");
+      },
+      async update(id, payload) {
+        log("rulesets.update", { id, payload });
+      },
+    },
   };
 
   return fake;
