@@ -28707,12 +28707,23 @@ async function runPromotion(deps) {
   const method = "MERGE";
   const existing = await gh.listOpenPRs({ head: source.name, base: target.name });
   if (existing.length === 0) {
-    const created = await gh.createPR({
-      title,
-      body,
-      head: source.name,
-      base: target.name
-    });
+    let created;
+    try {
+      created = await gh.createPR({
+        title,
+        body,
+        head: source.name,
+        base: target.name
+      });
+    } catch (err) {
+      if (isNoCommitsBetweenError(err)) {
+        log.info(
+          `promotion: ${source.name} \u2192 ${target.name} already in sync per GitHub (createPR 422) \u2014 skipping.`
+        );
+        return { kind: "in-sync" };
+      }
+      throw err;
+    }
     await applyLabel(gh, created.number, label);
     if (eligible) {
       const result = await gh.enableAutoMerge(created.nodeId, method);
@@ -28757,6 +28768,9 @@ async function runPromotion(deps) {
 }
 function computePendingCommits(input) {
   const { sourceCommits, targetCommits, sourceName, targetName } = input;
+  if (sourceCommits.length > 0 && targetCommits.length > 0 && sourceCommits[0].sha === targetCommits[0].sha) {
+    return [];
+  }
   const lastPromotion = findLastPromotionCommit(targetCommits, sourceName, targetName);
   if (lastPromotion) {
     const cutoff = Date.parse(lastPromotion.committerDate);
@@ -28831,6 +28845,13 @@ function formatPromotionBody(p) {
     );
   }
   return lines.join("\n");
+}
+function isNoCommitsBetweenError(err) {
+  const e = err;
+  if (!e) return false;
+  if (e.status !== 422) return false;
+  const msg = e.message ?? "";
+  return msg.includes("No commits between");
 }
 async function applyLabel(gh, prNumber, label) {
   await gh.addLabels(prNumber, [label]);
