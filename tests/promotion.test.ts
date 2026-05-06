@@ -95,6 +95,28 @@ describe("computePendingCommits — the highest-stakes logic", () => {
     expect(pending.map((c) => c.title)).toEqual(["feat: only on source"]);
   });
 
+  it("equal source/target tips → no pending (fast-path for post-back-merge state)", () => {
+    // After a release back-merge, develop fast-forwards to main's tip. Both
+    // branches list the same commit at index 0. Strategy A/B can disagree
+    // here; the fast-path returns [] before either runs. See #71.
+    const sharedTip = makeCommit("aaaabbb", "chore(release): 1.0.0", date("2026-01-04T10:00:00Z"));
+    const sourceCommits = [
+      sharedTip,
+      makeCommit("c000000", "feat: earlier", date("2026-01-03T10:00:00Z")),
+    ];
+    const targetCommits = [
+      sharedTip,
+      makeCommit("c000000", "feat: earlier", date("2026-01-03T10:00:00Z")),
+    ];
+    const pending = computePendingCommits({
+      sourceCommits,
+      targetCommits,
+      sourceName: "develop",
+      targetName: "main",
+    });
+    expect(pending).toEqual([]);
+  });
+
   it("identical-titled cherry-picks across unrelated streams don't false-match (we scope to source/target only)", () => {
     // computePendingCommits only takes source and target — it doesn't see other streams,
     // so this is a property of the API not the algorithm. Verify by giving identical titles.
@@ -274,5 +296,50 @@ describe("runPromotion — orchestration", () => {
     const outcome = await runPromotion({ branchRef: "feature/sandbox", config, gh, log });
     expect(outcome).toEqual({ kind: "unmanaged" });
     expect(gh.calls).toEqual([]);
+  });
+
+  it("createPR 422 'No commits between' → in-sync outcome, no throw (#71)", async () => {
+    // Force pending detection to think there are pending commits even though
+    // GitHub's compare view says otherwise. The createPR call then 422s, and
+    // runPromotion must treat that as a no-op.
+    const gh = createFakeGh({
+      branchCommits: {
+        develop: [
+          makeCommit("c1", "feat: pending", date("2026-01-05T10:00:00Z")),
+        ],
+        staging: [makeCommit("s1", "chore: old", date("2025-12-01T10:00:00Z"))],
+      },
+    });
+    gh.createPR = async () => {
+      throw Object.assign(
+        new Error(
+          'Validation Failed: {"resource":"PullRequest","code":"custom","message":"No commits between staging and develop"}',
+        ),
+        { status: 422 },
+      );
+    };
+    const { log } = silentLogger();
+
+    const outcome = await runPromotion({ branchRef: "develop", config, gh, log });
+
+    expect(outcome).toEqual({ kind: "in-sync" });
+    expect(gh.createdPRs).toEqual([]);
+  });
+
+  it("createPR errors other than 422 'No commits between' still propagate", async () => {
+    const gh = createFakeGh({
+      branchCommits: {
+        develop: [makeCommit("c1", "feat: pending", date("2026-01-05T10:00:00Z"))],
+        staging: [makeCommit("s1", "chore: old", date("2025-12-01T10:00:00Z"))],
+      },
+    });
+    gh.createPR = async () => {
+      throw Object.assign(new Error("Internal Server Error"), { status: 500 });
+    };
+    const { log } = silentLogger();
+
+    await expect(
+      runPromotion({ branchRef: "develop", config, gh, log }),
+    ).rejects.toThrow(/Internal Server Error/);
   });
 });
