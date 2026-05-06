@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { runPromotion, computePendingCommits, isPromotionPR } from "../src/promotion.js";
+import {
+  runPromotion,
+  computePendingCommits,
+  extractClosesRefs,
+  isPromotionPR,
+} from "../src/promotion.js";
 import {
   FLYWHEEL_AUTO_MERGE_LABEL,
   FLYWHEEL_NEEDS_REVIEW_LABEL,
@@ -326,6 +331,148 @@ describe("runPromotion — orchestration", () => {
     expect(gh.createdPRs).toEqual([]);
   });
 
+  it("aggregates Closes refs from each pending sub-PR's body into the promotion PR (#77)", async () => {
+    // Sub-PRs land on develop with squash titles like "fix: foo (#NN)" where
+    // (#NN) is the sub-PR number GitHub appended on squash. runPromotion
+    // fetches each sub-PR's description and pulls Closes/Fixes/Resolves
+    // refs out of it, so the promotion PR body lists every issue that
+    // should auto-close on the production-branch merge.
+    const gh = createFakeGh({
+      branchCommits: {
+        develop: [
+          makeCommit("c1", "fix: a (#72)", date("2026-01-05T10:00:00Z")),
+          makeCommit("c2", "fix: b (#73)", date("2026-01-04T10:00:00Z")),
+          makeCommit("c3", "fix: c (#75)", date("2026-01-03T10:00:00Z")),
+        ],
+        staging: [makeCommit("s1", "chore: old", date("2025-12-01T10:00:00Z"))],
+      },
+      pullBodies: {
+        72: "Closes #60",
+        73: "Fixes #70 and resolves #99",
+        75: "fix(promotion): handle equal-tip\n\nCloses #71",
+      },
+    });
+    const { log } = silentLogger();
+
+    await runPromotion({ branchRef: "develop", config, gh, log });
+
+    const body = gh.createdPRs[0]!.body;
+    // Sorted, deduplicated, normalized to "Closes #N" so GitHub auto-close
+    // recognizes each one independently when the promotion PR merges.
+    expect(body).toContain("Closes #60\nCloses #70\nCloses #71\nCloses #99");
+  });
+
+  it("dedups Closes refs that appear in multiple sub-PR bodies", async () => {
+    const gh = createFakeGh({
+      branchCommits: {
+        develop: [
+          makeCommit("c1", "fix: a (#72)", date("2026-01-05T10:00:00Z")),
+          makeCommit("c2", "fix: b (#73)", date("2026-01-04T10:00:00Z")),
+        ],
+        staging: [makeCommit("s1", "chore: old", date("2025-12-01T10:00:00Z"))],
+      },
+      pullBodies: {
+        72: "closes #60, fixes #60", // intra-body duplicate
+        73: "Closes #60", // cross-body duplicate
+      },
+    });
+    const { log } = silentLogger();
+
+    await runPromotion({ branchRef: "develop", config, gh, log });
+
+    const body = gh.createdPRs[0]!.body;
+    const matches = body.match(/Closes #60/g) ?? [];
+    expect(matches).toHaveLength(1);
+  });
+
+  it("strips self-references — a sub-PR whose body says 'closes #<itself>' does not appear in the aggregate", async () => {
+    const gh = createFakeGh({
+      branchCommits: {
+        develop: [
+          makeCommit("c1", "fix: a (#72)", date("2026-01-05T10:00:00Z")),
+        ],
+        staging: [makeCommit("s1", "chore: old", date("2025-12-01T10:00:00Z"))],
+      },
+      pullBodies: {
+        72: "Closes #72\nCloses #60", // typo / self-ref + a real one
+      },
+    });
+    const { log } = silentLogger();
+
+    await runPromotion({ branchRef: "develop", config, gh, log });
+
+    const body = gh.createdPRs[0]!.body;
+    expect(body).toContain("Closes #60");
+    expect(body).not.toContain("Closes #72");
+  });
+
+  it("emits no Closes block when no sub-PR body has Closes refs", async () => {
+    const gh = createFakeGh({
+      branchCommits: {
+        develop: [
+          makeCommit("c1", "fix: a (#72)", date("2026-01-05T10:00:00Z")),
+        ],
+        staging: [makeCommit("s1", "chore: old", date("2025-12-01T10:00:00Z"))],
+      },
+      pullBodies: {
+        72: "Just a description, nothing to auto-close.",
+      },
+    });
+    const { log } = silentLogger();
+
+    await runPromotion({ branchRef: "develop", config, gh, log });
+
+    expect(gh.createdPRs[0]!.body).not.toMatch(/Closes #/);
+  });
+
+  it("survives a 404 from getPullBody (sub-PR hard-deleted) — promotion PR still upserts", async () => {
+    // pullBodies map omits #72, so fakeGh.getPullBody returns null. The
+    // production GitHubClient returns null on 404 from octokit. Either
+    // way, runPromotion should treat it as "nothing to aggregate" and
+    // not fail.
+    const gh = createFakeGh({
+      branchCommits: {
+        develop: [
+          makeCommit("c1", "fix: a (#72)", date("2026-01-05T10:00:00Z")),
+          makeCommit("c2", "fix: b (#73)", date("2026-01-04T10:00:00Z")),
+        ],
+        staging: [makeCommit("s1", "chore: old", date("2025-12-01T10:00:00Z"))],
+      },
+      pullBodies: {
+        // 72 omitted — simulates 404
+        73: "Fixes #70",
+      },
+    });
+    const { log } = silentLogger();
+
+    const outcome = await runPromotion({ branchRef: "develop", config, gh, log });
+    expect(outcome.kind).toBe("created");
+    expect(gh.createdPRs[0]!.body).toContain("Closes #70");
+  });
+
+  it("ignores commits without a trailing (#NN) — direct-pushed bot commits don't trigger getPullBody", async () => {
+    // chore(release) commits and back-merge commits land on the source
+    // branch via direct push, so they have no PR number. extractTrailingPrNumber
+    // returns null and we skip them.
+    const gh = createFakeGh({
+      branchCommits: {
+        develop: [
+          makeCommit("c1", "fix: a (#72)", date("2026-01-05T10:00:00Z")),
+          makeCommit("c2", "chore(release): 1.0.1-dev.1", date("2026-01-04T10:00:00Z")),
+        ],
+        staging: [makeCommit("s1", "chore: old", date("2025-12-01T10:00:00Z"))],
+      },
+      pullBodies: { 72: "Closes #60" },
+    });
+    const { log } = silentLogger();
+
+    await runPromotion({ branchRef: "develop", config, gh, log });
+
+    const getCalls = gh.calls.filter((c) => c.method === "getPullBody");
+    expect(getCalls).toHaveLength(1);
+    expect((getCalls[0]!.args as { prNumber: number }).prNumber).toBe(72);
+  });
+
   it("createPR errors other than 422 'No commits between' still propagate", async () => {
     const gh = createFakeGh({
       branchCommits: {
@@ -369,5 +516,46 @@ describe("isPromotionPR — promotion PR detection used by pr-flow short-circuit
     expect(isPromotionPR(config, "staging", "main", "fix: regular bug fix")).toBe(false);
     expect(isPromotionPR(config, "staging", "main", "promote staging → main")).toBe(false);
     expect(isPromotionPR(config, "staging", "main", "fix: promote main → staging")).toBe(false);
+  });
+});
+
+describe("extractClosesRefs — Closes/Fixes/Resolves keyword parsing", () => {
+  it("recognizes the closing keywords GitHub recognizes (case-insensitive)", () => {
+    expect(extractClosesRefs("Closes #1")).toEqual([1]);
+    expect(extractClosesRefs("closes #1")).toEqual([1]);
+    expect(extractClosesRefs("CLOSES #1")).toEqual([1]);
+    expect(extractClosesRefs("Closed #1")).toEqual([1]);
+    expect(extractClosesRefs("Fix #1")).toEqual([1]);
+    expect(extractClosesRefs("Fixes #1")).toEqual([1]);
+    expect(extractClosesRefs("Fixed #1")).toEqual([1]);
+    expect(extractClosesRefs("Resolve #1")).toEqual([1]);
+    expect(extractClosesRefs("Resolves #1")).toEqual([1]);
+    expect(extractClosesRefs("Resolved #1")).toEqual([1]);
+  });
+
+  it("accepts the colon variant (Closes: #1)", () => {
+    expect(extractClosesRefs("Closes: #42")).toEqual([42]);
+  });
+
+  it("returns refs in encounter order, including duplicates (caller handles dedup)", () => {
+    expect(
+      extractClosesRefs("Closes #3, fixes #1, resolves #2, closes #1"),
+    ).toEqual([3, 1, 2, 1]);
+  });
+
+  it("ignores cross-repo refs (owner/repo#N) — out of scope to propagate", () => {
+    expect(extractClosesRefs("Closes octo-org/octo-repo#100")).toEqual([]);
+  });
+
+  it("does not match keywords inside other words", () => {
+    // 'preclosed' should not trigger; word boundary required.
+    expect(extractClosesRefs("Preclosed #5")).toEqual([]);
+    // 'closeness' — also not a keyword.
+    expect(extractClosesRefs("closeness #5")).toEqual([]);
+  });
+
+  it("returns [] for null or empty bodies", () => {
+    expect(extractClosesRefs(null)).toEqual([]);
+    expect(extractClosesRefs("")).toEqual([]);
   });
 });
