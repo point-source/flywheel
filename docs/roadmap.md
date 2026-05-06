@@ -53,27 +53,6 @@ The dead Strategy A masks a silent failure mode if Strategy B ever regresses. Re
 
 Status: deferred. `src/promotion.ts:171-209`, `src/promotion.ts:191-209` (`findLastPromotionCommit`, `buildPromotionTitleRegex`).
 
-## Minimal `.flywheel.yml` template missing `release:` field
-
-`scripts/templates/flywheel.minimal.yml` declares:
-
-```yaml
-flywheel:
-  streams:
-    - name: main-line
-      branches:
-        - name: main
-          auto_merge: [fix, chore, docs]
-```
-
-`release:` is required on every branch — both validators reject this:
-- TypeScript: `src/config.ts:208-220` (`parseReleaseMode`) emits `branch <name>: release: required`.
-- Python doctor: `scripts/lint-flywheel-config.py:96-99` emits `branch 'main': release is required`.
-
-`init.sh` defaults to this preset when run non-interactively (and offers it as option 1 interactively), so a fresh Flywheel adoption produces a config that fails validation on the first PR. Fix: add `release: production` to the template.
-
-Status: pre-existing bug (predates hybrid mode). Low blast radius (no public adopters yet), but a real first-run footgun.
-
 ## Public fork PRs cannot run conduct
 
 `scripts/templates/flywheel-pr.yml:2` triggers on plain `pull_request:`. GitHub does not pass repo secrets (including `FLYWHEEL_GH_APP_PRIVATE_KEY`) to PRs from forks. `action.yml:14` marks `app-private-key` as `required: true`, so the action fails immediately on fork PRs.
@@ -102,14 +81,6 @@ Status: pre-existing. Hybrid-mode-friendly fix is to combine this with the `comp
 Fix: extend `include` to `["refs/tags/v*", "refs/tags/*/v*"]`, or generate the include list per-stream from `.flywheel.yml` in `scripts/apply-rulesets.sh`.
 
 Status: pre-existing.
-
-## `${build}` placeholder ignores stream-prefixed tags
-
-`src/release-rc.ts:99-100` builds `BUILD=$(( $(git tag --list 'v*' | wc -l) + 1 ))`. The glob `'v*'` matches `v1.2.3` but not `customer-acme/v1.2.3`. Mobile adopters using scoped streams get build numbers that are non-monotonic (or worse, identical between streams) because each stream computes a count independent of the other stream's tag count.
-
-Fix: drop the glob (`git tag --list | wc -l`) for a repo-wide count, or scope per-stream by passing the stream's tag prefix into `buildPrepareCmd`.
-
-Status: pre-existing. Affects only adopters who declare `release_files:` with `${build}` AND use scoped streams.
 
 ## semantic-release plugin majors unpinned
 

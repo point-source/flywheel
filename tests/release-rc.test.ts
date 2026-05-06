@@ -178,7 +178,7 @@ describe("generateReleaseRc", () => {
         "@semantic-release/exec",
         {
           prepareCmd:
-            "BUILD=$(( $(git tag --list 'v*' | wc -l) + 1 )) && " +
+            "BUILD=$(( $(git tag --list 'v*' '*/v*' | wc -l) + 1 )) && " +
             'sed -i.bak -E "s|^version: .*|version: ${nextRelease.version}+${BUILD}|" pubspec.yaml && ' +
             "rm pubspec.yaml.bak",
         },
@@ -200,7 +200,7 @@ describe("generateReleaseRc", () => {
         "@semantic-release/exec",
         {
           prepareCmd:
-            "BUILD=$(( $(git tag --list 'v*' | wc -l) + 1 )) && " +
+            "BUILD=$(( $(git tag --list 'v*' '*/v*' | wc -l) + 1 )) && " +
             "python bump.py \"${nextRelease.version}\" \"${nextRelease.channel || ''}\"",
         },
       ]);
@@ -224,7 +224,7 @@ describe("generateReleaseRc", () => {
       expect(execEntries).toHaveLength(1);
       const prepareCmd = (execEntries[0] as [string, { prepareCmd: string }])[1]
         .prepareCmd;
-      expect(prepareCmd).toMatch(/^BUILD=\$\(\( \$\(git tag --list 'v\*'.*\) \+ 1 \)\) && /);
+      expect(prepareCmd).toMatch(/^BUILD=\$\(\( \$\(git tag --list 'v\*' '\*\/v\*'.*\) \+ 1 \)\) && /);
       expect(prepareCmd).toContain("sed -i.bak -E");
       expect(prepareCmd).toContain('echo "${nextRelease.version}" > VERSION');
       expect(rc.plugins).toContainEqual([
