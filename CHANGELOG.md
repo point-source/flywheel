@@ -1,3 +1,11 @@
+# [1.0.0-dev.2](https://github.com/point-source/flywheel/compare/v1.0.0-dev.1...v1.0.0-dev.2) (2026-05-06)
+
+
+### Bug Fixes
+
+* **push:** back-pick release files into upstreams to survive squash/rebase ([#63](https://github.com/point-source/flywheel/issues/63)) ([a4ef65d](https://github.com/point-source/flywheel/commit/a4ef65d6e6235e9944aed6a218f33fece51e9293))
+* **push:** use multiple -m flags so back-pick commit message is YAML-safe ([#64](https://github.com/point-source/flywheel/issues/64)) ([0ece7ac](https://github.com/point-source/flywheel/commit/0ece7acb71cb4dd4e5a4cc41285ace82c1c5e9a7)), closes [#63](https://github.com/point-source/flywheel/issues/63)
+
 # 1.0.0-dev.1 (2026-05-05)
 
 
