@@ -28989,6 +28989,7 @@ async function run() {
     });
     setOutput("managed_branch", outcome.kind === "release" ? "true" : "false");
     setOutput("back_merge_targets", getUpstreamBranches(config, branchRef).join(","));
+    setOutput("merge_strategy", config.merge_strategy);
     await runPromotion({
       branchRef,
       config,

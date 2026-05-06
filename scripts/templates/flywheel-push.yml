@@ -42,17 +42,28 @@ jobs:
       - name: Back-merge release into upstream branches
         # Only runs when this push triggered a release (a tag was created at
         # HEAD by semantic-release) and the stream has upstream branches.
-        # Brings the chore(release) commit + tag into each upstream's ancestry
-        # so semantic-release sees the latest tag and the CHANGELOG stays in
-        # sync. The push will retrigger this workflow on the upstream branch;
-        # that re-run is intentional and a no-op in steady state — semantic-
-        # release sees the freshly back-merged tag at HEAD and exits without
-        # publishing a new release. We deliberately do *not* mark the merge
+        # Brings the CHANGELOG + release_files content from the chore(release)
+        # commit into each upstream so the next prerelease cycle picks up
+        # from a synced state. We deliberately do *not* mark the back-merge
         # commit `[skip ci]`: that token is a workflow-level filter, which
         # would leave required status checks `Pending` on any promotion PR
         # tracking the upstream branch. Adopters who want to skip CI work on
         # back-merge commits should use a job-level `if:` in their quality
         # workflows (which reports `success` and clears the gate).
+        #
+        # Mechanism (squash/rebase): under squash and rebase merge modes,
+        # the released branch has no ancestral link to the upstream branch's
+        # source commits — both branches independently produced
+        # chore(release) commits that modified the same line ranges in
+        # CHANGELOG.md and any release_files paths. A regular `git merge`
+        # falls back to a too-distant merge-base and surfaces a
+        # deterministic conflict on those files. We sidestep the conflict
+        # by *taking* the released branch's version of every file the
+        # chore(release) commit modified (main's post-release state is
+        # canonical for those paths) and committing the result with a
+        # flywheel-owned subject. The `ci(flywheel):` type is non-bumping
+        # under default commit-analyzer rules, so the back-merge push does
+        # not trigger a redundant release on the upstream branch.
         if: |
           steps.flywheel.outputs.managed_branch == 'true' &&
           steps.flywheel.outputs.back_merge_targets != ''
@@ -60,6 +71,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ steps.flywheel.outputs.token }}
           BACK_MERGE_TARGETS: ${{ steps.flywheel.outputs.back_merge_targets }}
+          MERGE_STRATEGY: ${{ steps.flywheel.outputs.merge_strategy }}
           RELEASED_BRANCH: ${{ github.ref_name }}
         run: |
           set -euo pipefail
@@ -76,11 +88,34 @@ jobs:
             echo "::group::Back-merge $RELEASED_BRANCH ($new_tag) → $upstream"
             git fetch origin "$upstream:$upstream"
             git checkout "$upstream"
-            if git merge --ff-only "$RELEASED_BRANCH" 2>/dev/null; then
-              echo "Fast-forwarded $upstream to $RELEASED_BRANCH."
-            else
-              git merge --no-ff -m "chore: back-merge $new_tag from $RELEASED_BRANCH into $upstream" "$RELEASED_BRANCH"
-            fi
+            case "$MERGE_STRATEGY" in
+              squash|rebase)
+                files=$(git diff-tree --no-commit-id --name-only -r "$RELEASED_BRANCH")
+                if [[ -z "$files" ]]; then
+                  echo "::warning::release commit has no diff — skipping back-merge for $upstream."
+                  echo "::endgroup::"
+                  continue
+                fi
+                # shellcheck disable=SC2086
+                git checkout "$RELEASED_BRANCH" -- $files
+                if git diff --cached --quiet; then
+                  echo "$upstream already in sync with $RELEASED_BRANCH for release-managed paths."
+                else
+                  git commit -m "ci(flywheel): back-merge $new_tag from $RELEASED_BRANCH into $upstream
+
+Flywheel-Back-Merge: $new_tag"
+                fi
+                ;;
+              *)
+                # Reserved for a future true-merge mode where ancestry is
+                # preserved. Today's MergeStrategy enum is squash|rebase only.
+                if git merge --ff-only "$RELEASED_BRANCH" 2>/dev/null; then
+                  echo "Fast-forwarded $upstream to $RELEASED_BRANCH."
+                else
+                  git merge --no-ff -m "chore: back-merge $new_tag from $RELEASED_BRANCH into $upstream" "$RELEASED_BRANCH"
+                fi
+                ;;
+            esac
             git push origin "$upstream"
             echo "::endgroup::"
           done
