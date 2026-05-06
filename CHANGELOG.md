@@ -1,3 +1,10 @@
+# [1.1.0-dev.1](https://github.com/point-source/flywheel/compare/v1.0.4-dev.1...v1.1.0-dev.1) (2026-05-06)
+
+
+### Features
+
+* **init:** support org-wide credential scope via --scope repo|org ([#100](https://github.com/point-source/flywheel/issues/100)) ([9ac2579](https://github.com/point-source/flywheel/commit/9ac25796b313d7751fe86281a8df43724c577b44))
+
 ## [1.0.4-dev.1](https://github.com/point-source/flywheel/compare/v1.0.3...v1.0.4-dev.1) (2026-05-06)
 
 
