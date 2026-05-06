@@ -101,9 +101,9 @@ jobs:
                 if git diff --cached --quiet; then
                   echo "$upstream already in sync with $RELEASED_BRANCH for release-managed paths."
                 else
-                  git commit -m "ci(flywheel): back-merge $new_tag from $RELEASED_BRANCH into $upstream
-
-Flywheel-Back-Merge: $new_tag"
+                  git commit \
+                    -m "ci(flywheel): back-merge $new_tag from $RELEASED_BRANCH into $upstream" \
+                    -m "Flywheel-Back-Merge: $new_tag"
                 fi
                 ;;
               *)
