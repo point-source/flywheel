@@ -20,6 +20,7 @@ export type PromotionOutcome =
   | { kind: "unmanaged" }
   | { kind: "terminal" }
   | { kind: "no-bumping" }
+  | { kind: "in-sync" }
   | { kind: "created"; prNumber: number; label: string }
   | { kind: "updated"; prNumber: number; label: string }
   | { kind: "no-change"; prNumber: number };
@@ -55,8 +56,8 @@ export async function runPromotion(deps: PromotionDeps): Promise<PromotionOutcom
   const target = stream.branches[branchIdx + 1]!;
 
   const [sourceCommits, targetCommits] = await Promise.all([
-    gh.listBranchCommits(source.name, 200),
-    gh.listBranchCommits(target.name, 200),
+    gh.listBranchCommits(source.name),
+    gh.listBranchCommits(target.name),
   ]);
 
   const pending = computePendingCommits({
@@ -109,12 +110,26 @@ export async function runPromotion(deps: PromotionDeps): Promise<PromotionOutcom
   const existing = await gh.listOpenPRs({ head: source.name, base: target.name });
 
   if (existing.length === 0) {
-    const created = await gh.createPR({
-      title,
-      body,
-      head: source.name,
-      base: target.name,
-    });
+    let created;
+    try {
+      created = await gh.createPR({
+        title,
+        body,
+        head: source.name,
+        base: target.name,
+      });
+    } catch (err) {
+      if (isNoCommitsBetweenError(err)) {
+        // Race: pending detection saw bumping commits but GitHub's compare
+        // says target is already up to date. Happens after a back-merge that
+        // fast-forwards source to target's tip — see #71.
+        log.info(
+          `promotion: ${source.name} → ${target.name} already in sync per GitHub (createPR 422) — skipping.`,
+        );
+        return { kind: "in-sync" };
+      }
+      throw err;
+    }
     await applyLabel(gh, created.number, label);
     if (eligible) {
       const result = await gh.enableAutoMerge(created.nodeId, method);
@@ -170,6 +185,18 @@ interface PendingDetectionInput {
 
 export function computePendingCommits(input: PendingDetectionInput): Commit[] {
   const { sourceCommits, targetCommits, sourceName, targetName } = input;
+
+  // Fast-path: source and target tips equal → nothing to promote. Aligns
+  // pending detection with GitHub's compare view after a back-merge
+  // fast-forwards source to target's tip. Without this, strategy A/B can
+  // disagree with GitHub and the createPR call below fails 422 — see #71.
+  if (
+    sourceCommits.length > 0 &&
+    targetCommits.length > 0 &&
+    sourceCommits[0]!.sha === targetCommits[0]!.sha
+  ) {
+    return [];
+  }
 
   // Strategy A: if target has a prior `promote source → target` squash commit,
   // use its committer.date as the cutoff. This handles the squash-merge case
@@ -277,6 +304,14 @@ function formatPromotionBody(p: BodyParams): string {
     );
   }
   return lines.join("\n");
+}
+
+function isNoCommitsBetweenError(err: unknown): boolean {
+  const e = err as { status?: number; message?: string } | undefined;
+  if (!e) return false;
+  if (e.status !== 422) return false;
+  const msg = e.message ?? "";
+  return msg.includes("No commits between");
 }
 
 async function applyLabel(gh: GitHubClient, prNumber: number, label: string): Promise<void> {

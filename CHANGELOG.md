@@ -1,3 +1,12 @@
+## [1.0.1-dev.1](https://github.com/point-source/flywheel/compare/v1.0.0...v1.0.1-dev.1) (2026-05-06)
+
+
+### Bug Fixes
+
+* prevent stream-branch deletion + auto-sync rulesets ([#60](https://github.com/point-source/flywheel/issues/60)) ([#72](https://github.com/point-source/flywheel/issues/72)) ([8942f18](https://github.com/point-source/flywheel/commit/8942f1865e1ab5cdd51d74358e7c60beec779e25))
+* **promotion:** handle equal-tip promote 422 gracefully ([#71](https://github.com/point-source/flywheel/issues/71)) ([#75](https://github.com/point-source/flywheel/issues/75)) ([79bdf6e](https://github.com/point-source/flywheel/commit/79bdf6e0bfba2556fea0cacb7279dc9d8f6d4a90))
+* sanitize @-mentions in release body ([#70](https://github.com/point-source/flywheel/issues/70)) ([#73](https://github.com/point-source/flywheel/issues/73)) ([6cf2c1a](https://github.com/point-source/flywheel/commit/6cf2c1a610094fa830dc8a9f90bdcc57754a50e3))
+
 # 1.0.0 (2026-05-06)
 
 

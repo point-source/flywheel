@@ -28216,14 +28216,14 @@ function createGitHubClient(token, repoFullName) {
         };
       });
     },
-    async listBranchCommits(branch, perPage = 100) {
-      const all = await octokit.rest.repos.listCommits({
+    async listBranchCommits(branch) {
+      const all = await octokit.paginate(octokit.rest.repos.listCommits, {
         owner,
         repo,
         sha: branch,
-        per_page: perPage
+        per_page: 100
       });
-      return all.data.map((c) => {
+      return all.map((c) => {
         const message = c.commit.message;
         const { title, body } = splitMessage(message);
         return {
@@ -28275,6 +28275,33 @@ function createGitHubClient(token, repoFullName) {
           ...details ? { text: details } : {}
         }
       });
+    },
+    rulesets: {
+      async list() {
+        const res = await octokit.rest.repos.getRepoRulesets({ owner, repo });
+        return res.data.map((r) => ({
+          id: r.id,
+          name: r.name,
+          target: r.target ?? "branch"
+        }));
+      },
+      async get(rulesetId) {
+        const res = await octokit.rest.repos.getRepoRuleset({
+          owner,
+          repo,
+          ruleset_id: rulesetId
+        });
+        return res.data;
+      },
+      async update(rulesetId, payload) {
+        const params = {
+          owner,
+          repo,
+          ruleset_id: rulesetId,
+          ...payload
+        };
+        await octokit.rest.repos.updateRepoRuleset(params);
+      }
     }
   };
 }
@@ -28663,8 +28690,8 @@ async function runPromotion(deps) {
   const source = stream.branches[branchIdx];
   const target = stream.branches[branchIdx + 1];
   const [sourceCommits, targetCommits] = await Promise.all([
-    gh.listBranchCommits(source.name, 200),
-    gh.listBranchCommits(target.name, 200)
+    gh.listBranchCommits(source.name),
+    gh.listBranchCommits(target.name)
   ]);
   const pending = computePendingCommits({
     sourceCommits,
@@ -28707,12 +28734,23 @@ async function runPromotion(deps) {
   const method = "MERGE";
   const existing = await gh.listOpenPRs({ head: source.name, base: target.name });
   if (existing.length === 0) {
-    const created = await gh.createPR({
-      title,
-      body,
-      head: source.name,
-      base: target.name
-    });
+    let created;
+    try {
+      created = await gh.createPR({
+        title,
+        body,
+        head: source.name,
+        base: target.name
+      });
+    } catch (err) {
+      if (isNoCommitsBetweenError(err)) {
+        log.info(
+          `promotion: ${source.name} \u2192 ${target.name} already in sync per GitHub (createPR 422) \u2014 skipping.`
+        );
+        return { kind: "in-sync" };
+      }
+      throw err;
+    }
     await applyLabel(gh, created.number, label);
     if (eligible) {
       const result = await gh.enableAutoMerge(created.nodeId, method);
@@ -28757,6 +28795,9 @@ async function runPromotion(deps) {
 }
 function computePendingCommits(input) {
   const { sourceCommits, targetCommits, sourceName, targetName } = input;
+  if (sourceCommits.length > 0 && targetCommits.length > 0 && sourceCommits[0].sha === targetCommits[0].sha) {
+    return [];
+  }
   const lastPromotion = findLastPromotionCommit(targetCommits, sourceName, targetName);
   if (lastPromotion) {
     const cutoff = Date.parse(lastPromotion.committerDate);
@@ -28832,6 +28873,13 @@ function formatPromotionBody(p) {
   }
   return lines.join("\n");
 }
+function isNoCommitsBetweenError(err) {
+  const e = err;
+  if (!e) return false;
+  if (e.status !== 422) return false;
+  const msg = e.message ?? "";
+  return msg.includes("No commits between");
+}
 async function applyLabel(gh, prNumber, label) {
   await gh.addLabels(prNumber, [label]);
   const opposite = label === FLYWHEEL_AUTO_MERGE_LABEL ? FLYWHEEL_NEEDS_REVIEW_LABEL : FLYWHEEL_AUTO_MERGE_LABEL;
@@ -28844,6 +28892,101 @@ function locateBranch(config, branchRef) {
     }
   }
   return null;
+}
+
+// src/rulesets.ts
+var MANAGED_BRANCHES_RULESET_NAME = "Flywheel managed branches";
+var TAG_NAMESPACE_RULESET_NAME = "Flywheel tag namespace (v*)";
+var TAG_NAMESPACE_INCLUDE = ["refs/tags/v*", "refs/tags/*/v*"];
+async function syncRulesets(deps) {
+  const { api, config, log } = deps;
+  const expectedBranches = expectedBranchIncludes(config);
+  let rulesets;
+  try {
+    rulesets = await api.list();
+  } catch (err) {
+    if (statusOf(err) === 403 || statusOf(err) === 404) {
+      log.warning(
+        "ruleset sync skipped: App lacks repository administration scope (needed to read/update branch & tag rulesets). Re-run scripts/apply-rulesets.sh manually."
+      );
+      return { branchUpdated: false, tagUpdated: false, skipped: "forbidden" };
+    }
+    throw err;
+  }
+  const branchSummary = rulesets.find(
+    (r) => r.name === MANAGED_BRANCHES_RULESET_NAME
+  );
+  const tagSummary = rulesets.find(
+    (r) => r.name === TAG_NAMESPACE_RULESET_NAME
+  );
+  let branchUpdated = false;
+  let tagUpdated = false;
+  if (branchSummary) {
+    branchUpdated = await reconcileInclude(
+      api,
+      branchSummary.id,
+      expectedBranches,
+      log,
+      "managed-branches"
+    );
+  } else {
+    log.warning(
+      `ruleset '${MANAGED_BRANCHES_RULESET_NAME}' not found \u2014 bootstrap with scripts/apply-rulesets.sh.`
+    );
+  }
+  if (tagSummary) {
+    tagUpdated = await reconcileInclude(
+      api,
+      tagSummary.id,
+      TAG_NAMESPACE_INCLUDE,
+      log,
+      "tag-namespace"
+    );
+  } else {
+    log.warning(
+      `ruleset '${TAG_NAMESPACE_RULESET_NAME}' not found \u2014 bootstrap with scripts/apply-rulesets.sh.`
+    );
+  }
+  return { branchUpdated, tagUpdated };
+}
+function expectedBranchIncludes(config) {
+  return config.streams.flatMap(
+    (s) => s.branches.map((b) => `refs/heads/${b.name}`)
+  );
+}
+async function reconcileInclude(api, rulesetId, expected, log, label) {
+  const detail = await api.get(rulesetId);
+  const current = detail.conditions.ref_name?.include ?? [];
+  if (sameSet(current, expected)) return false;
+  const payload = {
+    name: detail.name,
+    target: detail.target,
+    enforcement: detail.enforcement,
+    bypass_actors: detail.bypass_actors ?? [],
+    conditions: {
+      ...detail.conditions,
+      ref_name: {
+        include: expected,
+        exclude: detail.conditions.ref_name?.exclude ?? []
+      }
+    },
+    rules: detail.rules
+  };
+  await api.update(rulesetId, payload);
+  log.info(
+    `${label} ruleset include updated: [${current.join(", ")}] \u2192 [${expected.join(", ")}]`
+  );
+  return true;
+}
+function sameSet(a, b) {
+  if (a.length !== b.length) return false;
+  const sa = [...a].sort();
+  const sb = [...b].sort();
+  for (let i = 0; i < sa.length; i++) if (sa[i] !== sb[i]) return false;
+  return true;
+}
+function statusOf(err) {
+  return err?.status;
 }
 
 // src/preflight.ts
@@ -28898,10 +29041,17 @@ var CONFIG_FILE = ".flywheel.yml";
 async function run() {
   const event = getInput("event", { required: true });
   const appId = getInput("app-id", { required: true });
-  const privateKey = getInput("app-private-key", { required: true });
+  const privateKey = getInput("app-private-key");
   const ctx = context2;
   const owner = ctx.repo.owner;
   const repo = ctx.repo.repo;
+  if (!privateKey || privateKey.trim() === "") {
+    notice(
+      "Flywheel: app-private-key is empty. This is expected for fork PRs (GitHub does not pass secrets to fork PR workflows). Skipping the conductor \u2014 title rewrite, auto-merge labels, and promotion PR upserts will not run on this PR. The PR can still be merged manually."
+    );
+    setOutput("managed_branch", "false");
+    return;
+  }
   let auth6;
   try {
     auth6 = await mintInstallationToken(appId, privateKey, owner, repo);
@@ -28961,6 +29111,14 @@ async function run() {
   }
   if (event === "push") {
     const branchRef = context2.ref.replace(/^refs\/heads\//, "");
+    if (findStreamForBranch(config, branchRef) && pushTouchedConfig(context2.payload, CONFIG_FILE)) {
+      try {
+        await syncRulesets({ api: gh.rulesets, config, log });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        warning(`ruleset sync failed (continuing): ${msg}`);
+      }
+    }
     const outcome = await runPushFlow({
       branchRef,
       config,
@@ -28978,6 +29136,16 @@ async function run() {
     return;
   }
   setFailed(`Unknown event input: ${event}. Expected 'pull_request' or 'push'.`);
+}
+function pushTouchedConfig(payload, configFile) {
+  const commits = payload?.commits;
+  if (!commits || commits.length === 0) return false;
+  for (const c of commits) {
+    if (c.added?.includes(configFile)) return true;
+    if (c.modified?.includes(configFile)) return true;
+    if (c.removed?.includes(configFile)) return true;
+  }
+  return false;
 }
 function readPullRequestFromContext() {
   const payload = context2.payload;

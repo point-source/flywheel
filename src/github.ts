@@ -1,5 +1,12 @@
 import * as github from "@actions/github";
 
+import type {
+  RulesetApi,
+  RulesetDetail,
+  RulesetSummary,
+  RulesetUpdatePayload,
+} from "./rulesets.js";
+
 export interface PullRequest {
   number: number;
   title: string;
@@ -62,12 +69,14 @@ export interface GitHubClient {
   mergePR(prNumber: number, method: MergeMethod): Promise<MergeResult>;
 
   listPullCommits(prNumber: number): Promise<Commit[]>;
-  listBranchCommits(branch: string, perPage?: number): Promise<Commit[]>;
+  listBranchCommits(branch: string): Promise<Commit[]>;
 
   listOpenPRs(opts: { head: string; base: string }): Promise<PRSummary[]>;
   createPR(opts: { title: string; body: string; head: string; base: string }): Promise<PRSummary>;
 
   createCheck(opts: CreateCheckOptions): Promise<void>;
+
+  rulesets: RulesetApi;
 }
 
 export function createGitHubClient(token: string, repoFullName?: string): GitHubClient {
@@ -186,14 +195,14 @@ export function createGitHubClient(token: string, repoFullName?: string): GitHub
       });
     },
 
-    async listBranchCommits(branch, perPage = 100) {
-      const all = await octokit.rest.repos.listCommits({
+    async listBranchCommits(branch) {
+      const all = await octokit.paginate(octokit.rest.repos.listCommits, {
         owner,
         repo,
         sha: branch,
-        per_page: perPage,
+        per_page: 100,
       });
-      return all.data.map((c) => {
+      return all.map((c) => {
         const message = c.commit.message;
         const { title, body } = splitMessage(message);
         return {
@@ -248,6 +257,42 @@ export function createGitHubClient(token: string, repoFullName?: string): GitHub
           ...(details ? { text: details } : {}),
         },
       });
+    },
+
+    rulesets: {
+      async list(): Promise<RulesetSummary[]> {
+        const res = await octokit.rest.repos.getRepoRulesets({ owner, repo });
+        return res.data.map((r) => ({
+          id: r.id,
+          name: r.name,
+          target: (r.target ?? "branch") as RulesetSummary["target"],
+        }));
+      },
+      async get(rulesetId: number): Promise<RulesetDetail> {
+        const res = await octokit.rest.repos.getRepoRuleset({
+          owner,
+          repo,
+          ruleset_id: rulesetId,
+        });
+        return res.data as unknown as RulesetDetail;
+      },
+      async update(rulesetId: number, payload: RulesetUpdatePayload): Promise<void> {
+        // The GET response → PUT round-trip is valid by construction at
+        // runtime, but octokit's PUT typings narrow bypass_actors / rules
+        // discriminants more tightly than the GET response surfaces. Cast
+        // the payload to the PUT input shape rather than re-typing every
+        // field.
+        type UpdateParams = Parameters<
+          typeof octokit.rest.repos.updateRepoRuleset
+        >[0];
+        const params = {
+          owner,
+          repo,
+          ruleset_id: rulesetId,
+          ...payload,
+        } as unknown as UpdateParams;
+        await octokit.rest.repos.updateRepoRuleset(params);
+      },
     },
   };
 }
