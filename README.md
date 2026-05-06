@@ -181,7 +181,7 @@ MIT — see [LICENSE.md](./LICENSE.md).
 ## Related docs
 
 - **[spec.md](./spec.md)** — full specification
-- **[docs/adopter-setup.md](./docs/adopter-setup.md)** — adopter walkthrough
+- **[docs/adopter-setup.md](./docs/adopter-setup.md)** — adopter walkthrough (see §8 for upgrading)
 - **[CONTRIBUTING.md](./CONTRIBUTING.md)** — contributor and sandbox-testing guide
 - **[docs/maintainer-setup.md](./docs/maintainer-setup.md)** — operating Flywheel itself
 - **[docs/maintainer-release-process.md](./docs/maintainer-release-process.md)** — cutting a Flywheel release
