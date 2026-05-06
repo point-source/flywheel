@@ -95,6 +95,7 @@ export async function runPromotion(deps: PromotionDeps): Promise<PromotionOutcom
   const matchKey = top.breaking ? `${top.type}!` : top.type;
   const eligible = target.auto_merge.includes(matchKey);
   const label = eligible ? FLYWHEEL_AUTO_MERGE_LABEL : FLYWHEEL_NEEDS_REVIEW_LABEL;
+  const closesRefs = await aggregateClosesRefs(gh, pending);
   const body = formatPromotionBody({
     pending,
     sourceName: source.name,
@@ -102,6 +103,7 @@ export async function runPromotion(deps: PromotionDeps): Promise<PromotionOutcom
     matchKey,
     eligible,
     targetBranch: target,
+    closesRefs,
   });
   // Promotion PRs always use a true merge commit. Squash on this edge severs
   // ancestry between source and target — see docs/squash-merge-issues.md.
@@ -235,6 +237,28 @@ function buildPromotionTitleRegex(source: string, target: string): RegExp {
   );
 }
 
+// True when (headRef → baseRef) is a configured promotion edge AND the title
+// matches the promotion-PR shape this module emits. pr-flow consults this so
+// it can leave promotion PRs to runPromotion (different merge method, body
+// owned by formatPromotionBody) instead of treating them as feature PRs.
+export function isPromotionPR(
+  config: FlywheelConfig,
+  headRef: string,
+  baseRef: string,
+  title: string,
+): boolean {
+  for (const stream of config.streams) {
+    for (let i = 0; i < stream.branches.length - 1; i++) {
+      const source = stream.branches[i]!;
+      const target = stream.branches[i + 1]!;
+      if (source.name === headRef && target.name === baseRef) {
+        return buildPromotionTitleRegex(source.name, target.name).test(title);
+      }
+    }
+  }
+  return false;
+}
+
 function normalizeTitle(title: string): string {
   return stripPrSuffix(title).trim();
 }
@@ -263,6 +287,7 @@ interface BodyParams {
   matchKey: string;
   eligible: boolean;
   targetBranch: Branch;
+  closesRefs: number[];
 }
 
 function formatPromotionBody(p: BodyParams): string {
@@ -293,6 +318,17 @@ function formatPromotionBody(p: BodyParams): string {
       "",
     );
   }
+  // Closes-keyword references aggregated from each pending sub-PR's body
+  // (see aggregateClosesRefs). When the promotion PR merges into the
+  // production branch GitHub auto-closes these issues — without this line
+  // they stay open because GitHub only auto-closes from PRs/commits that
+  // land on the default branch, and sub-PRs land on develop. See #77.
+  if (p.closesRefs.length > 0) {
+    lines.push(
+      p.closesRefs.map((n) => `Closes #${n}`).join("\n"),
+      "",
+    );
+  }
   lines.push("---", "");
   if (p.eligible) {
     lines.push(
@@ -304,6 +340,53 @@ function formatPromotionBody(p: BodyParams): string {
     );
   }
   return lines.join("\n");
+}
+
+// Squash-merge titles end with `(#NN)` appended by GitHub — that's the PR
+// number whose body we want. Original PR titles can also contain (#NN)
+// references (issue links typed by the author), so we take the LAST match,
+// not the first. Returns null when no trailing PR-number suffix is present
+// (e.g. a chore(release) commit pushed by the bot, or a directly-pushed
+// commit on the source branch).
+function extractTrailingPrNumber(title: string): number | null {
+  const m = title.match(/\(#(\d+)\)\s*$/);
+  return m ? Number.parseInt(m[1]!, 10) : null;
+}
+
+// GitHub recognizes these closing keywords (case-insensitive) in PR
+// descriptions and auto-closes the referenced issue when the PR merges
+// into the default branch. We extract the same set so the aggregated
+// promotion PR body triggers the same behavior. Same-repo refs only —
+// cross-repo `owner/repo#N` is intentionally skipped (the issue lives
+// elsewhere and propagating it from a flywheel-owned PR risks
+// closing unrelated issues).
+const CLOSES_KEYWORD_RE = /\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)[\s:]+#(\d+)\b/gi;
+
+export function extractClosesRefs(body: string | null): number[] {
+  if (!body) return [];
+  const out: number[] = [];
+  for (const m of body.matchAll(CLOSES_KEYWORD_RE)) {
+    out.push(Number.parseInt(m[1]!, 10));
+  }
+  return out;
+}
+
+async function aggregateClosesRefs(
+  gh: GitHubClient,
+  pending: Commit[],
+): Promise<number[]> {
+  const subPrNumbers = pending
+    .map((c) => extractTrailingPrNumber(c.title))
+    .filter((n): n is number => n !== null);
+  if (subPrNumbers.length === 0) return [];
+  const bodies = await Promise.all(subPrNumbers.map((n) => gh.getPullBody(n)));
+  const refs = bodies.flatMap(extractClosesRefs);
+  // Drop self-references — a sub-PR whose body says "closes #<itself>" is
+  // either a typo or a reference to a future-numbered issue that GitHub
+  // already linked separately. Either way, repeating it on the promotion
+  // PR is noise.
+  const filtered = refs.filter((n) => !subPrNumbers.includes(n));
+  return Array.from(new Set(filtered)).sort((a, b) => a - b);
 }
 
 function isNoCommitsBetweenError(err: unknown): boolean {

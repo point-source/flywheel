@@ -1,3 +1,24 @@
+## [1.0.1-dev.4](https://github.com/point-source/flywheel/compare/v1.0.1-dev.3...v1.0.1-dev.4) (2026-05-06)
+
+
+### Bug Fixes
+
+* **promotion:** aggregate Closes refs into promotion PR body ([#82](https://github.com/point-source/flywheel/issues/82)) ([f445ee6](https://github.com/point-source/flywheel/commit/f445ee651545f4ff8b12516b8c8b24b6f51f74c1)), closes [#NN](https://github.com/point-source/flywheel/issues/NN) [#NN](https://github.com/point-source/flywheel/issues/NN) [#NN](https://github.com/point-source/flywheel/issues/NN) [#N](https://github.com/point-source/flywheel/issues/N) [owner/repo#N](https://github.com/owner/repo/issues/N) [#78](https://github.com/point-source/flywheel/issues/78) [#NN](https://github.com/point-source/flywheel/issues/NN)
+
+## [1.0.1-dev.3](https://github.com/point-source/flywheel/compare/v1.0.1-dev.2...v1.0.1-dev.3) (2026-05-06)
+
+
+### Bug Fixes
+
+* **rulesets:** split bypass scope so App can't auto-delete stream branches ([#83](https://github.com/point-source/flywheel/issues/83)) ([c1d0157](https://github.com/point-source/flywheel/commit/c1d015709d33f8c541c43bdb640ccd9140f4e335)), closes [#74](https://github.com/point-source/flywheel/issues/74) [#81](https://github.com/point-source/flywheel/issues/81) [post-#81](https://github.com/post-/issues/81) [pre-#81](https://github.com/pre-/issues/81) [#81](https://github.com/point-source/flywheel/issues/81)
+
+## [1.0.1-dev.2](https://github.com/point-source/flywheel/compare/v1.0.1-dev.1...v1.0.1-dev.2) (2026-05-06)
+
+
+### Bug Fixes
+
+* **pr-flow:** leave promotion PRs to runPromotion (use MERGE, not SQUASH) ([#79](https://github.com/point-source/flywheel/issues/79)) ([0ad50df](https://github.com/point-source/flywheel/commit/0ad50dff9756f39ebe2f8483a0d7118ae64bc128)), closes [#74](https://github.com/point-source/flywheel/issues/74) [#77](https://github.com/point-source/flywheel/issues/77)
+
 ## [1.0.1](https://github.com/point-source/flywheel/compare/v1.0.0...v1.0.1) (2026-05-06)
 
 

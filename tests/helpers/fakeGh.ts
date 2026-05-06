@@ -20,6 +20,8 @@ export interface FakeGhInit {
   enableAutoMergeResponse?: EnableAutoMergeResult;
   mergePRResponse?: MergeResult;
   prLabels?: Record<number, string[]>;
+  /** PR-number → body text. Missing entries simulate a 404 (returns null). */
+  pullBodies?: Record<number, string | null>;
 }
 
 export interface FakeGh extends GitHubClient {
@@ -47,6 +49,7 @@ export function createFakeGh(init: FakeGhInit = {}): FakeGh {
   const pullCommits = init.pullCommits ?? {};
   const branchCommits = init.branchCommits ?? {};
   const openPRs = init.openPRs ?? {};
+  const pullBodies = init.pullBodies ?? {};
   const enableAutoMergeResponse: EnableAutoMergeResult = init.enableAutoMergeResponse ?? { ok: true };
   const mergePRResponse: MergeResult =
     init.mergePRResponse ?? { ok: true, sha: "merged0000000000000000000000000000000000" };
@@ -111,6 +114,12 @@ export function createFakeGh(init: FakeGhInit = {}): FakeGh {
     async listBranchCommits(branch) {
       log("listBranchCommits", { branch });
       return branchCommits[branch] ?? [];
+    },
+
+    async getPullBody(prNumber) {
+      log("getPullBody", { prNumber });
+      if (prNumber in pullBodies) return pullBodies[prNumber] ?? null;
+      return null;
     },
 
     async listOpenPRs(opts) {

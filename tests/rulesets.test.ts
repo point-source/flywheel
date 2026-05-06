@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   MANAGED_BRANCHES_RULESET_NAME,
+  MANAGED_BRANCHES_REVIEW_RULESET_NAME,
   TAG_NAMESPACE_INCLUDE,
   TAG_NAMESPACE_RULESET_NAME,
   expectedBranchIncludes,
@@ -87,9 +88,35 @@ function makeBranchRuleset(include: string[]): {
       name: MANAGED_BRANCHES_RULESET_NAME,
       target: "branch",
       enforcement: "active",
-      bypass_actors: [{ actor_id: 12345, actor_type: "Integration", bypass_mode: "always" }],
+      // Destruction-protection ruleset: NO bypass, even for the App.
+      bypass_actors: [],
       conditions: { ref_name: { include, exclude: [] } },
       rules: [{ type: "deletion" }, { type: "non_fast_forward" }],
+    },
+  };
+}
+
+function makeReviewRuleset(include: string[]): {
+  summary: RulesetSummary;
+  detail: RulesetDetail;
+} {
+  return {
+    summary: {
+      id: 150,
+      name: MANAGED_BRANCHES_REVIEW_RULESET_NAME,
+      target: "branch",
+    },
+    detail: {
+      id: 150,
+      name: MANAGED_BRANCHES_REVIEW_RULESET_NAME,
+      target: "branch",
+      enforcement: "active",
+      // Review ruleset: App bypass for direct semantic-release pushes.
+      bypass_actors: [
+        { actor_id: 12345, actor_type: "Integration", bypass_mode: "always" },
+      ],
+      conditions: { ref_name: { include, exclude: [] } },
+      rules: [{ type: "pull_request" }],
     },
   };
 }
@@ -125,13 +152,19 @@ describe("expectedBranchIncludes", () => {
 describe("syncRulesets", () => {
   it("updates managed-branches ruleset when include drifted from config", async () => {
     const branch = makeBranchRuleset(["refs/heads/develop", "refs/heads/main"]);
+    const review = makeReviewRuleset([
+      "refs/heads/develop",
+      "refs/heads/main",
+      "refs/heads/customer-acme",
+    ]);
     const tag = makeTagRuleset(TAG_NAMESPACE_INCLUDE);
-    const { api, updates } = createFakeApi({ rulesets: [branch, tag] });
+    const { api, updates } = createFakeApi({ rulesets: [branch, review, tag] });
     const { log } = silentLogger();
 
     const result = await syncRulesets({ api, config: baseConfig, log });
 
     expect(result.branchUpdated).toBe(true);
+    expect(result.reviewUpdated).toBe(false);
     expect(result.tagUpdated).toBe(false);
     expect(updates).toHaveLength(1);
     expect(updates[0]!.id).toBe(100);
@@ -161,13 +194,19 @@ describe("syncRulesets", () => {
       "refs/heads/main",
       "refs/heads/customer-acme",
     ]);
+    const review = makeReviewRuleset([
+      "refs/heads/develop",
+      "refs/heads/main",
+      "refs/heads/customer-acme",
+    ]);
     const tag = makeTagRuleset(TAG_NAMESPACE_INCLUDE);
-    const { api, updates } = createFakeApi({ rulesets: [branch, tag] });
+    const { api, updates } = createFakeApi({ rulesets: [branch, review, tag] });
     const { log } = silentLogger();
 
     const result = await syncRulesets({ api, config: baseConfig, log });
 
     expect(result.branchUpdated).toBe(false);
+    expect(result.reviewUpdated).toBe(false);
     expect(result.tagUpdated).toBe(false);
     expect(updates).toEqual([]);
   });
@@ -187,14 +226,63 @@ describe("syncRulesets", () => {
     expect(updates).toEqual([]);
   });
 
+  it("reconciles the review ruleset's include alongside the destruction one", async () => {
+    // Both branch rulesets cover the same set of refs, so syncRulesets has
+    // to PUT both when the config grows a new branch.
+    const branch = makeBranchRuleset(["refs/heads/develop", "refs/heads/main"]);
+    const review = makeReviewRuleset(["refs/heads/develop", "refs/heads/main"]);
+    const { api, updates } = createFakeApi({ rulesets: [branch, review] });
+    const { log } = silentLogger();
+
+    const result = await syncRulesets({ api, config: baseConfig, log });
+
+    expect(result.branchUpdated).toBe(true);
+    expect(result.reviewUpdated).toBe(true);
+    expect(updates).toHaveLength(2);
+    const reviewUpdate = updates.find((u) => u.id === 150);
+    expect(reviewUpdate).toBeDefined();
+    expect(reviewUpdate!.payload.conditions.ref_name.include).toEqual([
+      "refs/heads/develop",
+      "refs/heads/main",
+      "refs/heads/customer-acme",
+    ]);
+    // Bypass on the review ruleset is preserved on PUT.
+    expect(reviewUpdate!.payload.bypass_actors).toEqual(review.detail.bypass_actors);
+  });
+
+  it("warns when only the legacy combined ruleset exists (review missing) — pre-#81 adopter migration prompt", async () => {
+    // Pre-#81 adopters have a single "Flywheel managed branches" ruleset
+    // that bundles deletion + non_fast_forward + pull_request with the App
+    // on the bypass list. syncRulesets reconciles the include array (so
+    // they keep working) but warns that apply-rulesets.sh needs to re-run
+    // to split the bypass scope.
+    const branch = makeBranchRuleset(["refs/heads/develop", "refs/heads/main"]);
+    const tag = makeTagRuleset(TAG_NAMESPACE_INCLUDE);
+    const { api, updates } = createFakeApi({ rulesets: [branch, tag] });
+    const { log, warnings } = silentLogger();
+
+    const result = await syncRulesets({ api, config: baseConfig, log });
+
+    expect(result.reviewUpdated).toBe(false);
+    expect(warnings.some((w) => w.includes(MANAGED_BRANCHES_REVIEW_RULESET_NAME))).toBe(true);
+    expect(warnings.some((w) => w.includes("#81"))).toBe(true);
+    // Destruction ruleset still gets reconciled — adopter isn't blocked.
+    expect(updates.find((u) => u.id === 100)).toBeDefined();
+  });
+
   it("upgrades tag ruleset to multi-stream include when missing the */v* pattern", async () => {
     const branch = makeBranchRuleset([
       "refs/heads/develop",
       "refs/heads/main",
       "refs/heads/customer-acme",
     ]);
+    const review = makeReviewRuleset([
+      "refs/heads/develop",
+      "refs/heads/main",
+      "refs/heads/customer-acme",
+    ]);
     const tag = makeTagRuleset(["refs/tags/v*"]);
-    const { api, updates } = createFakeApi({ rulesets: [branch, tag] });
+    const { api, updates } = createFakeApi({ rulesets: [branch, review, tag] });
     const { log } = silentLogger();
 
     const result = await syncRulesets({ api, config: baseConfig, log });

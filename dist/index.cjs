@@ -28235,6 +28235,16 @@ function createGitHubClient(token, repoFullName) {
         };
       });
     },
+    async getPullBody(pull_number) {
+      try {
+        const res = await octokit.rest.pulls.get({ owner, repo, pull_number });
+        return res.data.body ?? null;
+      } catch (err) {
+        const status = err?.status;
+        if (status === 404) return null;
+        throw err;
+      }
+    },
     async listOpenPRs({ head, base }) {
       const fullHead = head.includes(":") ? head : `${owner}:${head}`;
       const data = await octokit.paginate(octokit.rest.pulls.list, {
@@ -28338,6 +28348,269 @@ function sanitizeSkipCi(text) {
   return out.replace(/\s{2,}/g, " ").trim();
 }
 
+// src/promotion.ts
+async function runPromotion(deps) {
+  const { branchRef, config, gh, log } = deps;
+  const located = locateBranch(config, branchRef);
+  if (!located) {
+    log.info(`promotion: branch ${branchRef} is not in any stream \u2014 no promotion PR.`);
+    return { kind: "unmanaged" };
+  }
+  const { stream, branchIdx } = located;
+  if (branchIdx === stream.branches.length - 1) {
+    log.info(
+      `promotion: branch ${branchRef} is the terminal branch of stream ${stream.name} \u2014 no promotion PR.`
+    );
+    return { kind: "terminal" };
+  }
+  const source = stream.branches[branchIdx];
+  const target = stream.branches[branchIdx + 1];
+  const [sourceCommits, targetCommits] = await Promise.all([
+    gh.listBranchCommits(source.name),
+    gh.listBranchCommits(target.name)
+  ]);
+  const pending = computePendingCommits({
+    sourceCommits,
+    targetCommits,
+    sourceName: source.name,
+    targetName: target.name
+  });
+  if (pending.length === 0) {
+    log.info(
+      `promotion: ${source.name} \u2192 ${target.name} has no pending commits.`
+    );
+    return { kind: "no-bumping" };
+  }
+  const ranked = pending.map((c) => {
+    const parsed = parseTitle(c.title);
+    const breaking = (parsed?.breaking ?? false) || detectBreakingInBody(c.body);
+    return { type: parsed?.type ?? "other", breaking };
+  });
+  const anyBumping = ranked.some((c) => isBumping(c.type, c.breaking));
+  if (!anyBumping) {
+    log.info(
+      `promotion: ${source.name} \u2192 ${target.name} has only non-bumping pending commits \u2014 skipping upsert.`
+    );
+    return { kind: "no-bumping" };
+  }
+  const top = mostImpactfulType(ranked);
+  if (!top) return { kind: "no-bumping" };
+  const title = formatPromotionTitle(top.type, top.breaking, source.name, target.name);
+  const matchKey = top.breaking ? `${top.type}!` : top.type;
+  const eligible = target.auto_merge.includes(matchKey);
+  const label = eligible ? FLYWHEEL_AUTO_MERGE_LABEL : FLYWHEEL_NEEDS_REVIEW_LABEL;
+  const closesRefs = await aggregateClosesRefs(gh, pending);
+  const body = formatPromotionBody({
+    pending,
+    sourceName: source.name,
+    targetName: target.name,
+    matchKey,
+    eligible,
+    targetBranch: target,
+    closesRefs
+  });
+  const method = "MERGE";
+  const existing = await gh.listOpenPRs({ head: source.name, base: target.name });
+  if (existing.length === 0) {
+    let created;
+    try {
+      created = await gh.createPR({
+        title,
+        body,
+        head: source.name,
+        base: target.name
+      });
+    } catch (err) {
+      if (isNoCommitsBetweenError(err)) {
+        log.info(
+          `promotion: ${source.name} \u2192 ${target.name} already in sync per GitHub (createPR 422) \u2014 skipping.`
+        );
+        return { kind: "in-sync" };
+      }
+      throw err;
+    }
+    await applyLabel(gh, created.number, label);
+    if (eligible) {
+      const result = await gh.enableAutoMerge(created.nodeId, method);
+      if (!result.ok) {
+        log.warning(
+          `promotion PR #${created.number}: could not enable native auto-merge \u2014 ${result.reason}.`
+        );
+      }
+    }
+    log.info(
+      `promotion: created PR #${created.number} (${source.name} \u2192 ${target.name}, ${label}).`
+    );
+    return { kind: "created", prNumber: created.number, label };
+  }
+  const pr = existing[0];
+  const titleChanged = pr.title !== title;
+  const bodyChanged = (pr.body ?? "") !== body;
+  if (titleChanged || bodyChanged) {
+    await gh.updatePR(pr.number, {
+      ...titleChanged ? { title } : {},
+      ...bodyChanged ? { body } : {}
+    });
+  }
+  await applyLabel(gh, pr.number, label);
+  if (eligible) {
+    const result = await gh.enableAutoMerge(pr.nodeId, method);
+    if (!result.ok) {
+      log.warning(
+        `promotion PR #${pr.number}: could not enable native auto-merge \u2014 ${result.reason}.`
+      );
+    }
+  } else {
+    await gh.disableAutoMerge(pr.nodeId);
+  }
+  if (!titleChanged && !bodyChanged) {
+    return { kind: "no-change", prNumber: pr.number };
+  }
+  log.info(
+    `promotion: updated PR #${pr.number} (${source.name} \u2192 ${target.name}, ${label}).`
+  );
+  return { kind: "updated", prNumber: pr.number, label };
+}
+function computePendingCommits(input) {
+  const { sourceCommits, targetCommits, sourceName, targetName } = input;
+  if (sourceCommits.length > 0 && targetCommits.length > 0 && sourceCommits[0].sha === targetCommits[0].sha) {
+    return [];
+  }
+  const lastPromotion = findLastPromotionCommit(targetCommits, sourceName, targetName);
+  if (lastPromotion) {
+    const cutoff = Date.parse(lastPromotion.committerDate);
+    if (Number.isFinite(cutoff)) {
+      return sourceCommits.filter((c) => Date.parse(c.committerDate) > cutoff);
+    }
+  }
+  const targetTitles = new Set(targetCommits.map((c) => normalizeTitle(c.title)));
+  return sourceCommits.filter((c) => !targetTitles.has(normalizeTitle(c.title)));
+}
+function findLastPromotionCommit(targetCommits, sourceName, targetName) {
+  const re = buildPromotionTitleRegex(sourceName, targetName);
+  for (const c of targetCommits) {
+    if (re.test(stripPrSuffix(c.title))) return c;
+  }
+  return null;
+}
+function buildPromotionTitleRegex(source, target) {
+  const escapedSource = escapeRegex(source);
+  const escapedTarget = escapeRegex(target);
+  return new RegExp(
+    `^[a-z]+(\\([^)]+\\))?!?: promote ${escapedSource} \u2192 ${escapedTarget}$`
+  );
+}
+function isPromotionPR(config, headRef, baseRef, title) {
+  for (const stream of config.streams) {
+    for (let i = 0; i < stream.branches.length - 1; i++) {
+      const source = stream.branches[i];
+      const target = stream.branches[i + 1];
+      if (source.name === headRef && target.name === baseRef) {
+        return buildPromotionTitleRegex(source.name, target.name).test(title);
+      }
+    }
+  }
+  return false;
+}
+function normalizeTitle(title) {
+  return stripPrSuffix(title).trim();
+}
+function stripPrSuffix(title) {
+  return title.replace(/\s*\(#\d+\)\s*$/, "");
+}
+function escapeRegex(s) {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+function formatPromotionTitle(type2, breaking, source, target) {
+  return `${type2}${breaking ? "!" : ""}: promote ${source} \u2192 ${target}`;
+}
+function formatPromotionBody(p) {
+  const groups = /* @__PURE__ */ new Map();
+  let unrecognised = 0;
+  for (const c of p.pending) {
+    const parsed = parseTitle(stripPrSuffix(c.title));
+    if (!parsed) {
+      unrecognised++;
+      continue;
+    }
+    const list = groups.get(parsed.type) ?? [];
+    list.push({ desc: sanitizeSkipCi(parsed.description), sha: c.sha.slice(0, 7) });
+    groups.set(parsed.type, list);
+  }
+  const lines = [];
+  lines.push(`## Promote \`${p.sourceName}\` \u2192 \`${p.targetName}\``, "");
+  lines.push(`Pending commits (${p.pending.length} total):`, "");
+  for (const [type2, items] of groups) {
+    lines.push(`### ${type2}`, "");
+    for (const item of items) lines.push(`- ${item.desc} (${item.sha})`);
+    lines.push("");
+  }
+  if (unrecognised > 0) {
+    lines.push(
+      `> Note: ${unrecognised} commit${unrecognised === 1 ? "" : "s"} did not parse as a conventional commit and ${unrecognised === 1 ? "was" : "were"} omitted from the per-type sections above.`,
+      ""
+    );
+  }
+  if (p.closesRefs.length > 0) {
+    lines.push(
+      p.closesRefs.map((n) => `Closes #${n}`).join("\n"),
+      ""
+    );
+  }
+  lines.push("---", "");
+  if (p.eligible) {
+    lines.push(
+      `**Status:** \u2705 \`${FLYWHEEL_AUTO_MERGE_LABEL}\` \u2014 \`${p.matchKey}\` is in auto_merge list for \`${p.targetName}\``
+    );
+  } else {
+    lines.push(
+      `**Status:** \u{1F440} \`${FLYWHEEL_NEEDS_REVIEW_LABEL}\` \u2014 \`${p.matchKey}\` is not in auto_merge list for \`${p.targetName}\``
+    );
+  }
+  return lines.join("\n");
+}
+function extractTrailingPrNumber(title) {
+  const m = title.match(/\(#(\d+)\)\s*$/);
+  return m ? Number.parseInt(m[1], 10) : null;
+}
+var CLOSES_KEYWORD_RE = /\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)[\s:]+#(\d+)\b/gi;
+function extractClosesRefs(body) {
+  if (!body) return [];
+  const out = [];
+  for (const m of body.matchAll(CLOSES_KEYWORD_RE)) {
+    out.push(Number.parseInt(m[1], 10));
+  }
+  return out;
+}
+async function aggregateClosesRefs(gh, pending) {
+  const subPrNumbers = pending.map((c) => extractTrailingPrNumber(c.title)).filter((n) => n !== null);
+  if (subPrNumbers.length === 0) return [];
+  const bodies = await Promise.all(subPrNumbers.map((n) => gh.getPullBody(n)));
+  const refs = bodies.flatMap(extractClosesRefs);
+  const filtered = refs.filter((n) => !subPrNumbers.includes(n));
+  return Array.from(new Set(filtered)).sort((a, b) => a - b);
+}
+function isNoCommitsBetweenError(err) {
+  const e = err;
+  if (!e) return false;
+  if (e.status !== 422) return false;
+  const msg = e.message ?? "";
+  return msg.includes("No commits between");
+}
+async function applyLabel(gh, prNumber, label) {
+  await gh.addLabels(prNumber, [label]);
+  const opposite = label === FLYWHEEL_AUTO_MERGE_LABEL ? FLYWHEEL_NEEDS_REVIEW_LABEL : FLYWHEEL_AUTO_MERGE_LABEL;
+  await gh.removeLabel(prNumber, opposite);
+}
+function locateBranch(config, branchRef) {
+  for (const stream of config.streams) {
+    for (let i = 0; i < stream.branches.length; i++) {
+      if (stream.branches[i].name === branchRef) return { stream, branchIdx: i };
+    }
+  }
+  return null;
+}
+
 // src/pr-flow.ts
 var FLYWHEEL_TITLE_CHECK = "flywheel/conventional-commit";
 async function runPrFlow({ pr, config, gh, log }) {
@@ -28358,6 +28631,16 @@ async function runPrFlow({ pr, config, gh, log }) {
     });
     log.warning(`PR #${pr.number}: invalid conventional commit title \u2014 failing check posted.`);
     return { kind: "parse-failed" };
+  }
+  if (isPromotionPR(config, pr.headRef, pr.baseRef, pr.title)) {
+    await gh.createCheck({
+      name: FLYWHEEL_TITLE_CHECK,
+      conclusion: "success",
+      summary: `Valid conventional commit title.`,
+      headSha: pr.headSha
+    });
+    log.info(`PR #${pr.number}: promotion PR \u2014 owned by runPromotion, skipping pr-flow rewrite.`);
+    return { kind: "promotion-pr" };
   }
   const commits = await gh.listPullCommits(pr.number);
   const skipCiHits = findSkipCiMarkers([
@@ -28672,230 +28955,9 @@ async function defaultWriter(path, contents) {
   await (0, import_promises.writeFile)(path, contents, "utf8");
 }
 
-// src/promotion.ts
-async function runPromotion(deps) {
-  const { branchRef, config, gh, log } = deps;
-  const located = locateBranch(config, branchRef);
-  if (!located) {
-    log.info(`promotion: branch ${branchRef} is not in any stream \u2014 no promotion PR.`);
-    return { kind: "unmanaged" };
-  }
-  const { stream, branchIdx } = located;
-  if (branchIdx === stream.branches.length - 1) {
-    log.info(
-      `promotion: branch ${branchRef} is the terminal branch of stream ${stream.name} \u2014 no promotion PR.`
-    );
-    return { kind: "terminal" };
-  }
-  const source = stream.branches[branchIdx];
-  const target = stream.branches[branchIdx + 1];
-  const [sourceCommits, targetCommits] = await Promise.all([
-    gh.listBranchCommits(source.name),
-    gh.listBranchCommits(target.name)
-  ]);
-  const pending = computePendingCommits({
-    sourceCommits,
-    targetCommits,
-    sourceName: source.name,
-    targetName: target.name
-  });
-  if (pending.length === 0) {
-    log.info(
-      `promotion: ${source.name} \u2192 ${target.name} has no pending commits.`
-    );
-    return { kind: "no-bumping" };
-  }
-  const ranked = pending.map((c) => {
-    const parsed = parseTitle(c.title);
-    const breaking = (parsed?.breaking ?? false) || detectBreakingInBody(c.body);
-    return { type: parsed?.type ?? "other", breaking };
-  });
-  const anyBumping = ranked.some((c) => isBumping(c.type, c.breaking));
-  if (!anyBumping) {
-    log.info(
-      `promotion: ${source.name} \u2192 ${target.name} has only non-bumping pending commits \u2014 skipping upsert.`
-    );
-    return { kind: "no-bumping" };
-  }
-  const top = mostImpactfulType(ranked);
-  if (!top) return { kind: "no-bumping" };
-  const title = formatPromotionTitle(top.type, top.breaking, source.name, target.name);
-  const matchKey = top.breaking ? `${top.type}!` : top.type;
-  const eligible = target.auto_merge.includes(matchKey);
-  const label = eligible ? FLYWHEEL_AUTO_MERGE_LABEL : FLYWHEEL_NEEDS_REVIEW_LABEL;
-  const body = formatPromotionBody({
-    pending,
-    sourceName: source.name,
-    targetName: target.name,
-    matchKey,
-    eligible,
-    targetBranch: target
-  });
-  const method = "MERGE";
-  const existing = await gh.listOpenPRs({ head: source.name, base: target.name });
-  if (existing.length === 0) {
-    let created;
-    try {
-      created = await gh.createPR({
-        title,
-        body,
-        head: source.name,
-        base: target.name
-      });
-    } catch (err) {
-      if (isNoCommitsBetweenError(err)) {
-        log.info(
-          `promotion: ${source.name} \u2192 ${target.name} already in sync per GitHub (createPR 422) \u2014 skipping.`
-        );
-        return { kind: "in-sync" };
-      }
-      throw err;
-    }
-    await applyLabel(gh, created.number, label);
-    if (eligible) {
-      const result = await gh.enableAutoMerge(created.nodeId, method);
-      if (!result.ok) {
-        log.warning(
-          `promotion PR #${created.number}: could not enable native auto-merge \u2014 ${result.reason}.`
-        );
-      }
-    }
-    log.info(
-      `promotion: created PR #${created.number} (${source.name} \u2192 ${target.name}, ${label}).`
-    );
-    return { kind: "created", prNumber: created.number, label };
-  }
-  const pr = existing[0];
-  const titleChanged = pr.title !== title;
-  const bodyChanged = (pr.body ?? "") !== body;
-  if (titleChanged || bodyChanged) {
-    await gh.updatePR(pr.number, {
-      ...titleChanged ? { title } : {},
-      ...bodyChanged ? { body } : {}
-    });
-  }
-  await applyLabel(gh, pr.number, label);
-  if (eligible) {
-    const result = await gh.enableAutoMerge(pr.nodeId, method);
-    if (!result.ok) {
-      log.warning(
-        `promotion PR #${pr.number}: could not enable native auto-merge \u2014 ${result.reason}.`
-      );
-    }
-  } else {
-    await gh.disableAutoMerge(pr.nodeId);
-  }
-  if (!titleChanged && !bodyChanged) {
-    return { kind: "no-change", prNumber: pr.number };
-  }
-  log.info(
-    `promotion: updated PR #${pr.number} (${source.name} \u2192 ${target.name}, ${label}).`
-  );
-  return { kind: "updated", prNumber: pr.number, label };
-}
-function computePendingCommits(input) {
-  const { sourceCommits, targetCommits, sourceName, targetName } = input;
-  if (sourceCommits.length > 0 && targetCommits.length > 0 && sourceCommits[0].sha === targetCommits[0].sha) {
-    return [];
-  }
-  const lastPromotion = findLastPromotionCommit(targetCommits, sourceName, targetName);
-  if (lastPromotion) {
-    const cutoff = Date.parse(lastPromotion.committerDate);
-    if (Number.isFinite(cutoff)) {
-      return sourceCommits.filter((c) => Date.parse(c.committerDate) > cutoff);
-    }
-  }
-  const targetTitles = new Set(targetCommits.map((c) => normalizeTitle(c.title)));
-  return sourceCommits.filter((c) => !targetTitles.has(normalizeTitle(c.title)));
-}
-function findLastPromotionCommit(targetCommits, sourceName, targetName) {
-  const re = buildPromotionTitleRegex(sourceName, targetName);
-  for (const c of targetCommits) {
-    if (re.test(stripPrSuffix(c.title))) return c;
-  }
-  return null;
-}
-function buildPromotionTitleRegex(source, target) {
-  const escapedSource = escapeRegex(source);
-  const escapedTarget = escapeRegex(target);
-  return new RegExp(
-    `^[a-z]+(\\([^)]+\\))?!?: promote ${escapedSource} \u2192 ${escapedTarget}$`
-  );
-}
-function normalizeTitle(title) {
-  return stripPrSuffix(title).trim();
-}
-function stripPrSuffix(title) {
-  return title.replace(/\s*\(#\d+\)\s*$/, "");
-}
-function escapeRegex(s) {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-function formatPromotionTitle(type2, breaking, source, target) {
-  return `${type2}${breaking ? "!" : ""}: promote ${source} \u2192 ${target}`;
-}
-function formatPromotionBody(p) {
-  const groups = /* @__PURE__ */ new Map();
-  let unrecognised = 0;
-  for (const c of p.pending) {
-    const parsed = parseTitle(stripPrSuffix(c.title));
-    if (!parsed) {
-      unrecognised++;
-      continue;
-    }
-    const list = groups.get(parsed.type) ?? [];
-    list.push({ desc: sanitizeSkipCi(parsed.description), sha: c.sha.slice(0, 7) });
-    groups.set(parsed.type, list);
-  }
-  const lines = [];
-  lines.push(`## Promote \`${p.sourceName}\` \u2192 \`${p.targetName}\``, "");
-  lines.push(`Pending commits (${p.pending.length} total):`, "");
-  for (const [type2, items] of groups) {
-    lines.push(`### ${type2}`, "");
-    for (const item of items) lines.push(`- ${item.desc} (${item.sha})`);
-    lines.push("");
-  }
-  if (unrecognised > 0) {
-    lines.push(
-      `> Note: ${unrecognised} commit${unrecognised === 1 ? "" : "s"} did not parse as a conventional commit and ${unrecognised === 1 ? "was" : "were"} omitted from the per-type sections above.`,
-      ""
-    );
-  }
-  lines.push("---", "");
-  if (p.eligible) {
-    lines.push(
-      `**Status:** \u2705 \`${FLYWHEEL_AUTO_MERGE_LABEL}\` \u2014 \`${p.matchKey}\` is in auto_merge list for \`${p.targetName}\``
-    );
-  } else {
-    lines.push(
-      `**Status:** \u{1F440} \`${FLYWHEEL_NEEDS_REVIEW_LABEL}\` \u2014 \`${p.matchKey}\` is not in auto_merge list for \`${p.targetName}\``
-    );
-  }
-  return lines.join("\n");
-}
-function isNoCommitsBetweenError(err) {
-  const e = err;
-  if (!e) return false;
-  if (e.status !== 422) return false;
-  const msg = e.message ?? "";
-  return msg.includes("No commits between");
-}
-async function applyLabel(gh, prNumber, label) {
-  await gh.addLabels(prNumber, [label]);
-  const opposite = label === FLYWHEEL_AUTO_MERGE_LABEL ? FLYWHEEL_NEEDS_REVIEW_LABEL : FLYWHEEL_AUTO_MERGE_LABEL;
-  await gh.removeLabel(prNumber, opposite);
-}
-function locateBranch(config, branchRef) {
-  for (const stream of config.streams) {
-    for (let i = 0; i < stream.branches.length; i++) {
-      if (stream.branches[i].name === branchRef) return { stream, branchIdx: i };
-    }
-  }
-  return null;
-}
-
 // src/rulesets.ts
 var MANAGED_BRANCHES_RULESET_NAME = "Flywheel managed branches";
+var MANAGED_BRANCHES_REVIEW_RULESET_NAME = "Flywheel managed branches \u2014 review";
 var TAG_NAMESPACE_RULESET_NAME = "Flywheel tag namespace (v*)";
 var TAG_NAMESPACE_INCLUDE = ["refs/tags/v*", "refs/tags/*/v*"];
 async function syncRulesets(deps) {
@@ -28909,17 +28971,26 @@ async function syncRulesets(deps) {
       log.warning(
         "ruleset sync skipped: App lacks repository administration scope (needed to read/update branch & tag rulesets). Re-run scripts/apply-rulesets.sh manually."
       );
-      return { branchUpdated: false, tagUpdated: false, skipped: "forbidden" };
+      return {
+        branchUpdated: false,
+        reviewUpdated: false,
+        tagUpdated: false,
+        skipped: "forbidden"
+      };
     }
     throw err;
   }
   const branchSummary = rulesets.find(
     (r) => r.name === MANAGED_BRANCHES_RULESET_NAME
   );
+  const reviewSummary = rulesets.find(
+    (r) => r.name === MANAGED_BRANCHES_REVIEW_RULESET_NAME
+  );
   const tagSummary = rulesets.find(
     (r) => r.name === TAG_NAMESPACE_RULESET_NAME
   );
   let branchUpdated = false;
+  let reviewUpdated = false;
   let tagUpdated = false;
   if (branchSummary) {
     branchUpdated = await reconcileInclude(
@@ -28932,6 +29003,19 @@ async function syncRulesets(deps) {
   } else {
     log.warning(
       `ruleset '${MANAGED_BRANCHES_RULESET_NAME}' not found \u2014 bootstrap with scripts/apply-rulesets.sh.`
+    );
+  }
+  if (reviewSummary) {
+    reviewUpdated = await reconcileInclude(
+      api,
+      reviewSummary.id,
+      expectedBranches,
+      log,
+      "managed-branches-review"
+    );
+  } else {
+    log.warning(
+      `ruleset '${MANAGED_BRANCHES_REVIEW_RULESET_NAME}' not found \u2014 re-run scripts/apply-rulesets.sh to split ruleset bypass (see #81).`
     );
   }
   if (tagSummary) {
@@ -28947,7 +29031,7 @@ async function syncRulesets(deps) {
       `ruleset '${TAG_NAMESPACE_RULESET_NAME}' not found \u2014 bootstrap with scripts/apply-rulesets.sh.`
     );
   }
-  return { branchUpdated, tagUpdated };
+  return { branchUpdated, reviewUpdated, tagUpdated };
 }
 function expectedBranchIncludes(config) {
   return config.streams.flatMap(

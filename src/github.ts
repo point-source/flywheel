@@ -71,6 +71,13 @@ export interface GitHubClient {
   listPullCommits(prNumber: number): Promise<Commit[]>;
   listBranchCommits(branch: string): Promise<Commit[]>;
 
+  /**
+   * Returns the PR's body text, or null if the PR doesn't exist (404).
+   * Used by runPromotion to aggregate `Closes #N` references from each
+   * sub-PR's description into the promotion PR body — see #77.
+   */
+  getPullBody(prNumber: number): Promise<string | null>;
+
   listOpenPRs(opts: { head: string; base: string }): Promise<PRSummary[]>;
   createPR(opts: { title: string; body: string; head: string; base: string }): Promise<PRSummary>;
 
@@ -213,6 +220,21 @@ export function createGitHubClient(token: string, repoFullName?: string): GitHub
           committerDate: c.commit.committer?.date ?? c.commit.author?.date ?? new Date(0).toISOString(),
         };
       });
+    },
+
+    async getPullBody(pull_number) {
+      try {
+        const res = await octokit.rest.pulls.get({ owner, repo, pull_number });
+        return res.data.body ?? null;
+      } catch (err: unknown) {
+        // 404 — PR was hard-deleted or the squash commit's trailing (#NN)
+        // pointed at something that isn't a PR (a commit that landed via
+        // some non-PR mechanism). Treat as "no body to aggregate" rather
+        // than aborting the whole promotion.
+        const status = (err as { status?: number } | undefined)?.status;
+        if (status === 404) return null;
+        throw err;
+      }
     },
 
     async listOpenPRs({ head, base }) {
