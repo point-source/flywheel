@@ -28235,6 +28235,16 @@ function createGitHubClient(token, repoFullName) {
         };
       });
     },
+    async getPullBody(pull_number) {
+      try {
+        const res = await octokit.rest.pulls.get({ owner, repo, pull_number });
+        return res.data.body ?? null;
+      } catch (err) {
+        const status = err?.status;
+        if (status === 404) return null;
+        throw err;
+      }
+    },
     async listOpenPRs({ head, base }) {
       const fullHead = head.includes(":") ? head : `${owner}:${head}`;
       const data = await octokit.paginate(octokit.rest.pulls.list, {
@@ -28389,13 +28399,15 @@ async function runPromotion(deps) {
   const matchKey = top.breaking ? `${top.type}!` : top.type;
   const eligible = target.auto_merge.includes(matchKey);
   const label = eligible ? FLYWHEEL_AUTO_MERGE_LABEL : FLYWHEEL_NEEDS_REVIEW_LABEL;
+  const closesRefs = await aggregateClosesRefs(gh, pending);
   const body = formatPromotionBody({
     pending,
     sourceName: source.name,
     targetName: target.name,
     matchKey,
     eligible,
-    targetBranch: target
+    targetBranch: target,
+    closesRefs
   });
   const method = "MERGE";
   const existing = await gh.listOpenPRs({ head: source.name, base: target.name });
@@ -28539,6 +28551,12 @@ function formatPromotionBody(p) {
       ""
     );
   }
+  if (p.closesRefs.length > 0) {
+    lines.push(
+      p.closesRefs.map((n) => `Closes #${n}`).join("\n"),
+      ""
+    );
+  }
   lines.push("---", "");
   if (p.eligible) {
     lines.push(
@@ -28550,6 +28568,27 @@ function formatPromotionBody(p) {
     );
   }
   return lines.join("\n");
+}
+function extractTrailingPrNumber(title) {
+  const m = title.match(/\(#(\d+)\)\s*$/);
+  return m ? Number.parseInt(m[1], 10) : null;
+}
+var CLOSES_KEYWORD_RE = /\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)[\s:]+#(\d+)\b/gi;
+function extractClosesRefs(body) {
+  if (!body) return [];
+  const out = [];
+  for (const m of body.matchAll(CLOSES_KEYWORD_RE)) {
+    out.push(Number.parseInt(m[1], 10));
+  }
+  return out;
+}
+async function aggregateClosesRefs(gh, pending) {
+  const subPrNumbers = pending.map((c) => extractTrailingPrNumber(c.title)).filter((n) => n !== null);
+  if (subPrNumbers.length === 0) return [];
+  const bodies = await Promise.all(subPrNumbers.map((n) => gh.getPullBody(n)));
+  const refs = bodies.flatMap(extractClosesRefs);
+  const filtered = refs.filter((n) => !subPrNumbers.includes(n));
+  return Array.from(new Set(filtered)).sort((a, b) => a - b);
 }
 function isNoCommitsBetweenError(err) {
   const e = err;
