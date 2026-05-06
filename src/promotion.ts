@@ -106,7 +106,7 @@ export async function runPromotion(deps: PromotionDeps): Promise<PromotionOutcom
     closesRefs,
   });
   // Promotion PRs always use a true merge commit. Squash on this edge severs
-  // ancestry between source and target — see docs/squash-merge-issues.md.
+  // ancestry between source and target — see docs/decisions/0001-hybrid-merge-strategy.md.
   const method: MergeMethod = "MERGE";
 
   const existing = await gh.listOpenPRs({ head: source.name, base: target.name });
@@ -186,12 +186,12 @@ interface PendingDetectionInput {
 }
 
 export function computePendingCommits(input: PendingDetectionInput): Commit[] {
-  const { sourceCommits, targetCommits, sourceName, targetName } = input;
+  const { sourceCommits, targetCommits } = input;
 
   // Fast-path: source and target tips equal → nothing to promote. Aligns
   // pending detection with GitHub's compare view after a back-merge
-  // fast-forwards source to target's tip. Without this, strategy A/B can
-  // disagree with GitHub and the createPR call below fails 422 — see #71.
+  // fast-forwards source to target's tip; without it the createPR call
+  // below would 422 on "No commits between" — see #71.
   if (
     sourceCommits.length > 0 &&
     targetCommits.length > 0 &&
@@ -200,33 +200,19 @@ export function computePendingCommits(input: PendingDetectionInput): Commit[] {
     return [];
   }
 
-  // Strategy A: if target has a prior `promote source → target` squash commit,
-  // use its committer.date as the cutoff. This handles the squash-merge case
-  // where underlying feature commits don't propagate to target.
-  const lastPromotion = findLastPromotionCommit(targetCommits, sourceName, targetName);
-  if (lastPromotion) {
-    const cutoff = Date.parse(lastPromotion.committerDate);
-    if (Number.isFinite(cutoff)) {
-      return sourceCommits.filter((c) => Date.parse(c.committerDate) > cutoff);
-    }
-  }
-
-  // Strategy B (initial seed): title set-difference.
-  // Normalize both sides — strip "(#NN)" suffix added by GitHub on squash merges.
+  // Approximate `git log target..source` from the two reachable-history
+  // listings: a source commit is pending iff it isn't already on target.
+  // Under hybrid mode promotion PRs land as true merge commits, so source
+  // commits become reachable from target and SHA equality is authoritative.
+  // Title equality is a fallback for cross-stream cherry-picks (different
+  // SHA, identical message) and the initial-seed case where the streams
+  // haven't been promoted yet so no SHAs overlap. Strip the `(#NN)` suffix
+  // GitHub appends on squash merges before comparing.
+  const targetShas = new Set(targetCommits.map((c) => c.sha));
   const targetTitles = new Set(targetCommits.map((c) => normalizeTitle(c.title)));
-  return sourceCommits.filter((c) => !targetTitles.has(normalizeTitle(c.title)));
-}
-
-function findLastPromotionCommit(
-  targetCommits: Commit[],
-  sourceName: string,
-  targetName: string,
-): Commit | null {
-  const re = buildPromotionTitleRegex(sourceName, targetName);
-  for (const c of targetCommits) {
-    if (re.test(stripPrSuffix(c.title))) return c;
-  }
-  return null;
+  return sourceCommits.filter(
+    (c) => !targetShas.has(c.sha) && !targetTitles.has(normalizeTitle(c.title)),
+  );
 }
 
 function buildPromotionTitleRegex(source: string, target: string): RegExp {

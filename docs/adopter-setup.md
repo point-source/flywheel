@@ -70,7 +70,7 @@ Two checks specific to repos that already have branch protection:
 - **Required signed commits / signed tags.** The App identity Flywheel uses doesn't sign. If "Require signed commits" is enabled on a managed branch, `semantic-release`'s release commit and tag are rejected. Either disable the rule on managed branches, or add the Flywheel App as a bypass actor for that specific rule.
 - **Existing protection rules without the App as bypass actor.** The App must be a bypass actor (`bypass_mode: always`) on the PR-required, no-force-push, and no-deletion rules — same as greenfield, except brownfield repos already have those rules and the App isn't on the list yet. Two options: (a) re-run `scripts/apply-rulesets.sh` with `--app-id <your-app-id>`, which replaces the ruleset with a Flywheel-shaped one (see §5); or (b) edit the existing ruleset in place via the GitHub UI and add the App under "Bypass list".
 
-Without this, expect `EGITNOPERMISSION` ("changes must be made through a pull request") on both `semantic-release`'s release push and the back-merge push — see §8 troubleshooting.
+Without this, expect `EGITNOPERMISSION` ("changes must be made through a pull request") on both `semantic-release`'s release push and the back-merge push — see §9 troubleshooting.
 
 ### 0.4 Audit recent commit history
 
@@ -403,7 +403,7 @@ If your test suite specifically validates a release artifact (e.g. you build and
 
 ### Auto-delete merged branches
 
-Independent of rulesets but worth setting at the same time: enable Settings → General → Pull Requests → "Automatically delete head branches" (the underlying repo property is `delete_branch_on_merge`). With it on, the source branch disappears the moment the PR merges — enforcing a one-PR-per-branch workflow and eliminating the "I'll just push more commits to my old branch" trap. Reusing a merged branch causes phantom rebase conflicts because the squashed commit on the target has a different patch-id than the original commits, even though the content is identical. `init.sh` flips this for you. Manually:
+Coupled with rulesets: enable Settings → General → Pull Requests → "Automatically delete head branches" (the underlying repo property is `delete_branch_on_merge`). With it on, the source branch disappears the moment the PR merges — enforcing a one-PR-per-branch workflow and eliminating the "I'll just push more commits to my old branch" trap. Reusing a merged branch causes phantom rebase conflicts because the squashed commit on the target has a different patch-id than the original commits, even though the content is identical. `apply-rulesets.sh` flips this for you immediately after applying the deletion-blocking ruleset, so the two can't end up on in the wrong order (#94). Manually:
 
 ```bash
 gh api -X PATCH repos/<owner>/<repo> -f delete_branch_on_merge=true
@@ -529,7 +529,77 @@ Merge the PR. On the resulting push, confirm:
 - A GitHub Release is published.
 - Your `build.yml` fires.
 
-## 8. Troubleshooting
+## 8. Upgrading Flywheel
+
+Flywheel ships in two pieces, and they upgrade differently:
+
+1. **The action bundle** — `dist/index.cjs` plus the rest of `point-source/flywheel`'s code. Your workflows pin this with `uses: point-source/flywheel@v<major>` (e.g. `@v2`). Bug fixes and non-breaking features ride the floating major tag — they're picked up on the next workflow run with no action from you.
+2. **The two adopter workflow YAMLs** — `flywheel-pr.yml` and `flywheel-push.yml` live in *your* `.github/workflows/`. They're not behind any tag. When the templates in this repo change (e.g. a new step added, an existing step's shell tightened), you need to opt in by re-running `init.sh --force`.
+
+### 8.1 The fast path (most upgrades)
+
+Within a major, do nothing. The action's behavior follows `@v<major>`. Read the [CHANGELOG](https://github.com/point-source/flywheel/blob/main/CHANGELOG.md) to know what shipped.
+
+### 8.2 Refreshing the workflow YAML
+
+A handful of fixes ship in the workflow templates rather than the action bundle, because the relevant logic runs as inline shell in your repo's YAML — the back-merge loop, the release-body `@`-mention sanitizer, and any new permissions the action requires. Examples from recent history: PR #68 (back-merge auth header), PR #73 (sanitizer), PR #74 (post-release back-merge after promotion). These do **not** propagate via `@v<major>`.
+
+When to refresh:
+
+- A CHANGELOG entry mentions changes under `templates/flywheel-*.yml` or describes a workflow-level fix.
+- `doctor.sh` reports a step or env var your YAML doesn't have.
+- You're starting a release cycle and want a clean baseline.
+
+How to refresh:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/point-source/flywheel/main/scripts/init.sh -o /tmp/flywheel-init.sh
+bash /tmp/flywheel-init.sh --force
+```
+
+`init.sh --force` overwrites `.github/workflows/flywheel-pr.yml` and `flywheel-push.yml` from the latest templates and re-pins them to the latest released major. It leaves your `.flywheel.yml`, App credentials, and rulesets untouched. Review the diff before you commit, in case you've intentionally customized the workflow YAML.
+
+### 8.3 Detecting drift
+
+`doctor.sh` validates that both workflow files exist and reference `point-source/flywheel@<version>`, but it does not currently compare your pinned version against the latest release or your workflow YAML against the current templates. Manual checks:
+
+```bash
+# What's the latest released major?
+gh api repos/point-source/flywheel/releases/latest --jq '.tag_name | split(".")[0]'
+
+# What's your repo pinned to?
+grep -h 'point-source/flywheel@' .github/workflows/flywheel-{pr,push}.yml
+```
+
+If the two diverge, plan an `init.sh --force` (or a major-version migration if the major number jumped — see below).
+
+### 8.4 Major-version migration
+
+A new major (e.g. `v2 → v3`) means breaking changes. Pre-flight:
+
+1. Read the major's release notes on the [GH releases page](https://github.com/point-source/flywheel/releases) for `BREAKING CHANGES` entries.
+2. Skim `docs/decisions/` for any ADRs flagged in those notes — major bumps usually correspond to an architectural decision documented there.
+3. Check whether any field you set in `.flywheel.yml` was removed or repurposed (e.g. `merge_strategy` was removed in `v1.0.0` per ADR 0001).
+
+Then upgrade:
+
+```bash
+bash /tmp/flywheel-init.sh --version v3 --force   # use the new major
+```
+
+Validate:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/point-source/flywheel/main/scripts/doctor.sh | bash
+```
+
+Open a small `chore: post-upgrade smoke` PR and confirm the same things you confirmed during initial setup (§7). If anything fails, file an issue and roll back (§8.5) while you investigate.
+
+### 8.5 Rolling back
+
+Floating major tags don't pin you to a known-good build. If a recent `@v<major>` release misbehaves, edit your workflow YAMLs to pin a specific tag (e.g. `point-source/flywheel@v2.0.1`) until you can investigate. This is also a reasonable default for repos with strict change-control requirements — you trade auto-upgrade for fully reproducible runs.
+
+## 9. Troubleshooting
 
 **PR title wasn't rewritten.** Open the `Flywheel — PR` workflow run and look at the `conduct` job log. Common causes: the PR is still a draft (`flywheel-pr.yml` skips drafts), the target branch isn't listed in any stream in `.flywheel.yml`, or the title isn't a recognized Conventional Commit type.
 

@@ -50,13 +50,14 @@ const config: FlywheelConfig = {
 const date = (iso: string) => iso;
 
 describe("computePendingCommits — the highest-stakes logic", () => {
-  it("squash-merged already-promoted commits do NOT reappear as pending", () => {
-    // Scenario:
-    //  - develop has feature commits A (2026-01-01), B (2026-01-02), C (2026-01-03)
-    //  - promotion PR squashed onto staging on 2026-01-04 → staging gets ONE commit P with title
-    //    "feat: promote develop → staging" (the underlying feature commits do NOT propagate).
-    //  - On 2026-01-05, commit D lands on develop.
-    //  - We expect the next pending detection to return ONLY D, not A/B/C/D.
+  it("already-promoted commits reachable from target via the merge are not re-promoted", () => {
+    // Hybrid-mode scenario: promotion PRs land as true merge commits, so
+    // source commits become reachable from target. listBranchCommits walks
+    // ancestry, so target's listing includes the merge commit M *and* the
+    // underlying source commits A/B/C with their original SHAs.
+    //  - develop has A, B, C, D (D landed after the last promotion).
+    //  - staging has merge commit M plus A/B/C reachable through it, plus Z.
+    //  - Expect pending = [D] via SHA set-difference.
     const sourceCommits = [
       makeCommit("d000000", "feat: D — added widget", date("2026-01-05T10:00:00Z")),
       makeCommit("c000000", "fix: C — fixed bug", date("2026-01-03T10:00:00Z")),
@@ -64,7 +65,10 @@ describe("computePendingCommits — the highest-stakes logic", () => {
       makeCommit("a000000", "fix: A — small fix", date("2026-01-01T10:00:00Z")),
     ];
     const targetCommits = [
-      makeCommit("p000000", "feat: promote develop → staging (#41)", date("2026-01-04T12:00:00Z")),
+      makeCommit("m000000", "Merge pull request #41 from org/develop", date("2026-01-04T12:00:00Z")),
+      makeCommit("c000000", "fix: C — fixed bug", date("2026-01-03T10:00:00Z")),
+      makeCommit("b000000", "feat: B — new endpoint", date("2026-01-02T10:00:00Z")),
+      makeCommit("a000000", "fix: A — small fix", date("2026-01-01T10:00:00Z")),
       makeCommit("z000000", "feat: previous staging commit", date("2025-12-30T10:00:00Z")),
     ];
 
@@ -79,9 +83,9 @@ describe("computePendingCommits — the highest-stakes logic", () => {
   });
 
   it("already-promoted commits with identical titles on target are not re-promoted", () => {
-    // Title-equality dedup: covers cherry-picks across streams, identical
-    // chore/lint titles produced independently on each side, and (under
-    // hybrid mode) source commits made reachable on target via a merge.
+    // Title-equality fallback: covers cross-stream cherry-picks (different
+    // SHA, identical message) and the initial-seed case where streams
+    // haven't been promoted yet so SHA equality has no overlap to exploit.
     const sourceCommits = [
       makeCommit("a", "fix: shared title", date("2026-01-01T10:00:00Z")),
       makeCommit("b", "feat: only on source", date("2026-01-02T10:00:00Z")),
@@ -102,8 +106,8 @@ describe("computePendingCommits — the highest-stakes logic", () => {
 
   it("equal source/target tips → no pending (fast-path for post-back-merge state)", () => {
     // After a release back-merge, develop fast-forwards to main's tip. Both
-    // branches list the same commit at index 0. Strategy A/B can disagree
-    // here; the fast-path returns [] before either runs. See #71.
+    // branches list the same commit at index 0. The fast-path returns []
+    // here so we don't try to createPR and 422 on "No commits between". See #71.
     const sharedTip = makeCommit("aaaabbb", "chore(release): 1.0.0", date("2026-01-04T10:00:00Z"));
     const sourceCommits = [
       sharedTip,

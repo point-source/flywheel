@@ -135,6 +135,17 @@ destruction_payload="$(jq \
 
 apply_ruleset "$destruction_payload"
 
+# Enable delete_branch_on_merge now that the destruction ruleset is in place.
+# Order matters: with auto-delete on but no deletion rule, a user-clicked merge
+# of a promotion PR triggers GitHub's auto-delete under the user's identity and
+# wipes the source stream branch (#94). Coupling the two here makes it
+# impossible to flip the bit without the protecting ruleset.
+if gh api -X PATCH "repos/$REPO" -f delete_branch_on_merge=true >/dev/null 2>&1; then
+  echo "Enabled delete_branch_on_merge on $REPO (head branches auto-delete on PR merge; stream branches protected by the ruleset above)."
+else
+  echo "warning: could not enable delete_branch_on_merge on $REPO — set manually in Settings → General → Pull Requests, or check your gh permissions." >&2
+fi
+
 echo "Applying review ruleset to $branch_count branch(es) in $REPO..."
 
 review_payload="$(jq \
