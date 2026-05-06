@@ -18,11 +18,27 @@ const CONFIG_FILE = ".flywheel.yml";
 async function run(): Promise<void> {
   const event = core.getInput("event", { required: true });
   const appId = core.getInput("app-id", { required: true });
-  const privateKey = core.getInput("app-private-key", { required: true });
+  const privateKey = core.getInput("app-private-key");
 
   const ctx = github.context;
   const owner = ctx.repo.owner;
   const repo = ctx.repo.repo;
+
+  // Fork-PR shortcut: GitHub doesn't pass repo secrets to PR workflows from
+  // forks, so app-private-key arrives empty. Without a key we can't mint an
+  // installation token, and the workflow's default GITHUB_TOKEN is read-only
+  // on fork PRs anyway — there's nothing useful for the conductor to do.
+  // Exit cleanly with a notice so the workflow ends green. See roadmap.md.
+  if (!privateKey || privateKey.trim() === "") {
+    core.notice(
+      "Flywheel: app-private-key is empty. This is expected for fork PRs " +
+        "(GitHub does not pass secrets to fork PR workflows). Skipping the " +
+        "conductor — title rewrite, auto-merge labels, and promotion PR upserts " +
+        "will not run on this PR. The PR can still be merged manually.",
+    );
+    core.setOutput("managed_branch", "false");
+    return;
+  }
 
   let auth;
   try {

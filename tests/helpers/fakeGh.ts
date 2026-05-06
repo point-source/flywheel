@@ -108,8 +108,8 @@ export function createFakeGh(init: FakeGhInit = {}): FakeGh {
       return pullCommits[prNumber] ?? [];
     },
 
-    async listBranchCommits(branch, perPage) {
-      log("listBranchCommits", { branch, perPage });
+    async listBranchCommits(branch) {
+      log("listBranchCommits", { branch });
       return branchCommits[branch] ?? [];
     },
 
