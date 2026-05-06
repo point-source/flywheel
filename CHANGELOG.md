@@ -1,3 +1,10 @@
+## [1.0.3](https://github.com/point-source/flywheel/compare/v1.0.2...v1.0.3) (2026-05-06)
+
+
+### Bug Fixes
+
+* **scripts:** couple delete_branch_on_merge with deletion-blocking ruleset ([#96](https://github.com/point-source/flywheel/issues/96)) ([f133d81](https://github.com/point-source/flywheel/commit/f133d81ec74b5c649f300efd481dfd1321b3d8cc))
+
 ## [1.0.3-dev.1](https://github.com/point-source/flywheel/compare/v1.0.2...v1.0.3-dev.1) (2026-05-06)
 
 
