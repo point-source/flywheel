@@ -58,21 +58,36 @@ const DEFAULT_PLUGINS: unknown[] = [
 export function generateReleaseRc(
   targetStream: Stream,
   config: FlywheelConfig,
+  buildNumber?: number,
 ): ReleaseRc {
   const tagFormat = chooseTagFormat(targetStream, config.streams);
   const releasingBranches = targetStream.branches.filter((b) => b.release !== "none");
   const branches = releasingBranches
     .map((b) => mapBranch(b, releasingBranches.length === 1))
     .filter((b): b is SemanticReleaseBranch => b !== null);
-  const plugins = buildPlugins(config.release_files);
+  const plugins = buildPlugins(config.release_files, buildNumber);
   return { tagFormat, branches, plugins };
 }
 
-function buildPlugins(releaseFiles: ReleaseFile[] | undefined): unknown[] {
+// True if any release_files entry references the ${build} placeholder.
+// Callers use this to decide whether they need to supply a buildNumber
+// (computing one is a git shell-out, so we skip it when unused).
+export function usesBuildPlaceholder(releaseFiles: ReleaseFile[]): boolean {
+  return releaseFiles.some((entry) =>
+    "cmd" in entry
+      ? entry.cmd.includes("${build}")
+      : entry.replacement.includes("${build}"),
+  );
+}
+
+function buildPlugins(
+  releaseFiles: ReleaseFile[] | undefined,
+  buildNumber: number | undefined,
+): unknown[] {
   if (!releaseFiles || releaseFiles.length === 0) {
     return [...DEFAULT_PLUGINS];
   }
-  const prepareCmd = buildPrepareCmd(releaseFiles);
+  const prepareCmd = buildPrepareCmd(releaseFiles, buildNumber);
   const extraAssets = releaseFiles.map((f) => f.path);
   return DEFAULT_PLUGINS.map((entry) => {
     if (entry === EXEC_PLUGIN) {
@@ -90,37 +105,45 @@ function buildPlugins(releaseFiles: ReleaseFile[] | undefined): unknown[] {
   });
 }
 
-// Build a single shell command that bumps every release_files entry.
-// Single BUILD= prefix shared across entries; && chains so any failure aborts.
-// semantic-release's @semantic-release/exec templates the string with Lodash
-// at runtime — that's what expands ${nextRelease.version} and ${nextRelease.channel || ''}.
-// $BUILD is a bash variable assigned inline; semantic-release passes it through
-// untouched because it doesn't match Lodash's interpolate syntax.
-function buildPrepareCmd(releaseFiles: ReleaseFile[]): string {
-  // Count both unscoped (`v*`) and stream-scoped (`<stream>/v*`) tags so
-  // multi-stream repos produce a monotonic build number across all streams.
-  // The 'v*' glob alone misses customer-acme/v1.2.3 and similar.
-  const buildPrefix = "BUILD=$(( $(git tag --list 'v*' '*/v*' | wc -l) + 1 ))";
-  const parts = releaseFiles.map(renderEntry);
-  return [buildPrefix, ...parts].join(" && ");
+// Build a single shell command that bumps every release_files entry,
+// &&-chained so any failure aborts. semantic-release's @semantic-release/exec
+// templates the string with Lodash at runtime — that's what expands
+// ${nextRelease.version} and ${nextRelease.channel || ''}. ${build} is
+// resolved here in JS to a literal integer, not at shell runtime: Lodash's
+// hardcoded ES-template pass would ReferenceError on any ${BUILD}-style
+// placeholder regardless of templateSettings (see issue #95).
+function buildPrepareCmd(
+  releaseFiles: ReleaseFile[],
+  buildNumber: number | undefined,
+): string {
+  return releaseFiles.map((e) => renderEntry(e, buildNumber)).join(" && ");
 }
 
-function renderEntry(entry: ReleaseFile): string {
+function renderEntry(entry: ReleaseFile, buildNumber: number | undefined): string {
   if ("cmd" in entry) {
-    return substitutePlaceholders(entry.cmd);
+    return substitutePlaceholders(entry.cmd, buildNumber);
   }
-  const replacement = substitutePlaceholders(entry.replacement);
+  const replacement = substitutePlaceholders(entry.replacement, buildNumber);
   return (
     `sed -i.bak -E "s|${entry.pattern}|${replacement}|" ${entry.path}` +
     ` && rm ${entry.path}.bak`
   );
 }
 
-function substitutePlaceholders(input: string): string {
-  return input
+function substitutePlaceholders(
+  input: string,
+  buildNumber: number | undefined,
+): string {
+  const withVersionAndChannel = input
     .replace(/\$\{version\}/g, "${nextRelease.version}")
-    .replace(/\$\{channel\}/g, "${nextRelease.channel || ''}")
-    .replace(/\$\{build\}/g, "${BUILD}");
+    .replace(/\$\{channel\}/g, "${nextRelease.channel || ''}");
+  if (!withVersionAndChannel.includes("${build}")) return withVersionAndChannel;
+  if (buildNumber === undefined) {
+    throw new Error(
+      "release_files uses ${build} placeholder but no buildNumber was provided to generateReleaseRc",
+    );
+  }
+  return withVersionAndChannel.replace(/\$\{build\}/g, String(buildNumber));
 }
 
 export function chooseTagFormat(target: Stream, allStreams: Stream[]): string {

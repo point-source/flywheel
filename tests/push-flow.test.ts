@@ -75,6 +75,65 @@ describe("runPushFlow", () => {
     expect(rc.branches).toEqual([{ name: "customer-acme" }]);
   });
 
+  it("release_files with ${build} → buildNumberProvider invoked, value inlined", async () => {
+    const writes: Array<{ path: string; contents: string }> = [];
+    const buildCalls: string[] = [];
+    await runPushFlow({
+      branchRef: "develop",
+      config: {
+        ...config,
+        release_files: [
+          {
+            path: "pubspec.yaml",
+            pattern: "^version: .*",
+            replacement: "version: ${version}+${build}",
+          },
+        ],
+      },
+      workspace: "/ws",
+      log: { info: () => undefined },
+      writer: async (path, contents) => {
+        writes.push({ path, contents });
+      },
+      buildNumberProvider: async (workspace) => {
+        buildCalls.push(workspace);
+        return 17;
+      },
+    });
+    expect(buildCalls).toEqual(["/ws"]);
+    const rc = JSON.parse(writes[0]!.contents);
+    const exec = rc.plugins.find(
+      (p: unknown) => Array.isArray(p) && p[0] === "@semantic-release/exec",
+    );
+    expect(exec[1].prepareCmd).toContain("+17|");
+    expect(exec[1].prepareCmd).not.toContain("${BUILD}");
+  });
+
+  it("release_files without ${build} → buildNumberProvider not invoked", async () => {
+    const writes: Array<{ path: string; contents: string }> = [];
+    const buildCalls: string[] = [];
+    await runPushFlow({
+      branchRef: "develop",
+      config: {
+        ...config,
+        release_files: [
+          { path: "version.txt", pattern: "^.*$", replacement: "${version}" },
+        ],
+      },
+      workspace: "/ws",
+      log: { info: () => undefined },
+      writer: async (path, contents) => {
+        writes.push({ path, contents });
+      },
+      buildNumberProvider: async (workspace) => {
+        buildCalls.push(workspace);
+        return 99;
+      },
+    });
+    expect(buildCalls).toEqual([]);
+    expect(writes).toHaveLength(1);
+  });
+
   it("release: none branch → promote-only outcome, no .releaserc written", async () => {
     const promoteOnlyConfig: FlywheelConfig = {
       streams: [
