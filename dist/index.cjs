@@ -28472,26 +28472,15 @@ async function runPromotion(deps) {
   return { kind: "updated", prNumber: pr.number, label };
 }
 function computePendingCommits(input) {
-  const { sourceCommits, targetCommits, sourceName, targetName } = input;
+  const { sourceCommits, targetCommits } = input;
   if (sourceCommits.length > 0 && targetCommits.length > 0 && sourceCommits[0].sha === targetCommits[0].sha) {
     return [];
   }
-  const lastPromotion = findLastPromotionCommit(targetCommits, sourceName, targetName);
-  if (lastPromotion) {
-    const cutoff = Date.parse(lastPromotion.committerDate);
-    if (Number.isFinite(cutoff)) {
-      return sourceCommits.filter((c) => Date.parse(c.committerDate) > cutoff);
-    }
-  }
+  const targetShas = new Set(targetCommits.map((c) => c.sha));
   const targetTitles = new Set(targetCommits.map((c) => normalizeTitle(c.title)));
-  return sourceCommits.filter((c) => !targetTitles.has(normalizeTitle(c.title)));
-}
-function findLastPromotionCommit(targetCommits, sourceName, targetName) {
-  const re = buildPromotionTitleRegex(sourceName, targetName);
-  for (const c of targetCommits) {
-    if (re.test(stripPrSuffix(c.title))) return c;
-  }
-  return null;
+  return sourceCommits.filter(
+    (c) => !targetShas.has(c.sha) && !targetTitles.has(normalizeTitle(c.title))
+  );
 }
 function buildPromotionTitleRegex(source, target) {
   const escapedSource = escapeRegex(source);
