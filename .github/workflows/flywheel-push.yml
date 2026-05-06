@@ -39,6 +39,36 @@ jobs:
             semantic-release
         env:
           GITHUB_TOKEN: ${{ steps.flywheel.outputs.token }}
+      - name: Sanitize @-mentions in release body
+        # Squash-commit messages often contain @-prefixed identifiers
+        # (@semantic-release/exec, @v1 floating tag, @octokit/auth-app, …)
+        # that GitHub's release-page renderer parses as user mentions and
+        # surfaces in the release's "Contributors" sidebar — adding bogus
+        # entries like a "v1" contributor. Wrap any @-mention left in the
+        # body with backticks so GitHub leaves it as code text. See #70.
+        if: steps.flywheel.outputs.managed_branch == 'true'
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ steps.flywheel.outputs.token }}
+        run: |
+          set -euo pipefail
+          new_tag="$(git tag --points-at HEAD | head -n1)"
+          if [[ -z "$new_tag" ]]; then
+            echo "::notice::No tag at HEAD — semantic-release did not publish a release. Skipping body sanitize."
+            exit 0
+          fi
+          body="$(gh release view "$new_tag" --json body --jq .body)"
+          # Wrap @<identifier> in backticks where the @ is at line-start or
+          # after whitespace/punctuation that GitHub treats as a mention
+          # boundary. Anything preceded by a word char (email-like
+          # `user@host`) or by a backtick (already inline-coded) is left
+          # alone. The class delimiter is `#` so `@` and `|` can appear
+          # literally.
+          sanitized="$(printf '%s' "$body" | sed -E 's#(^|[[:space:]([])@([A-Za-z0-9][A-Za-z0-9._/-]+)#\1`@\2`#g')"
+          if [[ "$body" != "$sanitized" ]]; then
+            gh release edit "$new_tag" --notes "$sanitized" --repo "$GITHUB_REPOSITORY" >/dev/null
+            echo "Sanitized @-mentions in $new_tag release body."
+          fi
       - name: Back-merge release into upstream branches
         # Only runs when this push triggered a release (a tag was created at
         # HEAD by semantic-release) and the stream has upstream branches.
