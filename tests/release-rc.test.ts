@@ -3,10 +3,6 @@ import { describe, expect, it } from "vitest";
 import { generateReleaseRc, chooseTagFormat } from "../src/release-rc.js";
 import type { FlywheelConfig } from "../src/types.js";
 
-const baseRc = {
-  merge_strategy: "squash" as const,
-};
-
 // Override of @semantic-release/git's default message: drops the `[skip ci]`
 // token the plugin would otherwise append. See src/release-rc.ts for the why.
 const GIT_MESSAGE =
@@ -15,7 +11,6 @@ const GIT_MESSAGE =
 describe("generateReleaseRc", () => {
   it("default plugin chain includes @semantic-release/exec for committed-rc adopters", () => {
     const config: FlywheelConfig = {
-      ...baseRc,
       streams: [
         {
           name: "main-line",
@@ -29,7 +24,6 @@ describe("generateReleaseRc", () => {
 
   it("primary stream (terminal release: production) gets v${version}", () => {
     const config: FlywheelConfig = {
-      ...baseRc,
       streams: [
         {
           name: "main-line",
@@ -52,7 +46,6 @@ describe("generateReleaseRc", () => {
 
   it("filters release: none branches out of the branches array", () => {
     const config: FlywheelConfig = {
-      ...baseRc,
       streams: [
         {
           name: "main-line",
@@ -73,7 +66,6 @@ describe("generateReleaseRc", () => {
 
   it("secondary stream gets prefixed tagFormat", () => {
     const config: FlywheelConfig = {
-      ...baseRc,
       streams: [
         {
           name: "main-line",
@@ -93,7 +85,6 @@ describe("generateReleaseRc", () => {
 
   it("single-branch stream with prerelease declared as a normal release branch (no semantic-release prerelease flag)", () => {
     const config: FlywheelConfig = {
-      ...baseRc,
       streams: [
         {
           name: "main-line",
@@ -113,7 +104,6 @@ describe("generateReleaseRc", () => {
 
   it("plugin list matches spec: no @semantic-release/npm; CHANGELOG.md asset for git plugin", () => {
     const config: FlywheelConfig = {
-      ...baseRc,
       streams: [
         {
           name: "only",
@@ -134,7 +124,6 @@ describe("generateReleaseRc", () => {
 
   it("@semantic-release/git message override drops [skip ci]", () => {
     const config: FlywheelConfig = {
-      ...baseRc,
       streams: [
         {
           name: "only",
@@ -154,7 +143,6 @@ describe("generateReleaseRc", () => {
 
   describe("release_files", () => {
     const baseConfig: FlywheelConfig = {
-      ...baseRc,
       streams: [
         {
           name: "main-line",
@@ -287,7 +275,6 @@ describe("generateReleaseRc", () => {
 
   it("branches array preserves declaration order", () => {
     const config: FlywheelConfig = {
-      ...baseRc,
       streams: [
         {
           name: "only",

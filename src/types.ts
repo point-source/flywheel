@@ -1,7 +1,5 @@
 export type IncrementType = "major" | "minor" | "patch" | "none";
 
-export type MergeStrategy = "squash" | "rebase";
-
 export type ReleaseMode = "none" | "prerelease" | "production";
 
 export interface Branch {
@@ -31,7 +29,6 @@ export type ReleaseFile = ReleaseFileDeclarative | ReleaseFileExec;
 
 export interface FlywheelConfig {
   streams: Stream[];
-  merge_strategy: MergeStrategy;
   release_files?: ReleaseFile[];
 }
 

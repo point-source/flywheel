@@ -4,4 +4,3 @@ flywheel:
       branches:
         - name: main
           auto_merge: [fix, chore, docs]
-  merge_strategy: squash

@@ -140,7 +140,6 @@ When your change could meaningfully break adopters (schema changes, validation s
          branches:
            - name: main
              auto_merge: [fix, chore, docs]
-     merge_strategy: squash
    ```
 3. Copy `flywheel-pr.yml` / `flywheel-push.yml` from [`docs/adopter-setup.md`](./docs/adopter-setup.md), but replace
    ```yaml

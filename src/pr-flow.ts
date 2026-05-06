@@ -134,7 +134,10 @@ export async function runPrFlow({ pr, config, gh, log }: PrFlowDeps): Promise<Pr
     // removeLabel is 404-tolerant so this is a no-op when the label
     // isn't actually present.
     await gh.removeLabel(pr.number, FLYWHEEL_NEEDS_REVIEW_LABEL);
-    const method = mergeMethod(config);
+    // Feature PRs into stream branches always squash so each PR contributes
+    // exactly one CHANGELOG entry (per the conventional-commit title) and
+    // intermediate WIP commits stay invisible.
+    const method: MergeMethod = "SQUASH";
     const result = await gh.enableAutoMerge(pr.nodeId, method);
     if (result.ok) {
       log.info(`PR #${pr.number}: auto-merge enabled (${method.toLowerCase()}).`);
@@ -202,10 +205,6 @@ function findBranch(config: FlywheelConfig, baseRef: string): Branch | null {
     }
   }
   return null;
-}
-
-function mergeMethod(config: FlywheelConfig): MergeMethod {
-  return config.merge_strategy === "rebase" ? "REBASE" : "SQUASH";
 }
 
 function formatTitle(parsed: ParsedTitle, breakingFromBodies: boolean): string {

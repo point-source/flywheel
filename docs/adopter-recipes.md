@@ -60,8 +60,6 @@ flywheel:
     - path: pubspec.yaml
       pattern: '^version: .*'
       replacement: 'version: ${version}+${build}'
-
-  merge_strategy: squash
 ```
 
 ## Cargo (`Cargo.toml`)

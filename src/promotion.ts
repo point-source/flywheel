@@ -102,7 +102,9 @@ export async function runPromotion(deps: PromotionDeps): Promise<PromotionOutcom
     eligible,
     targetBranch: target,
   });
-  const method = mergeMethodFor(config);
+  // Promotion PRs always use a true merge commit. Squash on this edge severs
+  // ancestry between source and target — see docs/squash-merge-issues.md.
+  const method: MergeMethod = "MERGE";
 
   const existing = await gh.listOpenPRs({ head: source.name, base: target.name });
 
@@ -281,10 +283,6 @@ async function applyLabel(gh: GitHubClient, prNumber: number, label: string): Pr
   await gh.addLabels(prNumber, [label]);
   const opposite = label === FLYWHEEL_AUTO_MERGE_LABEL ? FLYWHEEL_NEEDS_REVIEW_LABEL : FLYWHEEL_AUTO_MERGE_LABEL;
   await gh.removeLabel(prNumber, opposite);
-}
-
-function mergeMethodFor(config: FlywheelConfig): MergeMethod {
-  return config.merge_strategy === "rebase" ? "REBASE" : "SQUASH";
 }
 
 interface BranchLocation {

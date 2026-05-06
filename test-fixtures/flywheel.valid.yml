@@ -35,4 +35,3 @@ flywheel:
             - fix
             - fix!
             - chore
-  merge_strategy: squash

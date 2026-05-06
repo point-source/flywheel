@@ -9,4 +9,3 @@ flywheel:
       replacement: 'version: ${version}+${build}'
     - path: pyproject.toml
       cmd: 'python scripts/bump.py "${version}"'
-  merge_strategy: squash

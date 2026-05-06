@@ -3,8 +3,8 @@
 #
 # Reads .flywheel.yml in the current directory, extracts every managed branch,
 # and applies two rulesets via the GitHub Rulesets API:
-#   1. Flywheel managed branches — require PRs, block deletion / force-push,
-#      require linear history. Optionally requires named status checks.
+#   1. Flywheel managed branches — require PRs, block deletion / force-push.
+#      Optionally requires named status checks.
 #   2. Flywheel tag namespace (v*) — block deletion / force-push of v* tags.
 #      Optionally adds a GitHub App as a bypass actor so the bot can mint tags.
 #
@@ -130,8 +130,7 @@ if [[ -n "$REQUIRED_CHECKS" ]]; then
 fi
 
 # Without a bypass entry the App cannot push semantic-release's version
-# commit/tag back to a managed branch (PR-only rule), and the back-merge
-# step's merge commit into upstream branches is rejected by linear-history.
+# commit/tag back to a managed branch (the PR-only rule blocks direct pushes).
 if [[ -n "$APP_ID" ]]; then
   managed_payload="$(echo "$managed_payload" | jq \
     --arg app_id "$APP_ID" \

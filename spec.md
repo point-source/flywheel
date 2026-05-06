@@ -182,13 +182,14 @@ flywheel:
             - fix
             - fix!
             - chore
-
-  # Merge strategy: squash (default) | rebase
-  # Note: 'merge' is intentionally omitted. The recommended branch ruleset
-  # requires linear history, which is incompatible with merge commits.
-  # If you need merge commits, disable the linear history ruleset requirement.
-  merge_strategy: squash
 ```
+
+Flywheel uses a hybrid merge strategy that is not adopter-configurable:
+
+- Feature PRs into a stream branch always **squash** so each merged PR contributes exactly one CHANGELOG entry and intermediate WIP commits stay invisible.
+- Promotion PRs (e.g. `develop` → `main`) always **merge** (true merge commit) so source ancestry is preserved. The back-merge step that follows a release similarly uses `git merge --ff-only || --no-ff` for the same reason.
+
+See [`docs/squash-merge-issues.md`](./docs/squash-merge-issues.md) for the bug class that drove this opinionated choice.
 
 ### Branch config fields
 
@@ -724,7 +725,7 @@ TypeScript, compiled to a single bundled JavaScript file for distribution. Publi
 1. Read `.flywheel.yml` — find which stream contains the pushed branch
 2. If pushed branch is the last branch in its stream — exit (terminal branch; no promotion PR; does not affect whether a release occurs)
 3. Identify next branch in stream array as the promotion target
-4. Collect pending commits using commit message matching rather than SHA ancestry. Because the default `merge_strategy: squash` produces new SHAs on the target branch, SHA-based ancestry (`git log target..source`) will incorrectly show already-promoted commits as pending. Instead, Flywheel compares commit messages (conventional commit title lines) between source and target, excluding messages already present in target branch history since the last Flywheel promotion tag.
+4. Collect pending commits. Promotion PRs land as true merge commits, so source ancestry is preserved on target and `git log target..source` would in principle suffice. The current implementation still uses commit-message matching (with `(#NN)` suffix stripping plus a date cutoff at the most recent `promote source → target` commit) — a holdover from the squash era that remains correct under merge mode and is scheduled for simplification in a follow-up.
 5. If no qualifying commits (only non-bumping types since last promotion) — exit without creating or updating the promotion PR. This is intentional: chore/style/docs/etc. commits have no release significance on their own and will be included in the next promotion PR when a qualifying commit joins them. The promotion PR is a signal that something worth releasing is ready to move forward.
 6. Determine most impactful commit type from pending commits using precedence order
 7. Generate accumulated changelog from pending commits

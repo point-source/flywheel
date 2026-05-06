@@ -36,7 +36,7 @@ mode. No special infrastructure required.
 | File | Tests | Coverage |
 |---|---|---|
 | `tests/conventional.test.ts` | 57 | `parseTitle`, `detectBreakingInBody`, `computeIncrement`, combinatorial `mostImpactfulType` precedence (the bulk are `it.each`-generated pairwise precedence cases); accepts missing-space-after-colon as a typo to be normalized downstream |
-| `tests/config.test.ts` | 11 | All 6 `.flywheel.yml` validation rules; multi-error collection; malformed YAML; missing top-level mapping; `merge_strategy: merge` rejection |
+| `tests/config.test.ts` | 11 | All 6 `.flywheel.yml` validation rules; multi-error collection; malformed YAML; missing top-level mapping; legacy `merge_strategy` key flagged as unknown |
 | `tests/dogfood-config.test.ts` | 3 | Validates the repo's own `.flywheel.yml`; asserts `feat!` is excluded from `main`'s `auto_merge` |
 | `tests/release-rc.test.ts` | 8 | `.releaserc.json` shape; `chooseTagFormat` primary-vs-secondary; plugin merging without dropping defaults; declaration order |
 | `tests/pr-flow.test.ts` | 11 | PR title/body rewrite; label application; both label-flip directions; auto-merge → direct-merge fallback (success and both-fail paths); idempotency; unmanaged base ref; invalid-title check |
@@ -160,8 +160,6 @@ flywheel:
           release: prerelease
           suffix: int
           auto_merge: [fix, chore, perf, style, test]
-
-  merge_strategy: squash
 ```
 
 Long-lived branches: `e2e-main`, `e2e-staging`, `e2e-develop`,

@@ -24,7 +24,6 @@ const baseConfig: FlywheelConfig = {
       ],
     },
   ],
-  merge_strategy: "squash",
 };
 
 function makePR(overrides: Partial<PullRequest> = {}): PullRequest {
@@ -65,6 +64,19 @@ describe("runPrFlow", () => {
     expect(updateArgs.fields.body).toContain("**Increment type:** patch");
     expect(updateArgs.fields.body).toContain("### fix");
     expect(updateArgs.fields.body).toContain("### chore");
+  });
+
+  it("feature PRs into a stream branch always request SQUASH auto-merge", async () => {
+    const gh = createFakeGh({
+      pullCommits: { 7: [makeCommit("aaaaaaa", "fix: x")] },
+    });
+    const { log } = silentLogger();
+
+    await runPrFlow({ pr: makePR(), config: baseConfig, gh, log });
+
+    const enableCall = gh.calls.find((c) => c.method === "enableAutoMerge");
+    expect(enableCall).toBeDefined();
+    expect((enableCall!.args as { method: string }).method).toBe("SQUASH");
   });
 
   it("breaking change in commit body upgrades increment to major even though title is plain fix", async () => {

@@ -15,4 +15,3 @@ flywheel:
           release: prerelease
           suffix: acme
           auto_merge: [fix, fix!, chore]
-  merge_strategy: squash
