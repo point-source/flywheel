@@ -395,6 +395,100 @@ describe("runPrFlow", () => {
     expect(gh.autoMergeDisabledFor).toEqual([]);
   });
 
+  it("promotion PR (head/base match a stream edge with promote-shaped title) short-circuits: title check posted, no body rewrite, no auto-merge re-enable", async () => {
+    // Regression for #78: when runPromotion opens the develop→main PR it
+    // configures auto-merge with MERGE method. If pr-flow then runs on the
+    // resulting pull_request event and treats it as a feature PR, it
+    // re-enables auto-merge with SQUASH — collapsing the v1.0.x changelog
+    // on main to a single squash commit. pr-flow must short-circuit.
+    const promotionConfig: FlywheelConfig = {
+      streams: [
+        {
+          name: "main-line",
+          branches: [
+            {
+              name: "develop",
+              release: "prerelease",
+              suffix: "dev",
+              auto_merge: ["fix", "feat", "chore"],
+            },
+            {
+              name: "main",
+              release: "production",
+              auto_merge: ["fix", "feat", "chore"],
+            },
+          ],
+        },
+      ],
+    };
+    const gh = createFakeGh();
+    const { log } = silentLogger();
+
+    const outcome = await runPrFlow({
+      pr: makePR({
+        number: 74,
+        title: "fix: promote develop → main",
+        baseRef: "main",
+        headRef: "develop",
+      }),
+      config: promotionConfig,
+      gh,
+      log,
+    });
+
+    expect(outcome).toEqual({ kind: "promotion-pr" });
+    // Single passing check posted so adopters can require it in branch protection.
+    expect(gh.createdChecks).toHaveLength(1);
+    expect(gh.createdChecks[0]!.conclusion).toBe("success");
+    // No body rewrite (formatPromotionBody is authoritative for promotion PRs).
+    expect(gh.calls.find((c) => c.method === "updatePR")).toBeUndefined();
+    // No auto-merge re-enable (would have used SQUASH and clobbered MERGE).
+    expect(gh.calls.find((c) => c.method === "enableAutoMerge")).toBeUndefined();
+    expect(gh.autoMergeEnabledFor).toEqual([]);
+    // No label churn — runPromotion owns labels for promotion PRs.
+    expect(gh.calls.find((c) => c.method === "addLabels")).toBeUndefined();
+  });
+
+  it("promotion PR detection requires both edge match AND promote-shaped title — non-promotion fix from develop into main goes through normal flow", async () => {
+    // A plain feature PR that happens to target main from a develop-named
+    // local branch must not be misidentified as a promotion PR. Detection
+    // hinges on the title matching the runPromotion title shape.
+    const promotionConfig: FlywheelConfig = {
+      streams: [
+        {
+          name: "main-line",
+          branches: [
+            {
+              name: "develop",
+              release: "prerelease",
+              suffix: "dev",
+              auto_merge: ["fix"],
+            },
+            { name: "main", release: "production", auto_merge: ["fix"] },
+          ],
+        },
+      ],
+    };
+    const gh = createFakeGh({
+      pullCommits: { 7: [makeCommit("aaaaaaa", "fix: real fix")] },
+    });
+    const { log } = silentLogger();
+
+    const outcome = await runPrFlow({
+      pr: makePR({
+        title: "fix: real fix",
+        baseRef: "main",
+        headRef: "develop",
+      }),
+      config: promotionConfig,
+      gh,
+      log,
+    });
+
+    expect(outcome).toMatchObject({ kind: "labeled" });
+    expect(gh.calls.some((c) => c.method === "enableAutoMerge")).toBe(true);
+  });
+
   it("does not call updatePR when title and body are already correct", async () => {
     const idempotentTitle = "fix: handle token refresh race condition";
     const gh = createFakeGh({

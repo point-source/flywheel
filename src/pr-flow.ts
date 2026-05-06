@@ -13,12 +13,14 @@ import {
   type MergeMethod,
   type PullRequest,
 } from "./github.js";
+import { isPromotionPR } from "./promotion.js";
 import { findSkipCiMarkers } from "./skip-ci.js";
 
 export type PrFlowOutcome =
   | { kind: "unmanaged" }
   | { kind: "parse-failed" }
   | { kind: "skip-ci-found" }
+  | { kind: "promotion-pr" }
   | {
       kind: "labeled";
       label: typeof FLYWHEEL_AUTO_MERGE_LABEL | typeof FLYWHEEL_NEEDS_REVIEW_LABEL;
@@ -61,6 +63,25 @@ export async function runPrFlow({ pr, config, gh, log }: PrFlowDeps): Promise<Pr
     });
     log.warning(`PR #${pr.number}: invalid conventional commit title — failing check posted.`);
     return { kind: "parse-failed" };
+  }
+
+  // Promotion PRs are owned by runPromotion: it sets the title and body
+  // (formatPromotionBody), applies the label, and enables native auto-merge
+  // with MERGE method. If pr-flow keeps going it would rewrite the body via
+  // renderBody and re-enable auto-merge with SQUASH — squashing on the
+  // promotion edge collapses the changelog to one commit on the production
+  // branch (see #78). Post the conventional-commit success check so adopters
+  // can require it in branch protection without stalling the promotion, and
+  // exit.
+  if (isPromotionPR(config, pr.headRef, pr.baseRef, pr.title)) {
+    await gh.createCheck({
+      name: FLYWHEEL_TITLE_CHECK,
+      conclusion: "success",
+      summary: `Valid conventional commit title.`,
+      headSha: pr.headSha,
+    });
+    log.info(`PR #${pr.number}: promotion PR — owned by runPromotion, skipping pr-flow rewrite.`);
+    return { kind: "promotion-pr" };
   }
 
   const commits = await gh.listPullCommits(pr.number);
