@@ -100,6 +100,7 @@ async function run(): Promise<void> {
     });
     core.setOutput("managed_branch", outcome.kind === "release" ? "true" : "false");
     core.setOutput("back_merge_targets", getUpstreamBranches(config, branchRef).join(","));
+    core.setOutput("merge_strategy", config.merge_strategy);
 
     // Promotion PR upsert is independent of the release flow per spec §Event chain.
     await runPromotion({
