@@ -28918,6 +28918,7 @@ async function defaultWriter(path, contents) {
 
 // src/rulesets.ts
 var MANAGED_BRANCHES_RULESET_NAME = "Flywheel managed branches";
+var MANAGED_BRANCHES_REVIEW_RULESET_NAME = "Flywheel managed branches \u2014 review";
 var TAG_NAMESPACE_RULESET_NAME = "Flywheel tag namespace (v*)";
 var TAG_NAMESPACE_INCLUDE = ["refs/tags/v*", "refs/tags/*/v*"];
 async function syncRulesets(deps) {
@@ -28931,17 +28932,26 @@ async function syncRulesets(deps) {
       log.warning(
         "ruleset sync skipped: App lacks repository administration scope (needed to read/update branch & tag rulesets). Re-run scripts/apply-rulesets.sh manually."
       );
-      return { branchUpdated: false, tagUpdated: false, skipped: "forbidden" };
+      return {
+        branchUpdated: false,
+        reviewUpdated: false,
+        tagUpdated: false,
+        skipped: "forbidden"
+      };
     }
     throw err;
   }
   const branchSummary = rulesets.find(
     (r) => r.name === MANAGED_BRANCHES_RULESET_NAME
   );
+  const reviewSummary = rulesets.find(
+    (r) => r.name === MANAGED_BRANCHES_REVIEW_RULESET_NAME
+  );
   const tagSummary = rulesets.find(
     (r) => r.name === TAG_NAMESPACE_RULESET_NAME
   );
   let branchUpdated = false;
+  let reviewUpdated = false;
   let tagUpdated = false;
   if (branchSummary) {
     branchUpdated = await reconcileInclude(
@@ -28954,6 +28964,19 @@ async function syncRulesets(deps) {
   } else {
     log.warning(
       `ruleset '${MANAGED_BRANCHES_RULESET_NAME}' not found \u2014 bootstrap with scripts/apply-rulesets.sh.`
+    );
+  }
+  if (reviewSummary) {
+    reviewUpdated = await reconcileInclude(
+      api,
+      reviewSummary.id,
+      expectedBranches,
+      log,
+      "managed-branches-review"
+    );
+  } else {
+    log.warning(
+      `ruleset '${MANAGED_BRANCHES_REVIEW_RULESET_NAME}' not found \u2014 re-run scripts/apply-rulesets.sh to split ruleset bypass (see #81).`
     );
   }
   if (tagSummary) {
@@ -28969,7 +28992,7 @@ async function syncRulesets(deps) {
       `ruleset '${TAG_NAMESPACE_RULESET_NAME}' not found \u2014 bootstrap with scripts/apply-rulesets.sh.`
     );
   }
-  return { branchUpdated, tagUpdated };
+  return { branchUpdated, reviewUpdated, tagUpdated };
 }
 function expectedBranchIncludes(config) {
   return config.streams.flatMap(

@@ -1,6 +1,22 @@
 import type { FlywheelConfig } from "./types.js";
 
+// Branch protection is split across two rulesets so the App's bypass scope
+// is correctly narrow:
+//
+//   MANAGED_BRANCHES_RULESET_NAME — destruction protection. Rules: deletion
+//     + non_fast_forward. No bypass actors, including the App. This blocks
+//     GitHub's delete_branch_on_merge from wiping a stream branch when the
+//     App auto-merges a promotion or feature PR. See #81.
+//
+//   MANAGED_BRANCHES_REVIEW_RULESET_NAME — review requirements. Rules:
+//     pull_request (+ optional required_status_checks). The App is on the
+//     bypass list so semantic-release can push the chore(release) commit
+//     and back-merge directly to a stream branch without a PR.
+//
+// syncRulesets reconciles the include array on both, since they cover the
+// same set of refs.
 export const MANAGED_BRANCHES_RULESET_NAME = "Flywheel managed branches";
+export const MANAGED_BRANCHES_REVIEW_RULESET_NAME = "Flywheel managed branches — review";
 export const TAG_NAMESPACE_RULESET_NAME = "Flywheel tag namespace (v*)";
 
 // Two patterns: primary stream tags (v1.2.3) and secondary stream tags
@@ -53,7 +69,10 @@ export interface SyncLogger {
 }
 
 export interface SyncRulesetsResult {
+  /** True if the destruction-protection branch ruleset's include drifted and was PUT. */
   branchUpdated: boolean;
+  /** True if the review branch ruleset's include drifted and was PUT. */
+  reviewUpdated: boolean;
   tagUpdated: boolean;
   skipped?: "forbidden";
 }
@@ -85,7 +104,12 @@ export async function syncRulesets(deps: {
         "ruleset sync skipped: App lacks repository administration scope " +
           "(needed to read/update branch & tag rulesets). Re-run scripts/apply-rulesets.sh manually.",
       );
-      return { branchUpdated: false, tagUpdated: false, skipped: "forbidden" };
+      return {
+        branchUpdated: false,
+        reviewUpdated: false,
+        tagUpdated: false,
+        skipped: "forbidden",
+      };
     }
     throw err;
   }
@@ -93,11 +117,15 @@ export async function syncRulesets(deps: {
   const branchSummary = rulesets.find(
     (r) => r.name === MANAGED_BRANCHES_RULESET_NAME,
   );
+  const reviewSummary = rulesets.find(
+    (r) => r.name === MANAGED_BRANCHES_REVIEW_RULESET_NAME,
+  );
   const tagSummary = rulesets.find(
     (r) => r.name === TAG_NAMESPACE_RULESET_NAME,
   );
 
   let branchUpdated = false;
+  let reviewUpdated = false;
   let tagUpdated = false;
 
   if (branchSummary) {
@@ -111,6 +139,24 @@ export async function syncRulesets(deps: {
   } else {
     log.warning(
       `ruleset '${MANAGED_BRANCHES_RULESET_NAME}' not found — bootstrap with scripts/apply-rulesets.sh.`,
+    );
+  }
+
+  if (reviewSummary) {
+    reviewUpdated = await reconcileInclude(
+      api,
+      reviewSummary.id,
+      expectedBranches,
+      log,
+      "managed-branches-review",
+    );
+  } else {
+    // Pre-#81 adopters still have a single combined ruleset under
+    // MANAGED_BRANCHES_RULESET_NAME with the pull_request rule baked in.
+    // Don't error — they keep working — but flag the recovery path so
+    // the App-bypass-scoping fix gets applied.
+    log.warning(
+      `ruleset '${MANAGED_BRANCHES_REVIEW_RULESET_NAME}' not found — re-run scripts/apply-rulesets.sh to split ruleset bypass (see #81).`,
     );
   }
 
@@ -128,7 +174,7 @@ export async function syncRulesets(deps: {
     );
   }
 
-  return { branchUpdated, tagUpdated };
+  return { branchUpdated, reviewUpdated, tagUpdated };
 }
 
 export function expectedBranchIncludes(config: FlywheelConfig): string[] {
