@@ -1,3 +1,10 @@
+## [1.1.2](https://github.com/point-source/flywheel/compare/v1.1.1...v1.1.2) (2026-05-07)
+
+
+### Bug Fixes
+
+* **back-merge:** unbreak merge driver and stop auto-merging fallback PRs ([#122](https://github.com/point-source/flywheel/issues/122)) ([927ebbb](https://github.com/point-source/flywheel/commit/927ebbb34a17623a514ae88b609f6bdac979c4b4)), closes [#119](https://github.com/point-source/flywheel/issues/119) [#120](https://github.com/point-source/flywheel/issues/120) [#119](https://github.com/point-source/flywheel/issues/119) [#120](https://github.com/point-source/flywheel/issues/120)
+
 ## [1.1.1-dev.2](https://github.com/point-source/flywheel/compare/v1.1.1-dev.1...v1.1.1-dev.2) (2026-05-07)
 
 
