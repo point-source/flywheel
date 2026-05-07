@@ -40,6 +40,13 @@
 
 * **init:** support org-wide credential scope via --scope repo|org ([#100](https://github.com/point-source/flywheel/issues/100)) ([9ac2579](https://github.com/point-source/flywheel/commit/9ac25796b313d7751fe86281a8df43724c577b44))
 
+## [1.0.4](https://github.com/point-source/flywheel/compare/v1.0.3...v1.0.4) (2026-05-06)
+
+
+### Bug Fixes
+
+* **release-rc:** inline ${build} as literal so semantic-release templating doesn't ReferenceError ([#98](https://github.com/point-source/flywheel/issues/98)) ([055b6d2](https://github.com/point-source/flywheel/commit/055b6d2ef8f1a690a985a18be2ad538fc9380e93))
+
 ## [1.0.4-dev.1](https://github.com/point-source/flywheel/compare/v1.0.3...v1.0.4-dev.1) (2026-05-06)
 
 
