@@ -366,6 +366,35 @@ export function extractClosesRefs(body: string | null): number[] {
   return out;
 }
 
+// Cap on parallel getPullBody calls during Closes-aggregation. Unbounded
+// Promise.all over a large `pending` list trips GitHub's secondary rate
+// limit (the limit is on bursts of concurrent requests, not total volume),
+// which fails the whole runPromotion. 5 in flight stays well under
+// GitHub's published guidance of "no more than 100 concurrent requests"
+// while still parallelizing enough to keep a typical promotion fast.
+const GET_PULL_BODY_CONCURRENCY = 5;
+
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  limit: number,
+  fn: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let next = 0;
+  const workers = Array.from(
+    { length: Math.min(limit, items.length) },
+    async () => {
+      while (true) {
+        const i = next++;
+        if (i >= items.length) return;
+        results[i] = await fn(items[i]!);
+      }
+    },
+  );
+  await Promise.all(workers);
+  return results;
+}
+
 async function aggregateClosesRefs(
   gh: GitHubClient,
   pending: Commit[],
@@ -374,7 +403,11 @@ async function aggregateClosesRefs(
     .map((c) => extractTrailingPrNumber(c.title))
     .filter((n): n is number => n !== null);
   if (subPrNumbers.length === 0) return [];
-  const bodies = await Promise.all(subPrNumbers.map((n) => gh.getPullBody(n)));
+  const bodies = await mapWithConcurrency(
+    subPrNumbers,
+    GET_PULL_BODY_CONCURRENCY,
+    (n) => gh.getPullBody(n),
+  );
   const refs = bodies.flatMap(extractClosesRefs);
   // Drop self-references — a sub-PR whose body says "closes #<itself>" is
   // either a typo or a reference to a future-numbered issue that GitHub

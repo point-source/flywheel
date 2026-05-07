@@ -504,6 +504,45 @@ describe("runPromotion — orchestration", () => {
     expect((getCalls[0]!.args as { prNumber: number }).prNumber).toBe(72);
   });
 
+  it("caps parallel getPullBody calls during Closes-aggregation (#104)", async () => {
+    // Regression: aggregateClosesRefs used to fan out unbounded Promise.all
+    // over every sub-PR, tripping GitHub's secondary rate limit when pending
+    // was large (50+). The fix caps concurrency; this test asserts the cap
+    // holds by tracking max in-flight calls against a 30-commit pending list.
+    const subPrNumbers = Array.from({ length: 30 }, (_, i) => 200 + i);
+    const pullBodies: Record<number, string> = {};
+    for (const n of subPrNumbers) pullBodies[n] = `Closes #${1000 + n}`;
+    const gh = createFakeGh({
+      branchCommits: {
+        develop: subPrNumbers.map((n, i) =>
+          makeCommit(`c${i}`, `fix: x (#${n})`, date("2026-01-05T10:00:00Z")),
+        ),
+        staging: [makeCommit("s1", "chore: old", date("2025-12-01T10:00:00Z"))],
+      },
+      pullBodies,
+    });
+    let inFlight = 0;
+    let maxInFlight = 0;
+    gh.getPullBody = async (n) => {
+      inFlight++;
+      if (inFlight > maxInFlight) maxInFlight = inFlight;
+      // Yield several microtasks so peers would pile in if unbounded.
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+      inFlight--;
+      return pullBodies[n] ?? null;
+    };
+    const { log } = silentLogger();
+
+    await runPromotion({ branchRef: "develop", config, gh, log });
+
+    // Cap is 5; allow a tiny slack for scheduler quirks but reject unbounded.
+    expect(maxInFlight).toBeLessThanOrEqual(5);
+    // Sanity: aggregation actually ran and is parallelized (not sequential=1).
+    expect(maxInFlight).toBeGreaterThanOrEqual(2);
+  });
+
   it("createPR errors other than 422 'No commits between' still propagate", async () => {
     const gh = createFakeGh({
       branchCommits: {
