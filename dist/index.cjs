@@ -28696,7 +28696,8 @@ async function runPrFlow({ pr, config, gh, log }) {
     increment,
     branchName: branch.name,
     eligible,
-    matchKey
+    matchKey,
+    existingBody: pr.body
   });
   if (newTitle !== pr.title || newBody !== pr.body) {
     await gh.updatePR(pr.number, {
@@ -28785,6 +28786,13 @@ function renderBody(p) {
       "> \u26A0 A `BREAKING CHANGE:` footer was detected in one or more commit bodies \u2014 this PR is treated as a major-bump release.",
       ""
     );
+  }
+  const closesRefs = Array.from(new Set(extractClosesRefs(p.existingBody ?? null))).sort(
+    (a, b) => a - b
+  );
+  if (closesRefs.length > 0) {
+    for (const n of closesRefs) sections.push(`Closes #${n}`);
+    sections.push("");
   }
   sections.push("---", "");
   sections.push(`**Increment type:** ${p.increment}`);

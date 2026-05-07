@@ -13,7 +13,7 @@ import {
   type MergeMethod,
   type PullRequest,
 } from "./github.js";
-import { isPromotionPR } from "./promotion.js";
+import { extractClosesRefs, isPromotionPR } from "./promotion.js";
 import { findSkipCiMarkers } from "./skip-ci.js";
 
 export type PrFlowOutcome =
@@ -137,6 +137,7 @@ export async function runPrFlow({ pr, config, gh, log }: PrFlowDeps): Promise<Pr
     branchName: branch.name,
     eligible,
     matchKey,
+    existingBody: pr.body,
   });
 
   if (newTitle !== pr.title || newBody !== pr.body) {
@@ -243,6 +244,12 @@ interface BodyParams {
   branchName: string;
   eligible: boolean;
   matchKey: string;
+  // Existing PR body, read so issue-closing trailers (Closes/Fixes/Resolves)
+  // survive renderBody's full-body rewrite and reach aggregateClosesRefs on
+  // the develop→main promotion. Without this, GitHub never auto-closes the
+  // linked issues — the promotion lands on the default branch but its body
+  // has no closing keywords to act on. See #115.
+  existingBody?: string | null;
 }
 
 function renderBody(p: BodyParams): string {
@@ -263,6 +270,14 @@ function renderBody(p: BodyParams): string {
       "> ⚠ A `BREAKING CHANGE:` footer was detected in one or more commit bodies — this PR is treated as a major-bump release.",
       "",
     );
+  }
+
+  const closesRefs = Array.from(new Set(extractClosesRefs(p.existingBody ?? null))).sort(
+    (a, b) => a - b,
+  );
+  if (closesRefs.length > 0) {
+    for (const n of closesRefs) sections.push(`Closes #${n}`);
+    sections.push("");
   }
 
   sections.push("---", "");

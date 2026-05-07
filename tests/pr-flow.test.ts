@@ -518,4 +518,86 @@ describe("runPrFlow", () => {
     const update2 = gh2.calls.find((c) => c.method === "updatePR");
     expect(update2).toBeUndefined();
   });
+
+  it("preserves Closes/Fixes/Resolves trailers from PR body, normalized to `Closes #N`", async () => {
+    const gh = createFakeGh({
+      pullCommits: { 7: [makeCommit("aaaaaaa", "fix: x")] },
+    });
+    const { log } = silentLogger();
+
+    await runPrFlow({
+      pr: makePR({
+        body: "Some context.\n\nFixes #104\nResolves: #112\nclose #99",
+      }),
+      config: baseConfig,
+      gh,
+      log,
+    });
+
+    const updateCall = gh.calls.find((c) => c.method === "updatePR");
+    const body = (updateCall!.args as { fields: { body?: string } }).fields.body!;
+    expect(body).toContain("Closes #99");
+    expect(body).toContain("Closes #104");
+    expect(body).toContain("Closes #112");
+    // Normalized to numerically sorted, deduped form.
+    const idx99 = body.indexOf("Closes #99");
+    const idx104 = body.indexOf("Closes #104");
+    const idx112 = body.indexOf("Closes #112");
+    expect(idx99).toBeLessThan(idx104);
+    expect(idx104).toBeLessThan(idx112);
+    // Closes block sits before the metadata footer so aggregateClosesRefs
+    // (and humans) can locate it predictably.
+    expect(idx112).toBeLessThan(body.indexOf("**Increment type:**"));
+  });
+
+  it("Closes-trailer preservation is idempotent across re-runs", async () => {
+    const gh = createFakeGh({
+      pullCommits: { 7: [makeCommit("aaaaaaa", "fix: x")] },
+    });
+    const { log } = silentLogger();
+
+    await runPrFlow({
+      pr: makePR({ body: "Fixes #104\nCloses #112" }),
+      config: baseConfig,
+      gh,
+      log,
+    });
+    const writtenBody = (gh.calls.find((c) => c.method === "updatePR")!.args as {
+      fields: { body?: string };
+    }).fields.body!;
+
+    const gh2 = createFakeGh({
+      pullCommits: { 7: [makeCommit("aaaaaaa", "fix: x")] },
+    });
+    await runPrFlow({
+      pr: makePR({ body: writtenBody }),
+      config: baseConfig,
+      gh: gh2,
+      log,
+    });
+
+    // Second run sees a body that already contains the rendered output —
+    // nothing to update.
+    expect(gh2.calls.find((c) => c.method === "updatePR")).toBeUndefined();
+  });
+
+  it("dedupes a Closes ref that the contributor wrote multiple times", async () => {
+    const gh = createFakeGh({
+      pullCommits: { 7: [makeCommit("aaaaaaa", "fix: x")] },
+    });
+    const { log } = silentLogger();
+
+    await runPrFlow({
+      pr: makePR({ body: "Fixes #104\nCloses #104\nresolved #104" }),
+      config: baseConfig,
+      gh,
+      log,
+    });
+
+    const body = (gh.calls.find((c) => c.method === "updatePR")!.args as {
+      fields: { body?: string };
+    }).fields.body!;
+    const matches = body.match(/Closes #104/g) ?? [];
+    expect(matches).toHaveLength(1);
+  });
 });
