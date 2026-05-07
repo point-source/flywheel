@@ -2,7 +2,7 @@
 
 This file documents the one-time provisioning of `point-source/flywheel-sandbox`,
 the repo that backs Flywheel's Layer 2 (integration) and Layer 3 (E2E) tests.
-See [`testing_strategy.md`](../testing_strategy.md) for the testing architecture.
+See [`testing-strategy.md`](../design/testing-strategy.md) for the testing architecture.
 
 ## What it is
 
@@ -30,7 +30,7 @@ never against `flywheel` itself or any production target.
    | `integration-test-base` | PR target for all Layer 2 tests |
 
 3. **Commit the sandbox `.flywheel.yml`** to every branch. The canonical
-   contents live in [`testing_strategy.md`](../testing_strategy.md#sandbox-repo-configuration).
+   contents live in [`testing-strategy.md`](../design/testing-strategy.md#sandbox-repo-configuration).
 
 4. **Branch protection.**
    - On every branch listed above: block force pushes, block deletions.

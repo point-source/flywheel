@@ -40,8 +40,9 @@ scripts/build.mjs       esbuild → dist/index.cjs
 dist/index.cjs           committed bundle GitHub executes (see below)
 .github/workflows/      this repo's own Flywheel + verify-dist workflows
 .flywheel.yml           dogfood config (single stream, two branches: develop → main)
-spec.md                 authoritative spec
-testing_strategy.md     target three-layer test architecture (see Status note below)
+docs/design/spec.md             authoritative spec
+docs/design/requirements.md     requirements the spec serves
+docs/design/testing-strategy.md target three-layer test architecture (see Status note below)
 ```
 
 ## Edit-test-build loop
@@ -67,7 +68,7 @@ See the existing fixtures for examples — each one isolates a single failure mo
 
 ## PR conventions
 
-These rules apply to **everyone opening PRs against this repo** — human contributors and AI agents (Claude Code, Cursor, Copilot, Codex) alike. The same rule set is described generically in [docs/adopter-setup.md §6](./docs/adopter-setup.md#6-brief-your-contributors-human-and-ai); what follows is the dogfood version with this repo's actual values filled in. `CLAUDE.md` at the repo root is a thin pointer to this section, so keep it in sync if you restructure.
+These rules apply to **everyone opening PRs against this repo** — human contributors and AI agents (Claude Code, Cursor, Copilot, Codex) alike. The same rule set is described generically in [docs/adopter/setup.md §6](./docs/adopter/setup.md#6-brief-your-contributors-human-and-ai); what follows is the dogfood version with this repo's actual values filled in. `CLAUDE.md` at the repo root is a thin pointer to this section, so keep it in sync if you restructure.
 
 **Target branch.** Open all PRs against `develop` — the prerelease channel and first branch in the only stream. Do **not** PR directly into `main`; the `develop → main` promotion is upserted automatically by `flywheel-push.yml`.
 
@@ -141,16 +142,12 @@ When your change could meaningfully break adopters (schema changes, validation s
            - name: main
              auto_merge: [fix, chore, docs]
    ```
-3. Copy `flywheel-pr.yml` / `flywheel-push.yml` from [`docs/adopter-setup.md`](./docs/adopter-setup.md), but replace
+3. Copy `flywheel-pr.yml` / `flywheel-push.yml` from [`docs/adopter/setup.md`](./docs/adopter/setup.md), but flip the reusable workflow ref to your fork's branch:
    ```yaml
-   uses: point-source/flywheel@v2
+   uses: <your-handle>/flywheel/.github/workflows/pr.yml@<your-branch>
    ```
-   with a reference to your fork on the branch you're testing:
-   ```yaml
-   uses: <your-handle>/flywheel@<your-branch>
-   ```
-   Push your branch (with a freshly built `dist/index.cjs`) so GitHub Actions can resolve the ref.
-4. Configure App credentials (`FLYWHEEL_GH_APP_ID` repo Variable + `FLYWHEEL_GH_APP_PRIVATE_KEY` repo Secret) using either `scripts/init.sh` from your sandbox repo or the manual steps in [`docs/adopter-setup.md`](./docs/adopter-setup.md#1-create-a-github-app).
+   The reusable workflow at that ref hardcodes its action ref to `point-source/flywheel@v1`, so to test your fork's action code as well you also need to either (a) edit `pr.yml` / `push.yml` on your fork's branch to reference `<your-handle>/flywheel@<your-branch>`, or (b) inline the workflow shell instead of calling the reusable workflow. Push your branch (with a freshly built `dist/index.cjs`) so GitHub Actions can resolve the refs.
+4. Configure App credentials (`FLYWHEEL_GH_APP_ID` repo Variable + `FLYWHEEL_GH_APP_PRIVATE_KEY` repo Secret) using either `scripts/init.sh` from your sandbox repo or the manual steps in [`docs/adopter/setup.md`](./docs/adopter/setup.md#1-create-a-github-app).
 5. Open a PR with title `chore: smoke test` and confirm the rewrite + label + auto-merge behaviour.
 6. Merge it. Confirm the push triggers `semantic-release` and produces a tag + GitHub Release.
 
@@ -164,18 +161,19 @@ Before opening a PR:
 - [ ] PR title is a Conventional Commit; breaking change is signalled with `!` if appropriate
 - [ ] If you added a validation rule, you added a fixture in `test-fixtures/` and a test in `tests/config.test.ts`
 
-## Status of `testing_strategy.md`
+## Status of `docs/design/testing-strategy.md`
 
-`testing_strategy.md` documents three test layers:
+`docs/design/testing-strategy.md` documents three test layers:
 
 - **Layer 1 (unit)** — implemented. `tests/*.test.ts` covers parsing, validation, increment computation, label decisions, promotion dedup, idempotency, and the GraphQL auto-merge fallback. Run `npm test`.
-- **Layer 2 (integration)** — being introduced. Real-Octokit tests under `tests/integration/` running against `point-source/flywheel-sandbox`. CI mints a token from the `flywheel-build-e2e` GitHub App and exports it as `SANDBOX_GH_TOKEN`; provisioning is documented in [`docs/sandbox-setup.md`](./docs/sandbox-setup.md).
+- **Layer 2 (integration)** — being introduced. Real-Octokit tests under `tests/integration/` running against `point-source/flywheel-sandbox`. CI mints a token from the `flywheel-build-e2e` GitHub App and exports it as `SANDBOX_GH_TOKEN`; provisioning is documented in [`docs/maintainer/sandbox-setup.md`](./docs/maintainer/sandbox-setup.md).
 - **Layer 3 (E2E)** — deferred. Sandbox branches are pre-positioned so Layer 3 can be added without re-provisioning.
 
 Until Layer 2 lands fully, the dogfood and personal-sandbox loops above are still the primary end-to-end validation path.
 
 ## Other docs
 
-- [`spec.md`](./spec.md) — authoritative spec; the source of truth when a doc disagrees.
-- [`docs/adopter-setup.md`](./docs/adopter-setup.md) — user-facing setup walkthrough; contributors writing schema or workflow changes should keep this aligned.
-- [`docs/maintainer-setup.md`](./docs/maintainer-setup.md) and [`docs/maintainer-release-process.md`](./docs/maintainer-release-process.md) — operating Flywheel itself (rulesets, release cuts, the `v1` floating tag). Maintainer-only.
+- [`docs/design/spec.md`](./docs/design/spec.md) — authoritative spec; the source of truth when a doc disagrees.
+- [`docs/design/requirements.md`](./docs/design/requirements.md) — requirements the spec serves; the right place to evaluate alternative designs against.
+- [`docs/adopter/setup.md`](./docs/adopter/setup.md) — user-facing setup walkthrough; contributors writing schema or workflow changes should keep this aligned.
+- [`docs/maintainer/setup.md`](./docs/maintainer/setup.md) and [`docs/maintainer/release-process.md`](./docs/maintainer/release-process.md) — operating Flywheel itself (rulesets, release cuts, the `v1` floating tag). Maintainer-only.

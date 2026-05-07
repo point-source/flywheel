@@ -28477,6 +28477,10 @@ function computePendingCommits(input) {
     return [];
   }
   const targetShas = new Set(targetCommits.map((c) => c.sha));
+  const hasShaOverlap = sourceCommits.some((c) => targetShas.has(c.sha));
+  if (hasShaOverlap) {
+    return sourceCommits.filter((c) => !targetShas.has(c.sha));
+  }
   const targetTitles = new Set(targetCommits.map((c) => normalizeTitle(c.title)));
   return sourceCommits.filter(
     (c) => !targetShas.has(c.sha) && !targetTitles.has(normalizeTitle(c.title))
@@ -28571,10 +28575,31 @@ function extractClosesRefs(body) {
   }
   return out;
 }
+var GET_PULL_BODY_CONCURRENCY = 5;
+async function mapWithConcurrency(items, limit, fn) {
+  const results = new Array(items.length);
+  let next = 0;
+  const workers = Array.from(
+    { length: Math.min(limit, items.length) },
+    async () => {
+      while (true) {
+        const i = next++;
+        if (i >= items.length) return;
+        results[i] = await fn(items[i]);
+      }
+    }
+  );
+  await Promise.all(workers);
+  return results;
+}
 async function aggregateClosesRefs(gh, pending) {
   const subPrNumbers = pending.map((c) => extractTrailingPrNumber(c.title)).filter((n) => n !== null);
   if (subPrNumbers.length === 0) return [];
-  const bodies = await Promise.all(subPrNumbers.map((n) => gh.getPullBody(n)));
+  const bodies = await mapWithConcurrency(
+    subPrNumbers,
+    GET_PULL_BODY_CONCURRENCY,
+    (n) => gh.getPullBody(n)
+  );
   const refs = bodies.flatMap(extractClosesRefs);
   const filtered = refs.filter((n) => !subPrNumbers.includes(n));
   return Array.from(new Set(filtered)).sort((a, b) => a - b);
@@ -28824,7 +28849,7 @@ var DEFAULT_PLUGINS = [
   // flow — propagates into the next promotion PR's squash-merge body under
   // GitHub's default `squash_merge_commit_message: COMMIT_MESSAGES` setting,
   // silently suppressing every workflow on the target branch. Documented in
-  // docs/adopter-setup.md §0.4.
+  // docs/adopter/setup.md §0.4.
   [
     GIT_PLUGIN,
     {

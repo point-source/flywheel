@@ -106,7 +106,7 @@ export async function runPromotion(deps: PromotionDeps): Promise<PromotionOutcom
     closesRefs,
   });
   // Promotion PRs always use a true merge commit. Squash on this edge severs
-  // ancestry between source and target — see docs/decisions/0001-hybrid-merge-strategy.md.
+  // ancestry between source and target — see docs/design/decisions/0001-hybrid-merge-strategy.md.
   const method: MergeMethod = "MERGE";
 
   const existing = await gh.listOpenPRs({ head: source.name, base: target.name });
@@ -203,12 +203,21 @@ export function computePendingCommits(input: PendingDetectionInput): Commit[] {
   // Approximate `git log target..source` from the two reachable-history
   // listings: a source commit is pending iff it isn't already on target.
   // Under hybrid mode promotion PRs land as true merge commits, so source
-  // commits become reachable from target and SHA equality is authoritative.
-  // Title equality is a fallback for cross-stream cherry-picks (different
-  // SHA, identical message) and the initial-seed case where the streams
-  // haven't been promoted yet so no SHAs overlap. Strip the `(#NN)` suffix
-  // GitHub appends on squash merges before comparing.
+  // commits become reachable from target and SHA equality is authoritative
+  // once the streams have been promoted at least once. Title equality is
+  // only a sound fallback in the initial-seed case (no SHAs overlap yet) —
+  // applying it after the first promotion silently drops a legitimately
+  // pending commit whose title happens to match an already-promoted one
+  // (two distinct PRs with identical titles). See #102.
   const targetShas = new Set(targetCommits.map((c) => c.sha));
+  const hasShaOverlap = sourceCommits.some((c) => targetShas.has(c.sha));
+  if (hasShaOverlap) {
+    return sourceCommits.filter((c) => !targetShas.has(c.sha));
+  }
+
+  // Initial-seed path: no SHA overlap yet, so SHA-difference can't tell
+  // pending from already-on-target. Fall back to title-difference (after
+  // stripping GitHub's `(#NN)` squash-merge suffix).
   const targetTitles = new Set(targetCommits.map((c) => normalizeTitle(c.title)));
   return sourceCommits.filter(
     (c) => !targetShas.has(c.sha) && !targetTitles.has(normalizeTitle(c.title)),
@@ -357,6 +366,35 @@ export function extractClosesRefs(body: string | null): number[] {
   return out;
 }
 
+// Cap on parallel getPullBody calls during Closes-aggregation. Unbounded
+// Promise.all over a large `pending` list trips GitHub's secondary rate
+// limit (the limit is on bursts of concurrent requests, not total volume),
+// which fails the whole runPromotion. 5 in flight stays well under
+// GitHub's published guidance of "no more than 100 concurrent requests"
+// while still parallelizing enough to keep a typical promotion fast.
+const GET_PULL_BODY_CONCURRENCY = 5;
+
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  limit: number,
+  fn: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let next = 0;
+  const workers = Array.from(
+    { length: Math.min(limit, items.length) },
+    async () => {
+      while (true) {
+        const i = next++;
+        if (i >= items.length) return;
+        results[i] = await fn(items[i]!);
+      }
+    },
+  );
+  await Promise.all(workers);
+  return results;
+}
+
 async function aggregateClosesRefs(
   gh: GitHubClient,
   pending: Commit[],
@@ -365,7 +403,11 @@ async function aggregateClosesRefs(
     .map((c) => extractTrailingPrNumber(c.title))
     .filter((n): n is number => n !== null);
   if (subPrNumbers.length === 0) return [];
-  const bodies = await Promise.all(subPrNumbers.map((n) => gh.getPullBody(n)));
+  const bodies = await mapWithConcurrency(
+    subPrNumbers,
+    GET_PULL_BODY_CONCURRENCY,
+    (n) => gh.getPullBody(n),
+  );
   const refs = bodies.flatMap(extractClosesRefs);
   // Drop self-references — a sub-PR whose body says "closes #<itself>" is
   // either a typo or a reference to a future-numbered issue that GitHub

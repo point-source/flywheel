@@ -25,6 +25,13 @@
 #                         the latest released major (e.g. `v2`); pass any
 #                         tag, branch, or sha to override (sandbox/E2E
 #                         testing typically uses `--version develop`).
+#   --scope repo|org      Where to write FLYWHEEL_GH_APP_ID (Variable) and
+#                         FLYWHEEL_GH_APP_PRIVATE_KEY (Secret). `org`
+#                         shares them across every repo in the owning
+#                         org (visibility=all) — useful when the same App
+#                         is installed org-wide. Requires an admin:org gh
+#                         token. Defaults to prompting interactively when
+#                         the owner is an Organization, otherwise `repo`.
 #
 # Dependencies: git, gh. (apply-rulesets.sh additionally needs jq + python3
 # with PyYAML.)
@@ -37,6 +44,10 @@ SKIP_RULESETS=0
 REQUIRED_CHECKS=""
 FORCE=0
 FLYWHEEL_VERSION=""
+# Empty until the user picks (interactively) or passes --scope. Resolved
+# to "repo" or "org" before any credential write; "org" requires the
+# owner to be an Organization and the gh token to have admin:org scope.
+SCOPE=""
 # Hoisted out of create_app_via_manifest / prompt_existing_app_credentials
 # so apply-rulesets.sh receives --app-id (App must be a bypass actor on the
 # rulesets this script applies, otherwise semantic-release tag pushes are
@@ -51,7 +62,14 @@ while [[ $# -gt 0 ]]; do
     --required-checks) REQUIRED_CHECKS="$2"; shift 2 ;;
     --force) FORCE=1; shift ;;
     --version) FLYWHEEL_VERSION="$2"; shift 2 ;;
-    -h|--help) sed -n '2,29p' "$0"; exit 0 ;;
+    --scope)
+      case "$2" in
+        repo|org) SCOPE="$2" ;;
+        *) echo "error: --scope must be 'repo' or 'org' (got '$2')" >&2; exit 2 ;;
+      esac
+      shift 2
+      ;;
+    -h|--help) sed -n '2,37p' "$0"; exit 0 ;;
     *) echo "Unknown argument: $1" >&2; exit 2 ;;
   esac
 done
@@ -75,6 +93,17 @@ if ! REPO="$(gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null)"; 
   echo "error: could not resolve owner/repo via 'gh repo view'. Are you authenticated ('gh auth login') and does this repo have a GitHub remote?" >&2
   exit 1
 fi
+OWNER="${REPO%%/*}"
+# Lazy: only paid for when SCOPE resolution / org detection actually needs it.
+# Empty string ≠ "User"; check OWNER_TYPE_RESOLVED before reading OWNER_TYPE.
+OWNER_TYPE=""
+OWNER_TYPE_RESOLVED=0
+detect_owner_type() {
+  if [[ "$OWNER_TYPE_RESOLVED" -eq 0 ]]; then
+    OWNER_TYPE="$(gh api "users/$OWNER" --jq .type 2>/dev/null || true)"
+    OWNER_TYPE_RESOLVED=1
+  fi
+}
 echo "Wiring Flywheel into $REPO..."
 
 # When run via `curl ... | bash`, stdin is the curl pipe, so `[[ -t 0 ]]`
@@ -119,6 +148,32 @@ if [[ -z "$FLYWHEEL_VERSION" ]]; then
 fi
 echo "  templates will pin to: point-source/flywheel@${FLYWHEEL_VERSION}"
 
+# Confirm the reusable workflow files exist at the resolved ref. The
+# adopter caller templates pin
+# `point-source/flywheel/.github/workflows/{pr,push}.yml@$FLYWHEEL_VERSION`,
+# and a 404 there would surface only on the next workflow run as a
+# cryptic "reusable workflow not found." This window can open briefly
+# between a stable release publishing and `release-major-tag.yml`
+# advancing the floating major tag (a few seconds in steady state) —
+# fail closed here so the adopter knows to wait or pin a specific tag.
+# Skip when --version points at a branch (no `refs/heads/` API call
+# needed) or when local templates are in use (developer-mode runs from
+# the repo, where the file is on disk).
+if [[ -z "$LOCAL_TEMPLATES" ]]; then
+  for wf in pr push; do
+    probe_url="https://api.github.com/repos/point-source/flywheel/contents/.github/workflows/${wf}.yml?ref=${FLYWHEEL_VERSION}"
+    if ! curl -fsSL -o /dev/null -H "Accept: application/vnd.github+json" "$probe_url" 2>/dev/null; then
+      echo "error: reusable workflow .github/workflows/${wf}.yml is not present in point-source/flywheel@${FLYWHEEL_VERSION}." >&2
+      echo "  This usually means one of:" >&2
+      echo "    - The floating major tag (${FLYWHEEL_VERSION}) hasn't yet advanced past the first release that introduced reusable workflows." >&2
+      echo "      Wait a few seconds for release-major-tag.yml to run, then re-try." >&2
+      echo "    - You passed --version <ref> pointing at a branch/sha that doesn't have the reusable workflow files." >&2
+      echo "      Pin to a stable tag that does (e.g. --version v1.1.0)." >&2
+      exit 1
+    fi
+  done
+fi
+
 fetch_template() {
   local name="$1" dest="$2"
   if [[ -n "$LOCAL_TEMPLATES" && -f "$LOCAL_TEMPLATES/$name" ]]; then
@@ -128,7 +183,7 @@ fetch_template() {
   fi
   # Substitute the version placeholder. `sed -i.bak ... && rm` is the
   # portable form (BSD sed on macOS requires a suffix arg; GNU accepts it).
-  sed -i.bak "s|@__FLYWHEEL_VERSION__|@${FLYWHEEL_VERSION}|g" "$dest" && rm -f "$dest.bak"
+  sed -i.bak "s|__FLYWHEEL_VERSION__|${FLYWHEEL_VERSION}|g" "$dest" && rm -f "$dest.bak"
 }
 
 # 1. Pick a preset and write .flywheel.yml (skip if it already exists).
@@ -167,9 +222,11 @@ for wf in flywheel-pr.yml flywheel-push.yml; do
   dest=".github/workflows/$wf"
   if [[ -f "$dest" && "$FORCE" -eq 0 ]]; then
     # Surface version drift so adopters know whether their existing template
-    # is current. The placeholder `point-source/flywheel@<ref>` is always
-    # present in flywheel-managed templates.
-    existing_ref="$(grep -m1 -oE 'point-source/flywheel@[^ ]+' "$dest" 2>/dev/null | head -n1 | cut -d@ -f2 || true)"
+    # is current. The placeholder `point-source/flywheel/.github/workflows/...@<ref>`
+    # (reusable workflow form) is always present in flywheel-managed templates;
+    # the older `point-source/flywheel@<ref>` form (pre-#84 inline templates) is
+    # also matched so re-running init.sh on those still detects drift.
+    existing_ref="$(grep -m1 -oE 'point-source/flywheel(/\.github/workflows/[a-z]+\.yml)?@[^ ]+' "$dest" 2>/dev/null | head -n1 | sed -E 's|.*@||' || true)"
     if [[ -n "$existing_ref" && "$existing_ref" != "$FLYWHEEL_VERSION" ]]; then
       echo "  $dest already exists (pinned @${existing_ref}; templates here pin @${FLYWHEEL_VERSION}) — pass --force to overwrite."
     else
@@ -181,7 +238,89 @@ for wf in flywheel-pr.yml flywheel-push.yml; do
   fi
 done
 
+# 2.5 Merge drivers for derived artifacts (CHANGELOG.md, release_files paths).
+#
+# Two pieces are needed to make `git merge` apply a custom driver: a
+# `.gitattributes` rule mapping the path to a driver name (committed —
+# travels with clones), and a `merge.<name>.driver` git config entry
+# mapping the name to a command (per-clone — does NOT travel). Without
+# both, git silently falls back to the default text merge.
+#
+# CI registers the same drivers in .git/info/attributes at workflow time
+# (see flywheel-push.yml), so the back-merge step works regardless of
+# whether the adopter committed the .gitattributes lines. Writing them
+# here is for local devs who do `git pull main` or otherwise merge
+# locally — without these, they'd hit textual conflicts on CHANGELOG.md
+# even though CI handles them cleanly. See issue #112.
+ATTR_BEGIN="# >>> flywheel: managed merge-driver attributes (do not edit) >>>"
+ATTR_END="# <<< flywheel: managed merge-driver attributes <<<"
+ATTR_BLOCK="$ATTR_BEGIN
+CHANGELOG.md merge=flywheel-changelog
+# Add a line per release_files entry from .flywheel.yml, e.g.:
+#   pubspec.yaml merge=flywheel-release-file
+$ATTR_END"
+
+if [[ -f .gitattributes ]] && grep -qF "$ATTR_BEGIN" .gitattributes; then
+  # Strip the existing managed block (begin-marker line through end-marker
+  # line, inclusive). sed -i.bak is portable across BSD (macOS) and GNU.
+  sed -i.bak '/^# >>> flywheel: managed merge-driver attributes/,/^# <<< flywheel: managed merge-driver attributes/d' .gitattributes
+  rm -f .gitattributes.bak
+  refreshed=1
+else
+  refreshed=0
+fi
+# Ensure the file ends in a newline before appending so the block sits on
+# its own line. `tail -c 1` of a newline-terminated file is "" via command
+# substitution (trailing newline stripped); a non-empty result means the
+# file's last byte is some non-newline char and we need to insert a break.
+if [[ -f .gitattributes && -s .gitattributes ]] && [[ "$(tail -c 1 .gitattributes)" != "" ]]; then
+  printf '\n' >> .gitattributes
+fi
+printf '%s\n' "$ATTR_BLOCK" >> .gitattributes
+if [[ $refreshed -eq 1 ]]; then
+  echo "  refreshed Flywheel block in .gitattributes"
+else
+  echo "  wrote Flywheel block to .gitattributes"
+fi
+
+# Register the per-clone driver bindings. Idempotent — `git config` overwrites
+# the same key, so re-running init.sh just re-registers the same driver.
+git config merge.flywheel-changelog.name "Flywheel CHANGELOG regenerator" >/dev/null
+git config merge.flywheel-changelog.driver \
+  'bash -c "npx --yes conventional-changelog-cli@5 -p angular -r 0 > \"$1\"" -- %A' >/dev/null
+git config merge.flywheel-release-file.name "Flywheel release-file (keep ours)" >/dev/null
+git config merge.flywheel-release-file.driver true >/dev/null
+echo "  registered Flywheel merge drivers in .git/config"
+
 # 3. App-token secrets.
+#
+# SCOPE controls where the credentials live:
+#   repo — Variable + Secret on $REPO (default; isolates per repo)
+#   org  — Variable + Secret on $OWNER with visibility=all, so every repo
+#          in the org inherits them (matches an org-installed App). The
+#          gh token must have admin:org for org-level writes/reads.
+#
+# Workflows reference vars.FLYWHEEL_GH_APP_ID / secrets.FLYWHEEL_GH_APP_PRIVATE_KEY
+# and GitHub resolves repo → org automatically, so the workflow templates
+# don't need to know which scope was used.
+
+write_app_id_var() {
+  local app_id="$1"
+  if [[ "$SCOPE" == "org" ]]; then
+    gh variable set FLYWHEEL_GH_APP_ID --body "$app_id" --org "$OWNER" --visibility all
+  else
+    gh variable set FLYWHEEL_GH_APP_ID --body "$app_id" --repo "$REPO"
+  fi
+}
+
+write_app_key_secret() {
+  if [[ "$SCOPE" == "org" ]]; then
+    gh secret set FLYWHEEL_GH_APP_PRIVATE_KEY --org "$OWNER" --visibility all
+  else
+    gh secret set FLYWHEEL_GH_APP_PRIVATE_KEY --repo "$REPO"
+  fi
+}
+
 locate_create_script() {
   if [[ -n "$LOCAL_TEMPLATES" ]]; then
     local sibling="$SCRIPT_DIR/create-flywheel-app.py"
@@ -205,16 +344,16 @@ create_app_via_manifest() {
     echo "  error: could not locate or fetch create-flywheel-app.py — falling back to manual setup." >&2
     return 1
   fi
-  local owner="${REPO%%/*}"
   local repo_name="${REPO##*/}"
+  detect_owner_type
   local org_flag=""
-  if [[ "$(gh api "users/$owner" --jq .type 2>/dev/null)" == "Organization" ]]; then
+  if [[ "$OWNER_TYPE" == "Organization" ]]; then
     org_flag="--org"
   fi
   echo
   echo "  Creating a GitHub App named 'Flywheel for $repo_name'..."
   local result
-  if ! result="$(python3 "$create_script" "$owner" $org_flag --app-name "Flywheel for $repo_name")"; then
+  if ! result="$(python3 "$create_script" "$OWNER" $org_flag --app-name "Flywheel for $repo_name")"; then
     echo "  error: App creation failed." >&2
     return 1
   fi
@@ -224,14 +363,14 @@ create_app_via_manifest() {
   html_url="$(echo "$result" | python3 -c 'import json,sys;print(json.load(sys.stdin)["html_url"])')"
   CREATED_APP_ID="$app_id"
   # The App ID is public information (visible on the App's settings page) so
-  # we store it as a repo Variable. Workflows reference vars.FLYWHEEL_GH_APP_ID;
+  # we store it as a Variable, not a Secret. Scope (repo vs org) follows $SCOPE.
   # init.sh reads it back on re-run for apply-rulesets.sh --app-id.
-  gh variable set FLYWHEEL_GH_APP_ID --body "$app_id" --repo "$REPO" || {
-    echo "  error: could not set FLYWHEEL_GH_APP_ID repo variable." >&2
+  write_app_id_var "$app_id" || {
+    echo "  error: could not set FLYWHEEL_GH_APP_ID variable at scope=$SCOPE." >&2
     return 1
   }
-  printf '%s' "$pem" | gh secret set FLYWHEEL_GH_APP_PRIVATE_KEY --repo "$REPO"
-  echo "  set FLYWHEEL_GH_APP_ID variable and FLYWHEEL_GH_APP_PRIVATE_KEY secret."
+  printf '%s' "$pem" | write_app_key_secret
+  echo "  set FLYWHEEL_GH_APP_ID variable and FLYWHEEL_GH_APP_PRIVATE_KEY secret (scope=$SCOPE)."
   echo
   echo "  Final manual step: install the App on $REPO."
   echo "    Open: $html_url/installations/new"
@@ -256,11 +395,11 @@ EOF
       echo "  empty App ID — skipping FLYWHEEL_GH_APP_ID variable."
     else
       CREATED_APP_ID="$app_id"
-      gh variable set FLYWHEEL_GH_APP_ID --body "$app_id" --repo "$REPO" || {
-        echo "  error: could not set FLYWHEEL_GH_APP_ID repo variable." >&2
+      write_app_id_var "$app_id" || {
+        echo "  error: could not set FLYWHEEL_GH_APP_ID variable at scope=$SCOPE." >&2
         return 1
       }
-      echo "  set FLYWHEEL_GH_APP_ID variable."
+      echo "  set FLYWHEEL_GH_APP_ID variable (scope=$SCOPE)."
     fi
   fi
   if [[ "$has_app_key" -eq 0 ]]; then
@@ -270,28 +409,88 @@ EOF
     elif [[ ! -f "$pem_path" ]]; then
       echo "  error: PEM file not found at '$pem_path' — skipping FLYWHEEL_GH_APP_PRIVATE_KEY secret." >&2
     else
-      gh secret set FLYWHEEL_GH_APP_PRIVATE_KEY --repo "$REPO" < "$pem_path"
-      echo "  set FLYWHEEL_GH_APP_PRIVATE_KEY secret."
+      write_app_key_secret < "$pem_path"
+      echo "  set FLYWHEEL_GH_APP_PRIVATE_KEY secret (scope=$SCOPE)."
     fi
   fi
 }
 
 if [[ "$SKIP_SECRETS" -eq 1 ]]; then
-  echo "  --skip-secrets set; not touching repo App credentials."
+  echo "  --skip-secrets set; not touching App credentials."
 else
+  # Repo-level lookup first (cheapest — no admin:org needed). If anything is
+  # missing AND the owner is an Organization, also probe org-level so a
+  # re-run from a repo whose creds live on the org doesn't double-prompt.
   existing_vars="$(gh variable list --json name -q '.[].name' 2>/dev/null || true)"
   existing_secrets="$(gh secret list --json name -q '.[].name' 2>/dev/null || true)"
   has_app_id=0; has_app_key=0
-  echo "$existing_vars"    | grep -qx "FLYWHEEL_GH_APP_ID"          && has_app_id=1
-  echo "$existing_secrets" | grep -qx "FLYWHEEL_GH_APP_PRIVATE_KEY" && has_app_key=1
+  app_id_found_at=""; app_key_found_at=""
+  if echo "$existing_vars" | grep -qx "FLYWHEEL_GH_APP_ID"; then
+    has_app_id=1; app_id_found_at="repo"
+  fi
+  if echo "$existing_secrets" | grep -qx "FLYWHEEL_GH_APP_PRIVATE_KEY"; then
+    has_app_key=1; app_key_found_at="repo"
+  fi
+
+  if [[ "$has_app_id" -eq 0 || "$has_app_key" -eq 0 ]]; then
+    detect_owner_type
+    if [[ "$OWNER_TYPE" == "Organization" ]]; then
+      org_vars="$(gh variable list --org "$OWNER" --json name -q '.[].name' 2>/dev/null || true)"
+      org_secrets="$(gh secret list --org "$OWNER" --json name -q '.[].name' 2>/dev/null || true)"
+      if [[ "$has_app_id" -eq 0 ]] && echo "$org_vars" | grep -qx "FLYWHEEL_GH_APP_ID"; then
+        has_app_id=1; app_id_found_at="org"
+      fi
+      if [[ "$has_app_key" -eq 0 ]] && echo "$org_secrets" | grep -qx "FLYWHEEL_GH_APP_PRIVATE_KEY"; then
+        has_app_key=1; app_key_found_at="org"
+      fi
+    fi
+  fi
 
   if [[ "$has_app_id" -eq 1 && "$has_app_key" -eq 1 ]]; then
-    echo "  FLYWHEEL_GH_APP_ID variable + FLYWHEEL_GH_APP_PRIVATE_KEY secret already set."
+    if [[ "$app_id_found_at" == "$app_key_found_at" ]]; then
+      echo "  FLYWHEEL_GH_APP_ID variable + FLYWHEEL_GH_APP_PRIVATE_KEY secret already set ($app_id_found_at-level)."
+    else
+      echo "  FLYWHEEL_GH_APP_ID set at ${app_id_found_at}-level, FLYWHEEL_GH_APP_PRIVATE_KEY at ${app_key_found_at}-level — workflows will prefer the repo-level value when both exist."
+    fi
   elif [[ "$INTERACTIVE" -eq 0 ]]; then
     echo "  non-interactive shell — skipping App-credential prompts. Set them manually:"
-    echo "    gh variable set FLYWHEEL_GH_APP_ID --body '<your-app-id>' --repo $REPO"
-    echo "    gh secret set FLYWHEEL_GH_APP_PRIVATE_KEY < /path/to/private-key.pem --repo $REPO"
+    if [[ "$SCOPE" == "org" ]]; then
+      echo "    gh variable set FLYWHEEL_GH_APP_ID --body '<your-app-id>' --org $OWNER --visibility all"
+      echo "    gh secret set FLYWHEEL_GH_APP_PRIVATE_KEY < /path/to/private-key.pem --org $OWNER --visibility all"
+    else
+      echo "    gh variable set FLYWHEEL_GH_APP_ID --body '<your-app-id>' --repo $REPO"
+      echo "    gh secret set FLYWHEEL_GH_APP_PRIVATE_KEY < /path/to/private-key.pem --repo $REPO"
+    fi
   else
+    # Resolve SCOPE before the App-source prompt so write_app_id_var /
+    # write_app_key_secret know where to write. If the owner is a User
+    # account, org-level vars/secrets don't exist on GitHub at all, so
+    # we silently lock to repo. If --scope was set explicitly, honor it.
+    if [[ -z "$SCOPE" ]]; then
+      detect_owner_type
+      if [[ "$OWNER_TYPE" == "Organization" ]]; then
+        echo
+        echo "  Where should the credentials live?"
+        echo "    1) Repo $REPO only (default)"
+        echo "    2) Org-wide ($OWNER) — visibility=all, shared across every repo in the org"
+        echo "       (requires an admin:org gh token; useful when one App serves many repos)"
+        read -r -u 3 -p "  Selection [1/2] (default 1): " scope_choice
+        case "${scope_choice:-1}" in
+          1|"") SCOPE="repo" ;;
+          2) SCOPE="org" ;;
+          *) echo "  invalid selection — defaulting to repo." >&2; SCOPE="repo" ;;
+        esac
+      else
+        SCOPE="repo"
+      fi
+    elif [[ "$SCOPE" == "org" ]]; then
+      detect_owner_type
+      if [[ "$OWNER_TYPE" != "Organization" ]]; then
+        echo "  warning: --scope org requested but $OWNER is not an Organization — falling back to repo scope." >&2
+        SCOPE="repo"
+      fi
+    fi
+
     echo
     echo "  Flywheel needs a GitHub App for installation tokens. Pick a setup path:"
     echo "    1) Create the App for me  — opens browser, ~30s round-trip"
@@ -319,13 +518,21 @@ fi
 # on as part of the same run, so the two can never be on in the wrong order
 # (#60, #94).
 if [[ "$SKIP_RULESETS" -eq 0 && -x "${SCRIPT_DIR:-}/apply-rulesets.sh" ]]; then
-  # Recover App ID for --app-id from the repo variable written on first-run.
+  # Recover App ID for --app-id from the variable written on first-run.
   # Without --app-id, apply-rulesets.sh PUTs an empty bypass_actors and the
   # App loses its bypass entry, breaking semantic-release pushes on re-runs.
   # Cheap and non-interactive — runs regardless of yn so the "skipped" hint
-  # below also includes --app-id when known.
+  # below also includes --app-id when known. Try repo-level first (matches
+  # the historical default); fall back to org-level if the owner is an
+  # Organization, so re-runs on an org-scoped install still find the value.
   if [[ -z "${CREATED_APP_ID:-}" ]]; then
     CREATED_APP_ID="$(gh variable get FLYWHEEL_GH_APP_ID --repo "$REPO" 2>/dev/null || true)"
+    if [[ -z "$CREATED_APP_ID" ]]; then
+      detect_owner_type
+      if [[ "$OWNER_TYPE" == "Organization" ]]; then
+        CREATED_APP_ID="$(gh variable get FLYWHEEL_GH_APP_ID --org "$OWNER" 2>/dev/null || true)"
+      fi
+    fi
   fi
   if [[ "$INTERACTIVE" -eq 1 ]]; then
     read -r -u 3 -p "  Apply branch + tag protection rulesets now? [y/N] " yn
@@ -364,10 +571,13 @@ if [[ "$SKIP_RULESETS" -eq 0 && -x "${SCRIPT_DIR:-}/apply-rulesets.sh" ]]; then
     # Prompt fallback if the variable is missing (e.g. user deleted it manually).
     # The non-interactive case falls through to the warning below.
     if [[ -z "${CREATED_APP_ID:-}" && "$INTERACTIVE" -eq 1 ]]; then
-      echo "  App ID not found in repo variables."
+      echo "  App ID not found in repo or org variables."
       read -r -u 3 -p "  Enter App ID for ruleset bypass-actor configuration (blank to skip): " CREATED_APP_ID
       if [[ -n "$CREATED_APP_ID" ]]; then
-        gh variable set FLYWHEEL_GH_APP_ID --body "$CREATED_APP_ID" --repo "$REPO" >/dev/null 2>&1 || true
+        # Cache for next-run readback. Use SCOPE if resolved earlier in this
+        # run, otherwise default to repo-level (safe for User-owned repos).
+        [[ -z "$SCOPE" ]] && SCOPE="repo"
+        write_app_id_var "$CREATED_APP_ID" >/dev/null 2>&1 || true
       fi
     fi
     if [[ -z "${CREATED_APP_ID:-}" ]]; then

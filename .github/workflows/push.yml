@@ -1,7 +1,20 @@
-name: Flywheel — Push
+name: Flywheel — Push (reusable)
+# Reusable workflow holding the canonical push-event logic: the action,
+# semantic-release with pinned plugin majors, the @-mention sanitizer
+# (#73), and the back-merge loop (#74). Adopters pin
+# `point-source/flywheel/.github/workflows/push.yml@v<major>` from a thin
+# caller; fixes propagate via the floating major tag. See issue #84.
 on:
-  push:
-    branches: ["**"]
+  workflow_call:
+    inputs:
+      app-id:
+        description: Numeric GitHub App ID (vars.FLYWHEEL_GH_APP_ID).
+        required: true
+        type: string
+    secrets:
+      app-private-key:
+        description: PEM-format private key (secrets.FLYWHEEL_GH_APP_PRIVATE_KEY).
+        required: true
 concurrency:
   group: flywheel-push-${{ github.ref_name }}
   cancel-in-progress: false
@@ -17,12 +30,16 @@ jobs:
           # semantic-release embeds in its push URL, and the workflow's
           # token only has read scope here.
           persist-credentials: false
-      - uses: ./
+      # Pinned to the same major as this reusable workflow's @v<major>
+      # ref. When the floating major tag advances, both this file and
+      # the action update together — adopters and sandbox tooling get a
+      # consistent pair without an override knob.
+      - uses: point-source/flywheel@v1
         id: flywheel
         with:
           event: push
-          app-id: ${{ vars.FLYWHEEL_GH_APP_ID }}
-          app-private-key: ${{ secrets.FLYWHEEL_GH_APP_PRIVATE_KEY }}
+          app-id: ${{ inputs.app-id }}
+          app-private-key: ${{ secrets.app-private-key }}
       - name: Run semantic-release
         if: steps.flywheel.outputs.managed_branch == 'true'
         # Plugins must be co-installed; npx will not resolve them from the

@@ -1,4 +1,53 @@
+# [1.1.0-dev.6](https://github.com/point-source/flywheel/compare/v1.1.0-dev.5...v1.1.0-dev.6) (2026-05-07)
+
+
+### Bug Fixes
+
+* **back-merge:** make CHANGELOG/release_files conflict-free, add PR fallback ([#112](https://github.com/point-source/flywheel/issues/112)) ([#113](https://github.com/point-source/flywheel/issues/113)) ([4befbad](https://github.com/point-source/flywheel/commit/4befbad7db49472329fdddff0a55136de714fc2f)), closes [#101](https://github.com/point-source/flywheel/issues/101)
+
+# [1.1.0-dev.5](https://github.com/point-source/flywheel/compare/v1.1.0-dev.4...v1.1.0-dev.5) (2026-05-07)
+
+
+### Features
+
+* **workflows:** ship adopter surface as reusable workflows ([#111](https://github.com/point-source/flywheel/issues/111)) ([702d3f0](https://github.com/point-source/flywheel/commit/702d3f0e9d24a858a8540f2bfb7f337ddcdbc10a))
+
+# [1.1.0-dev.4](https://github.com/point-source/flywheel/compare/v1.1.0-dev.3...v1.1.0-dev.4) (2026-05-07)
+
+
+### Bug Fixes
+
+* **promotion:** cap parallel getPullBody calls during Closes-aggregation ([#104](https://github.com/point-source/flywheel/issues/104)) ([#110](https://github.com/point-source/flywheel/issues/110)) ([be9aa66](https://github.com/point-source/flywheel/commit/be9aa660b6bda5bde9b77773b35e40d2064a9b30))
+
+# [1.1.0-dev.3](https://github.com/point-source/flywheel/compare/v1.1.0-dev.2...v1.1.0-dev.3) (2026-05-07)
+
+
+### Bug Fixes
+
+* **sandbox-reset:** default base to e2e-baseline, preserve it across resets, sweep test/* orphans ([#108](https://github.com/point-source/flywheel/issues/108)) ([2f95b93](https://github.com/point-source/flywheel/commit/2f95b932db2fc8274dd55549c2aa21d709491c92))
+
+# [1.1.0-dev.2](https://github.com/point-source/flywheel/compare/v1.1.0-dev.1...v1.1.0-dev.2) (2026-05-07)
+
+
+### Bug Fixes
+
+* **promotion:** keep duplicate-titled commits pending when SHAs overlap with target ([#103](https://github.com/point-source/flywheel/issues/103)) ([36702b7](https://github.com/point-source/flywheel/commit/36702b7f2de958f4d7c95bab922679520f7db63d))
+
+# [1.1.0-dev.1](https://github.com/point-source/flywheel/compare/v1.0.4-dev.1...v1.1.0-dev.1) (2026-05-06)
+
+
+### Features
+
+* **init:** support org-wide credential scope via --scope repo|org ([#100](https://github.com/point-source/flywheel/issues/100)) ([9ac2579](https://github.com/point-source/flywheel/commit/9ac25796b313d7751fe86281a8df43724c577b44))
+
 ## [1.0.4](https://github.com/point-source/flywheel/compare/v1.0.3...v1.0.4) (2026-05-06)
+
+
+### Bug Fixes
+
+* **release-rc:** inline ${build} as literal so semantic-release templating doesn't ReferenceError ([#98](https://github.com/point-source/flywheel/issues/98)) ([055b6d2](https://github.com/point-source/flywheel/commit/055b6d2ef8f1a690a985a18be2ad538fc9380e93))
+
+## [1.0.4-dev.1](https://github.com/point-source/flywheel/compare/v1.0.3...v1.0.4-dev.1) (2026-05-06)
 
 
 ### Bug Fixes

@@ -83,9 +83,8 @@ describe("computePendingCommits — the highest-stakes logic", () => {
   });
 
   it("already-promoted commits with identical titles on target are not re-promoted", () => {
-    // Title-equality fallback: covers cross-stream cherry-picks (different
-    // SHA, identical message) and the initial-seed case where streams
-    // haven't been promoted yet so SHA equality has no overlap to exploit.
+    // Title-equality fallback: covers the initial-seed case where streams
+    // haven't been promoted yet so there is no SHA overlap to exploit.
     const sourceCommits = [
       makeCommit("a", "fix: shared title", date("2026-01-01T10:00:00Z")),
       makeCommit("b", "feat: only on source", date("2026-01-02T10:00:00Z")),
@@ -102,6 +101,34 @@ describe("computePendingCommits — the highest-stakes logic", () => {
     });
 
     expect(pending.map((c) => c.title)).toEqual(["feat: only on source"]);
+  });
+
+  it("duplicate-titled fix is still pending when SHAs overlap with target (#102)", () => {
+    // Two distinct PRs with literally identical titles. The first was
+    // already promoted (Sha "old" reachable from target via the merge);
+    // the second (Sha "new") has the same normalized title but a different
+    // SHA. Once any SHA overlap exists, SHA-difference is authoritative —
+    // the title fallback would silently drop "new" and the second fix
+    // would never reach target.
+    const sourceCommits = [
+      makeCommit("new", "fix: typo (#2)", date("2026-01-05T10:00:00Z")),
+      makeCommit("old", "fix: typo (#1)", date("2026-01-01T10:00:00Z")),
+      makeCommit("base", "feat: original", date("2025-12-01T10:00:00Z")),
+    ];
+    const targetCommits = [
+      makeCommit("merge", "Merge pull request #50 from org/develop", date("2026-01-02T12:00:00Z")),
+      makeCommit("old", "fix: typo (#1)", date("2026-01-01T10:00:00Z")),
+      makeCommit("base", "feat: original", date("2025-12-01T10:00:00Z")),
+    ];
+
+    const pending = computePendingCommits({
+      sourceCommits,
+      targetCommits,
+      sourceName: "develop",
+      targetName: "staging",
+    });
+
+    expect(pending.map((c) => c.sha)).toEqual(["new"]);
   });
 
   it("equal source/target tips → no pending (fast-path for post-back-merge state)", () => {
@@ -475,6 +502,45 @@ describe("runPromotion — orchestration", () => {
     const getCalls = gh.calls.filter((c) => c.method === "getPullBody");
     expect(getCalls).toHaveLength(1);
     expect((getCalls[0]!.args as { prNumber: number }).prNumber).toBe(72);
+  });
+
+  it("caps parallel getPullBody calls during Closes-aggregation (#104)", async () => {
+    // Regression: aggregateClosesRefs used to fan out unbounded Promise.all
+    // over every sub-PR, tripping GitHub's secondary rate limit when pending
+    // was large (50+). The fix caps concurrency; this test asserts the cap
+    // holds by tracking max in-flight calls against a 30-commit pending list.
+    const subPrNumbers = Array.from({ length: 30 }, (_, i) => 200 + i);
+    const pullBodies: Record<number, string> = {};
+    for (const n of subPrNumbers) pullBodies[n] = `Closes #${1000 + n}`;
+    const gh = createFakeGh({
+      branchCommits: {
+        develop: subPrNumbers.map((n, i) =>
+          makeCommit(`c${i}`, `fix: x (#${n})`, date("2026-01-05T10:00:00Z")),
+        ),
+        staging: [makeCommit("s1", "chore: old", date("2025-12-01T10:00:00Z"))],
+      },
+      pullBodies,
+    });
+    let inFlight = 0;
+    let maxInFlight = 0;
+    gh.getPullBody = async (n) => {
+      inFlight++;
+      if (inFlight > maxInFlight) maxInFlight = inFlight;
+      // Yield several microtasks so peers would pile in if unbounded.
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+      inFlight--;
+      return pullBodies[n] ?? null;
+    };
+    const { log } = silentLogger();
+
+    await runPromotion({ branchRef: "develop", config, gh, log });
+
+    // Cap is 5; allow a tiny slack for scheduler quirks but reject unbounded.
+    expect(maxInFlight).toBeLessThanOrEqual(5);
+    // Sanity: aggregation actually ran and is parallelized (not sequential=1).
+    expect(maxInFlight).toBeGreaterThanOrEqual(2);
   });
 
   it("createPR errors other than 422 'No commits between' still propagate", async () => {
