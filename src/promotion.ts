@@ -254,6 +254,30 @@ export function isPromotionPR(
   return false;
 }
 
+// Back-merge fallback PRs are opened by push.yml's back-merge step when an
+// automatic main → develop merge can't be done locally (the merge drivers
+// should make this rare; see #119). They look like normal `chore` PRs but
+// must NOT be auto-merged by pr-flow: a SQUASH would collapse the released
+// commit out of the upstream branch's ancestry, leaving no post-release
+// common ancestor and re-opening the same divergence on the next promotion
+// (#120). pr-flow short-circuits on these so the PR sits with
+// `flywheel:needs-review` until a human resolves the conflicts and merges
+// with a true merge commit.
+//
+// Detection is by head-branch shape — push.yml sets it deterministically as
+// `chore/back-merge-<safe_tag>-into-<upstream>`. The base must be a managed
+// branch in the config. We deliberately don't validate the title; push.yml
+// sets it but a human resolving the conflict might rewrite it.
+export function isBackMergePR(
+  config: FlywheelConfig,
+  headRef: string,
+  baseRef: string,
+): boolean {
+  if (locateBranch(config, baseRef) === null) return false;
+  const escaped = escapeRegex(baseRef);
+  return new RegExp(`^chore/back-merge-.+-into-${escaped}$`).test(headRef);
+}
+
 function normalizeTitle(title: string): string {
   return stripPrSuffix(title).trim();
 }

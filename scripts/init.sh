@@ -286,8 +286,14 @@ fi
 # Register the per-clone driver bindings. Idempotent — `git config` overwrites
 # the same key, so re-running init.sh just re-registers the same driver.
 git config merge.flywheel-changelog.name "Flywheel CHANGELOG regenerator" >/dev/null
+# Direct redirect to "%A": git runs the driver via `sh -c`, which expands
+# variables in the value before exec. The earlier `bash -c "... > \"$1\"" -- %A`
+# form was broken — the outer sh expanded `$1` (empty in its context) before
+# reaching the inner bash, so the script reduced to `... > ""` and failed
+# silently. Single-layer redirect is correctly quoted by the shell git uses.
+# See #119.
 git config merge.flywheel-changelog.driver \
-  'bash -c "npx --yes conventional-changelog-cli@5 -p angular -r 0 > \"$1\"" -- %A' >/dev/null
+  'npx --yes conventional-changelog-cli@5 -p angular -r 0 > "%A"' >/dev/null
 git config merge.flywheel-release-file.name "Flywheel release-file (keep ours)" >/dev/null
 git config merge.flywheel-release-file.driver true >/dev/null
 echo "  registered Flywheel merge drivers in .git/config"

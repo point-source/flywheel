@@ -449,6 +449,69 @@ describe("runPrFlow", () => {
     expect(gh.calls.find((c) => c.method === "addLabels")).toBeUndefined();
   });
 
+  it("back-merge fallback PR (head matches `chore/back-merge-*-into-<base>`) short-circuits: title check posted, no auto-merge, no label churn", async () => {
+    // Regression for #120: when push.yml's back-merge fallback opens a PR,
+    // pr-flow used to label it `flywheel:auto-merge` and enable SQUASH
+    // auto-merge — collapsing the released `chore(release)` commit out of
+    // the upstream's ancestry and re-opening the divergence on the next
+    // promotion. pr-flow must short-circuit so the PR sits with
+    // `flywheel:needs-review` until a human resolves and merge-commits.
+    const gh = createFakeGh();
+    const { log } = silentLogger();
+
+    const outcome = await runPrFlow({
+      pr: makePR({
+        number: 99,
+        title: "chore: back-merge v1.1.1 from main into develop",
+        baseRef: "develop",
+        headRef: "chore/back-merge-v1.1.1-into-develop",
+      }),
+      config: baseConfig,
+      gh,
+      log,
+    });
+
+    expect(outcome).toEqual({ kind: "back-merge-pr" });
+    // Conventional-commit success check still posted so branch protection
+    // can require it.
+    expect(gh.createdChecks).toHaveLength(1);
+    expect(gh.createdChecks[0]!.conclusion).toBe("success");
+    // No body rewrite — push.yml's resolution instructions must survive.
+    expect(gh.calls.find((c) => c.method === "updatePR")).toBeUndefined();
+    // No auto-merge — this is the whole point of #120.
+    expect(gh.calls.find((c) => c.method === "enableAutoMerge")).toBeUndefined();
+    expect(gh.autoMergeEnabledFor).toEqual([]);
+    // No label churn — push.yml's `flywheel:needs-review` must persist.
+    expect(gh.calls.find((c) => c.method === "addLabels")).toBeUndefined();
+    expect(gh.calls.find((c) => c.method === "removeLabel")).toBeUndefined();
+  });
+
+  it("back-merge detection requires the deterministic head-branch shape — a manually-named branch with similar title goes through normal flow", async () => {
+    // Defensive: title alone is not load-bearing for the short-circuit.
+    // A human might write `chore: back-merge ...` for an unrelated change;
+    // only push.yml-shaped head refs (`chore/back-merge-*-into-<base>`) get
+    // the short-circuit treatment.
+    const gh = createFakeGh({
+      pullCommits: { 7: [makeCommit("aaaaaaa", "chore: back-merge something")] },
+    });
+    const { log } = silentLogger();
+
+    const outcome = await runPrFlow({
+      pr: makePR({
+        title: "chore: back-merge something useful",
+        headRef: "feature/manual-back-merge",
+        baseRef: "develop",
+      }),
+      config: baseConfig,
+      gh,
+      log,
+    });
+
+    // Normal flow: chore is in develop's auto_merge list, so this gets
+    // labeled and auto-merged like any other chore PR.
+    expect(outcome).toMatchObject({ kind: "labeled", label: FLYWHEEL_AUTO_MERGE_LABEL });
+  });
+
   it("promotion PR detection requires both edge match AND promote-shaped title — non-promotion fix from develop into main goes through normal flow", async () => {
     // A plain feature PR that happens to target main from a develop-named
     // local branch must not be misidentified as a promotion PR. Detection

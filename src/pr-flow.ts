@@ -13,7 +13,7 @@ import {
   type MergeMethod,
   type PullRequest,
 } from "./github.js";
-import { extractClosesRefs, isPromotionPR } from "./promotion.js";
+import { extractClosesRefs, isBackMergePR, isPromotionPR } from "./promotion.js";
 import { findSkipCiMarkers } from "./skip-ci.js";
 
 export type PrFlowOutcome =
@@ -21,6 +21,7 @@ export type PrFlowOutcome =
   | { kind: "parse-failed" }
   | { kind: "skip-ci-found" }
   | { kind: "promotion-pr" }
+  | { kind: "back-merge-pr" }
   | {
       kind: "labeled";
       label: typeof FLYWHEEL_AUTO_MERGE_LABEL | typeof FLYWHEEL_NEEDS_REVIEW_LABEL;
@@ -82,6 +83,28 @@ export async function runPrFlow({ pr, config, gh, log }: PrFlowDeps): Promise<Pr
     });
     log.info(`PR #${pr.number}: promotion PR — owned by runPromotion, skipping pr-flow rewrite.`);
     return { kind: "promotion-pr" };
+  }
+
+  // Back-merge fallback PRs (opened by push.yml when an automatic merge from
+  // the released branch into an upstream branch hits an unexpected conflict)
+  // must NOT be auto-merged: pr-flow's default SQUASH would collapse the
+  // released `chore(release)` commit out of the upstream's ancestry, leaving
+  // no post-release common ancestor and re-opening the same divergence on
+  // the next promotion (#120). Short-circuit so the PR sits with the
+  // `flywheel:needs-review` label push.yml applied at creation; a human
+  // resolves the conflicts and uses GitHub's "Create a merge commit" option
+  // to produce a true two-parent merge that preserves lineage.
+  if (isBackMergePR(config, pr.headRef, pr.baseRef)) {
+    await gh.createCheck({
+      name: FLYWHEEL_TITLE_CHECK,
+      conclusion: "success",
+      summary: `Valid conventional commit title.`,
+      headSha: pr.headSha,
+    });
+    log.info(
+      `PR #${pr.number}: back-merge fallback PR — needs human resolution + true merge, skipping pr-flow rewrite.`,
+    );
+    return { kind: "back-merge-pr" };
   }
 
   const commits = await gh.listPullCommits(pr.number);
