@@ -69,6 +69,45 @@ jobs:
             gh release edit "$new_tag" --notes "$sanitized" --repo "$GITHUB_REPOSITORY" >/dev/null
             echo "Sanitized @-mentions in $new_tag release body."
           fi
+      - name: Register Flywheel merge drivers
+        # CHANGELOG.md and release_files paths are derived artifacts:
+        # semantic-release writes them on each release, humans don't edit them.
+        # When develop accumulates prereleases between promotions, both sides
+        # of a back-merge have rewritten the same lines and `git merge` cannot
+        # auto-resolve — that's issue #112.
+        #
+        # Two custom drivers eliminate the conflict surface:
+        #   - flywheel-changelog: regenerates CHANGELOG.md from git tag
+        #     history (conventional-changelog-cli with the angular preset
+        #     semantic-release uses). Merge result is the union of both
+        #     sides' tags; nothing is lost.
+        #   - flywheel-release-file: `driver = true` is git's built-in
+        #     "always accept ours" — safe for release_files because
+        #     semantic-release rewrites them wholesale on the next run.
+        #
+        # Attributes go in .git/info/attributes (runtime, not committed)
+        # so the rules apply even if the adopter's checked-in
+        # .gitattributes is out of sync with their .flywheel.yml.
+        if: steps.flywheel.outputs.managed_branch == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config merge.flywheel-changelog.name "Flywheel CHANGELOG regenerator"
+          git config merge.flywheel-changelog.driver \
+            'bash -c "npx --yes conventional-changelog-cli@5 -p angular -r 0 > \"$1\"" -- %A'
+          git config merge.flywheel-release-file.name "Flywheel release-file (keep ours)"
+          git config merge.flywheel-release-file.driver true
+          mkdir -p .git/info
+          {
+            echo "CHANGELOG.md merge=flywheel-changelog"
+            if [[ -f .flywheel.yml ]]; then
+              # One-liner because YAML's block-scalar indent rules conflict
+              # with Python's significant indentation (a heredoc'd multi-line
+              # script would either break YAML or break Python). PyYAML is
+              # preinstalled on ubuntu-latest.
+              python3 -c "import yaml; cfg=yaml.safe_load(open('.flywheel.yml')) or {}; files=(cfg.get('flywheel') or {}).get('release_files') or []; [print(e['path']+' merge=flywheel-release-file') for e in files if isinstance(e, dict) and e.get('path')]" 2>/dev/null || true
+            fi
+          } > .git/info/attributes
       - name: Back-merge release into upstream branches
         # Only runs when this push triggered a release (a tag was created at
         # HEAD by semantic-release) and the stream has upstream branches.
@@ -81,6 +120,14 @@ jobs:
         # skip CI work on back-merge commits should use a job-level `if:` in
         # their quality workflows (which reports `success` and clears the
         # gate).
+        #
+        # On unexpected conflict (the merge drivers should make CHANGELOG
+        # and release_files conflict-free, so a failure here means a real
+        # source divergence) we don't push the conflicted state to the
+        # protected upstream branch. We commit the markers on a throwaway
+        # branch and open a flywheel:needs-review PR instead — the previous
+        # behavior was to exit non-zero and stall silently until the next
+        # promotion surfaced the divergence (#112).
         if: |
           steps.flywheel.outputs.managed_branch == 'true' &&
           steps.flywheel.outputs.back_merge_targets != ''
@@ -109,16 +156,44 @@ jobs:
           # .git/config has no security cost.
           auth_header="Authorization: Basic $(printf 'x-access-token:%s' "$GITHUB_TOKEN" | base64 | tr -d '\n')"
           git config "http.https://github.com/.extraheader" "$auth_header"
+          # Slugify tag for use in branch names (strip stream/v prefix slash etc.).
+          safe_tag="${new_tag//[^A-Za-z0-9._-]/-}"
           IFS=',' read -ra UPSTREAMS <<< "$BACK_MERGE_TARGETS"
           for upstream in "${UPSTREAMS[@]}"; do
             echo "::group::Back-merge $RELEASED_BRANCH ($new_tag) → $upstream"
             git fetch origin "$upstream:$upstream"
-            git checkout "$upstream"
+            # Operate on a throwaway local branch — we only push to the
+            # protected upstream when the merge lands clean. Conflicted
+            # states get pushed to a separate PR branch instead.
+            git checkout -B _flywheel_back_merge_tmp "$upstream"
             if git merge --ff-only "$RELEASED_BRANCH" 2>/dev/null; then
+              git push origin "_flywheel_back_merge_tmp:$upstream"
               echo "Fast-forwarded $upstream to $RELEASED_BRANCH."
+            elif git merge --no-ff -m "chore: back-merge $new_tag from $RELEASED_BRANCH into $upstream" "$RELEASED_BRANCH"; then
+              git push origin "_flywheel_back_merge_tmp:$upstream"
+              echo "Auto-merged $RELEASED_BRANCH into $upstream."
             else
-              git merge --no-ff -m "chore: back-merge $new_tag from $RELEASED_BRANCH into $upstream" "$RELEASED_BRANCH"
+              echo "::warning::back-merge of $new_tag into $upstream failed; opening review PR."
+              pr_branch="chore/back-merge-${safe_tag}-into-${upstream}"
+              existing="$(gh pr list --head "$pr_branch" --base "$upstream" --state open --json number --jq '.[0].number' 2>/dev/null || true)"
+              if [[ -n "$existing" ]]; then
+                echo "::notice::back-merge PR #$existing already open for $upstream — skipping."
+                git merge --abort 2>/dev/null || true
+              else
+                # `git commit` refuses to commit unresolved conflicts. `git
+                # add -A` followed by `commit --no-verify` works — the
+                # resulting commit literally contains the conflict markers,
+                # which is what we want the PR reviewer to resolve.
+                git add -A
+                git commit --no-verify -m "chore: back-merge $new_tag from $RELEASED_BRANCH into $upstream (CONFLICT — manual resolution needed)"
+                git push -f origin "_flywheel_back_merge_tmp:$pr_branch"
+                gh pr create \
+                  --base "$upstream" \
+                  --head "$pr_branch" \
+                  --title "chore: back-merge $new_tag from $RELEASED_BRANCH into $upstream" \
+                  --label "flywheel:needs-review" \
+                  --body "Automatic back-merge of \`$new_tag\` from \`$RELEASED_BRANCH\` into \`$upstream\` failed. Resolve the conflicts and merge to keep the branches in sync."
+              fi
             fi
-            git push origin "$upstream"
             echo "::endgroup::"
           done

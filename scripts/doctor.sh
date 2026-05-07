@@ -409,6 +409,57 @@ if [[ -n "${rulesets_json:-}" ]]; then
   fi
 fi
 
+# 8. .gitattributes merge-driver block. Local-only — requires reading the
+# adopter's checked-in .gitattributes against their .flywheel.yml. The CI
+# back-merge step injects equivalent rules into .git/info/attributes at run
+# time, so a missing block here doesn't break CI; it only matters for local
+# developer merges (e.g. `git pull main`). See issue #112.
+if [[ $remote_only -eq 0 && -n "$yml" ]]; then
+  bold ".gitattributes merge drivers"
+  if [[ ! -f .gitattributes ]]; then
+    warn ".gitattributes missing — local merges of CHANGELOG.md will fall back to text merge (CI is unaffected). Re-run scripts/init.sh to write the managed block."
+  elif ! grep -qF "flywheel: managed merge-driver attributes" .gitattributes; then
+    warn ".gitattributes lacks Flywheel-managed block — re-run scripts/init.sh to add it."
+  else
+    if grep -qE '^CHANGELOG\.md[[:space:]]+merge=flywheel-changelog' .gitattributes; then
+      ok "CHANGELOG.md mapped to flywheel-changelog driver"
+    else
+      warn ".gitattributes block exists but missing 'CHANGELOG.md merge=flywheel-changelog' — re-run scripts/init.sh."
+    fi
+    # Each release_files entry in .flywheel.yml should also have a
+    # merge=flywheel-release-file mapping. Init writes a comment template
+    # but not per-path entries (paths are adopter-specific); doctor surfaces
+    # the drift so adopters know to add them.
+    missing_paths="$(python3 - "$yml" <<'PY' || true
+import sys, yaml, pathlib
+yml_path = sys.argv[1]
+attrs = pathlib.Path('.gitattributes').read_text() if pathlib.Path('.gitattributes').exists() else ''
+try:
+    with open(yml_path) as f:
+        cfg = yaml.safe_load(f) or {}
+except Exception:
+    sys.exit(0)
+files = (cfg.get('flywheel') or {}).get('release_files') or []
+for entry in files:
+    path = entry.get('path') if isinstance(entry, dict) else None
+    if not path:
+        continue
+    needle = f"{path} merge=flywheel-release-file"
+    if needle not in attrs:
+        print(path)
+PY
+)"
+    if [[ -n "$missing_paths" ]]; then
+      while IFS= read -r p; do
+        [[ -z "$p" ]] && continue
+        warn "release_files path '$p' lacks merge=flywheel-release-file in .gitattributes — add: '$p merge=flywheel-release-file'"
+      done <<< "$missing_paths"
+    else
+      ok "release_files paths covered (or none declared)"
+    fi
+  fi
+fi
+
 # Summary.
 echo
 if [[ $fails -gt 0 ]]; then
