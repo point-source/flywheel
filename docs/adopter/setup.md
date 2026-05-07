@@ -284,7 +284,7 @@ Both files are also available verbatim under [`scripts/templates/`](../scripts/t
 
 > **Back-merge effect on upstream version files.** The back-merge step propagates each release tag's `chore(release)` commit into every upstream branch in the stream. For a `develop → staging → main` topology, a `staging` rc release lands a `chore(release): 1.1.0-rc.1` commit on `develop`. This is intentional — it puts the tag in `develop`'s ancestry so semantic-release's next walk computes the correct next version. Anyone reading `develop`'s version file transiently sees the rc version. There is no opt-out today.
 
-> **Bumping a non-Node version file (e.g. `pubspec.yaml`, `Cargo.toml`, `.csproj`).** Flywheel generates `.releaserc.json` from `.flywheel.yml` at runtime and overwrites any committed copy on every push — you cannot configure `semantic-release` directly. Instead, declare the file under `release_files:` in `.flywheel.yml`. Flywheel turns each entry into an `@semantic-release/exec` `prepareCmd` and adds the path to `@semantic-release/git`'s `assets` so the bumped file is committed alongside the changelog. Placeholders `${version}`, `${channel}`, and `${build}` are substituted into your `replacement`/`cmd`. For canonical recipes per ecosystem, see [`docs/adopter-recipes.md`](./adopter-recipes.md).
+> **Bumping a non-Node version file (e.g. `pubspec.yaml`, `Cargo.toml`, `.csproj`).** Flywheel generates `.releaserc.json` from `.flywheel.yml` at runtime and overwrites any committed copy on every push — you cannot configure `semantic-release` directly. Instead, declare the file under `release_files:` in `.flywheel.yml`. Flywheel turns each entry into an `@semantic-release/exec` `prepareCmd` and adds the path to `@semantic-release/git`'s `assets` so the bumped file is committed alongside the changelog. Placeholders `${version}`, `${channel}`, and `${build}` are substituted into your `replacement`/`cmd`. For canonical recipes per ecosystem, see [`recipes.md`](./recipes.md).
 
 ## 4. Add your build and publish workflows
 
@@ -578,7 +578,7 @@ If the two diverge, plan an `init.sh --force` (or a major-version migration if t
 A new major (e.g. `v2 → v3`) means breaking changes. Pre-flight:
 
 1. Read the major's release notes on the [GH releases page](https://github.com/point-source/flywheel/releases) for `BREAKING CHANGES` entries.
-2. Skim `docs/decisions/` for any ADRs flagged in those notes — major bumps usually correspond to an architectural decision documented there.
+2. Skim `docs/design/decisions/` for any ADRs flagged in those notes — major bumps usually correspond to an architectural decision documented there.
 3. Check whether any field you set in `.flywheel.yml` was removed or repurposed (e.g. `merge_strategy` was removed in `v1.0.0` per ADR 0001).
 
 Then upgrade:

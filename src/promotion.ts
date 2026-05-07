@@ -106,7 +106,7 @@ export async function runPromotion(deps: PromotionDeps): Promise<PromotionOutcom
     closesRefs,
   });
   // Promotion PRs always use a true merge commit. Squash on this edge severs
-  // ancestry between source and target — see docs/decisions/0001-hybrid-merge-strategy.md.
+  // ancestry between source and target — see docs/design/decisions/0001-hybrid-merge-strategy.md.
   const method: MergeMethod = "MERGE";
 
   const existing = await gh.listOpenPRs({ head: source.name, base: target.name });

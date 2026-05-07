@@ -189,7 +189,7 @@ Flywheel uses a hybrid merge strategy that is not adopter-configurable:
 - Feature PRs into a stream branch always **squash** so each merged PR contributes exactly one CHANGELOG entry and intermediate WIP commits stay invisible.
 - Promotion PRs (e.g. `develop` → `main`) always **merge** (true merge commit) so source ancestry is preserved. The back-merge step that follows a release similarly uses `git merge --ff-only || --no-ff` for the same reason.
 
-See [`docs/decisions/0001-hybrid-merge-strategy.md`](./docs/decisions/0001-hybrid-merge-strategy.md) for the bug class that drove this opinionated choice.
+See [`decisions/0001-hybrid-merge-strategy.md`](./decisions/0001-hybrid-merge-strategy.md) for the bug class that drove this opinionated choice.
 
 ### Branch config fields
 

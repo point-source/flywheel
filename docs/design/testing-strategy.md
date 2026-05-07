@@ -15,7 +15,7 @@ drives the full Actions event chain on that same sandbox.
 
 Sandbox repo (`point-source/flywheel-sandbox`) provisioning — including the
 Layer 3 workflow installation step — is documented in
-[`docs/sandbox-setup.md`](docs/sandbox-setup.md). Layers 2 and 3 require it.
+[`docs/maintainer/sandbox-setup.md`](../maintainer/sandbox-setup.md). Layers 2 and 3 require it.
 
 ---
 
@@ -122,13 +122,13 @@ Vitest, no parallelism (one PR pool — file-level isolation enforced via
 `vitest.integration.config.ts`). Auth is supplied via `SANDBOX_GH_TOKEN`,
 which CI mints from the `flywheel-build-e2e` GitHub App per run; for
 local runs, mint an installation token from the same App (or your own
-sandbox App) — see [`docs/sandbox-setup.md`](docs/sandbox-setup.md). Tests
+sandbox App) — see [`docs/maintainer/sandbox-setup.md`](../maintainer/sandbox-setup.md). Tests
 skip automatically when the env var is missing (fork PRs, contributors
 without provisioning access).
 
 ### Sandbox repo configuration
 
-The sandbox repo is provisioned per [`docs/sandbox-setup.md`](docs/sandbox-setup.md).
+The sandbox repo is provisioned per [`docs/maintainer/sandbox-setup.md`](../maintainer/sandbox-setup.md).
 It carries this `.flywheel.yml`:
 
 ```yaml
@@ -294,7 +294,7 @@ to `develop` (post-merge).
 
 The sandbox repo carries its own `flywheel-pr.yml` and `flywheel-push.yml`
 workflows pinned to `point-source/flywheel@develop`. Provisioning is in
-[`docs/sandbox-setup.md`](docs/sandbox-setup.md#layer-3-workflow-installation).
+[`docs/maintainer/sandbox-setup.md`](../maintainer/sandbox-setup.md#layer-3-workflow-installation).
 Because Layer 3 pins to `@develop`, it validates code already merged to
 develop — feature-branch changes ride on Layer 2 confidence.
 

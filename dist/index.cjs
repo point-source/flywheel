@@ -28828,7 +28828,7 @@ var DEFAULT_PLUGINS = [
   // flow — propagates into the next promotion PR's squash-merge body under
   // GitHub's default `squash_merge_commit_message: COMMIT_MESSAGES` setting,
   // silently suppressing every workflow on the target branch. Documented in
-  // docs/adopter-setup.md §0.4.
+  // docs/adopter/setup.md §0.4.
   [
     GIT_PLUGIN,
     {

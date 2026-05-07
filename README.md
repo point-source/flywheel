@@ -29,7 +29,7 @@ curl -fsSL https://raw.githubusercontent.com/point-source/flywheel/main/scripts/
 curl -fsSL https://raw.githubusercontent.com/point-source/flywheel/main/scripts/doctor.sh | bash
 ```
 
-> **Adopting into an existing repo** with prior version tags, release automation, or branch protection? Skip `init.sh` and start with [docs/adopter-setup.md §0](./docs/adopter-setup.md#0-adopting-flywheel-into-an-existing-project) — it covers the audit and cleanup steps the script doesn't.
+> **Adopting into an existing repo** with prior version tags, release automation, or branch protection? Skip `init.sh` and start with [docs/adopter/setup.md §0](./docs/adopter/setup.md#0-adopting-flywheel-into-an-existing-project) — it covers the audit and cleanup steps the script doesn't.
 
 The hand-rolled equivalent — four files in your repo:
 
@@ -37,8 +37,8 @@ The hand-rolled equivalent — four files in your repo:
 your-repo/
 ├── .flywheel.yml                    ← you write this
 └── .github/workflows/
-    ├── flywheel-pr.yml              ← copy from docs/adopter-setup.md
-    ├── flywheel-push.yml            ← copy from docs/adopter-setup.md
+    ├── flywheel-pr.yml              ← copy from docs/adopter/setup.md
+    ├── flywheel-push.yml            ← copy from docs/adopter/setup.md
     ├── quality.yml                  ← you write: on: pull_request + merge_group
     ├── build.yml                    ← you write: on: release published
     └── publish.yml                  ← you write: on: workflow_run
@@ -60,7 +60,7 @@ flywheel:
           auto_merge: []
 ```
 
-See **[docs/adopter-setup.md](./docs/adopter-setup.md)** for the full setup walkthrough including the workflow templates, branch protection rulesets, and required secret scopes.
+See **[docs/adopter/setup.md](./docs/adopter/setup.md)** for the full setup walkthrough including the workflow templates, branch protection rulesets, and required secret scopes.
 
 ## How it works
 
@@ -158,7 +158,7 @@ Flywheel validates `.flywheel.yml` on every run. Validation errors fail the acti
 - Only one stream may produce the primary `v${version}` tag namespace; all other streams use a stream-prefixed tag format.
 - `auto_merge` entries must be recognized conventional commit types (with optional `!`).
 
-See [spec.md §Validation](./spec.md#validation) for the full list.
+See [spec.md §Validation](./docs/design/spec.md#validation) for the full list.
 
 ## Development
 
@@ -180,8 +180,10 @@ MIT — see [LICENSE.md](./LICENSE.md).
 
 ## Related docs
 
-- **[spec.md](./spec.md)** — full specification
-- **[docs/adopter-setup.md](./docs/adopter-setup.md)** — adopter walkthrough (see §8 for upgrading)
+- **[docs/](./docs/)** — full documentation index
+- **[docs/design/spec.md](./docs/design/spec.md)** — full specification
+- **[docs/design/requirements.md](./docs/design/requirements.md)** — requirements Flywheel exists to satisfy
+- **[docs/adopter/setup.md](./docs/adopter/setup.md)** — adopter walkthrough (see §8 for upgrading)
 - **[CONTRIBUTING.md](./CONTRIBUTING.md)** — contributor and sandbox-testing guide
-- **[docs/maintainer-setup.md](./docs/maintainer-setup.md)** — operating Flywheel itself
-- **[docs/maintainer-release-process.md](./docs/maintainer-release-process.md)** — cutting a Flywheel release
+- **[docs/maintainer/setup.md](./docs/maintainer/setup.md)** — operating Flywheel itself
+- **[docs/maintainer/release-process.md](./docs/maintainer/release-process.md)** — cutting a Flywheel release
