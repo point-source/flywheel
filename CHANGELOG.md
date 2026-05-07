@@ -1,3 +1,10 @@
+# [1.1.0-dev.5](https://github.com/point-source/flywheel/compare/v1.1.0-dev.4...v1.1.0-dev.5) (2026-05-07)
+
+
+### Features
+
+* **workflows:** ship adopter surface as reusable workflows ([#111](https://github.com/point-source/flywheel/issues/111)) ([702d3f0](https://github.com/point-source/flywheel/commit/702d3f0e9d24a858a8540f2bfb7f337ddcdbc10a))
+
 # [1.1.0-dev.4](https://github.com/point-source/flywheel/compare/v1.1.0-dev.3...v1.1.0-dev.4) (2026-05-07)
 
 
