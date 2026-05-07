@@ -83,9 +83,8 @@ describe("computePendingCommits — the highest-stakes logic", () => {
   });
 
   it("already-promoted commits with identical titles on target are not re-promoted", () => {
-    // Title-equality fallback: covers cross-stream cherry-picks (different
-    // SHA, identical message) and the initial-seed case where streams
-    // haven't been promoted yet so SHA equality has no overlap to exploit.
+    // Title-equality fallback: covers the initial-seed case where streams
+    // haven't been promoted yet so there is no SHA overlap to exploit.
     const sourceCommits = [
       makeCommit("a", "fix: shared title", date("2026-01-01T10:00:00Z")),
       makeCommit("b", "feat: only on source", date("2026-01-02T10:00:00Z")),
@@ -102,6 +101,34 @@ describe("computePendingCommits — the highest-stakes logic", () => {
     });
 
     expect(pending.map((c) => c.title)).toEqual(["feat: only on source"]);
+  });
+
+  it("duplicate-titled fix is still pending when SHAs overlap with target (#102)", () => {
+    // Two distinct PRs with literally identical titles. The first was
+    // already promoted (Sha "old" reachable from target via the merge);
+    // the second (Sha "new") has the same normalized title but a different
+    // SHA. Once any SHA overlap exists, SHA-difference is authoritative —
+    // the title fallback would silently drop "new" and the second fix
+    // would never reach target.
+    const sourceCommits = [
+      makeCommit("new", "fix: typo (#2)", date("2026-01-05T10:00:00Z")),
+      makeCommit("old", "fix: typo (#1)", date("2026-01-01T10:00:00Z")),
+      makeCommit("base", "feat: original", date("2025-12-01T10:00:00Z")),
+    ];
+    const targetCommits = [
+      makeCommit("merge", "Merge pull request #50 from org/develop", date("2026-01-02T12:00:00Z")),
+      makeCommit("old", "fix: typo (#1)", date("2026-01-01T10:00:00Z")),
+      makeCommit("base", "feat: original", date("2025-12-01T10:00:00Z")),
+    ];
+
+    const pending = computePendingCommits({
+      sourceCommits,
+      targetCommits,
+      sourceName: "develop",
+      targetName: "staging",
+    });
+
+    expect(pending.map((c) => c.sha)).toEqual(["new"]);
   });
 
   it("equal source/target tips → no pending (fast-path for post-back-merge state)", () => {

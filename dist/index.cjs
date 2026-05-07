@@ -28477,6 +28477,10 @@ function computePendingCommits(input) {
     return [];
   }
   const targetShas = new Set(targetCommits.map((c) => c.sha));
+  const hasShaOverlap = sourceCommits.some((c) => targetShas.has(c.sha));
+  if (hasShaOverlap) {
+    return sourceCommits.filter((c) => !targetShas.has(c.sha));
+  }
   const targetTitles = new Set(targetCommits.map((c) => normalizeTitle(c.title)));
   return sourceCommits.filter(
     (c) => !targetShas.has(c.sha) && !targetTitles.has(normalizeTitle(c.title))

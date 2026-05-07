@@ -203,12 +203,21 @@ export function computePendingCommits(input: PendingDetectionInput): Commit[] {
   // Approximate `git log target..source` from the two reachable-history
   // listings: a source commit is pending iff it isn't already on target.
   // Under hybrid mode promotion PRs land as true merge commits, so source
-  // commits become reachable from target and SHA equality is authoritative.
-  // Title equality is a fallback for cross-stream cherry-picks (different
-  // SHA, identical message) and the initial-seed case where the streams
-  // haven't been promoted yet so no SHAs overlap. Strip the `(#NN)` suffix
-  // GitHub appends on squash merges before comparing.
+  // commits become reachable from target and SHA equality is authoritative
+  // once the streams have been promoted at least once. Title equality is
+  // only a sound fallback in the initial-seed case (no SHAs overlap yet) —
+  // applying it after the first promotion silently drops a legitimately
+  // pending commit whose title happens to match an already-promoted one
+  // (two distinct PRs with identical titles). See #102.
   const targetShas = new Set(targetCommits.map((c) => c.sha));
+  const hasShaOverlap = sourceCommits.some((c) => targetShas.has(c.sha));
+  if (hasShaOverlap) {
+    return sourceCommits.filter((c) => !targetShas.has(c.sha));
+  }
+
+  // Initial-seed path: no SHA overlap yet, so SHA-difference can't tell
+  // pending from already-on-target. Fall back to title-difference (after
+  // stripping GitHub's `(#NN)` squash-merge suffix).
   const targetTitles = new Set(targetCommits.map((c) => normalizeTitle(c.title)));
   return sourceCommits.filter(
     (c) => !targetShas.has(c.sha) && !targetTitles.has(normalizeTitle(c.title)),
