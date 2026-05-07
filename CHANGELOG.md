@@ -1,3 +1,10 @@
+# [1.1.0-dev.4](https://github.com/point-source/flywheel/compare/v1.1.0-dev.3...v1.1.0-dev.4) (2026-05-07)
+
+
+### Bug Fixes
+
+* **promotion:** cap parallel getPullBody calls during Closes-aggregation ([#104](https://github.com/point-source/flywheel/issues/104)) ([#110](https://github.com/point-source/flywheel/issues/110)) ([be9aa66](https://github.com/point-source/flywheel/commit/be9aa660b6bda5bde9b77773b35e40d2064a9b30))
+
 # [1.1.0-dev.3](https://github.com/point-source/flywheel/compare/v1.1.0-dev.2...v1.1.0-dev.3) (2026-05-07)
 
 
