@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
@@ -78,6 +78,31 @@ describe.skipIf(!ghAuthenticated())("init.sh deterministic file emission", () =>
             `${wf} should have no placeholder remaining`,
           ).toBe(false);
         }
+
+        // .gitattributes block is what makes back-merges conflict-free
+        // (see issue #112) — guard against the block silently dropping out
+        // of init.sh. We assert the marker comments + the CHANGELOG.md
+        // mapping; release_files paths are adopter-specific.
+        expect(existsSync(join(work, ".gitattributes")), ".gitattributes written").toBe(true);
+        const attrs = readFileSync(join(work, ".gitattributes"), "utf8");
+        expect(attrs).toContain("# >>> flywheel: managed merge-driver attributes");
+        expect(attrs).toContain("CHANGELOG.md merge=flywheel-changelog");
+        expect(attrs).toContain("# <<< flywheel: managed merge-driver attributes");
+
+        // Local driver registration via `git config` — required because
+        // .gitattributes alone doesn't make custom merge drivers run
+        // (clones don't inherit merge.<name>.driver entries).
+        const cfg = execFileSync("git", ["config", "--get", "merge.flywheel-changelog.driver"], {
+          cwd: work,
+          encoding: "utf8",
+        }).trim();
+        expect(cfg).toContain("conventional-changelog-cli");
+        const ours = execFileSync(
+          "git",
+          ["config", "--get", "merge.flywheel-release-file.driver"],
+          { cwd: work, encoding: "utf8" },
+        ).trim();
+        expect(ours).toBe("true");
       } finally {
         rmSync(work, { recursive: true, force: true });
       }

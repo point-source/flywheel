@@ -238,6 +238,60 @@ for wf in flywheel-pr.yml flywheel-push.yml; do
   fi
 done
 
+# 2.5 Merge drivers for derived artifacts (CHANGELOG.md, release_files paths).
+#
+# Two pieces are needed to make `git merge` apply a custom driver: a
+# `.gitattributes` rule mapping the path to a driver name (committed —
+# travels with clones), and a `merge.<name>.driver` git config entry
+# mapping the name to a command (per-clone — does NOT travel). Without
+# both, git silently falls back to the default text merge.
+#
+# CI registers the same drivers in .git/info/attributes at workflow time
+# (see flywheel-push.yml), so the back-merge step works regardless of
+# whether the adopter committed the .gitattributes lines. Writing them
+# here is for local devs who do `git pull main` or otherwise merge
+# locally — without these, they'd hit textual conflicts on CHANGELOG.md
+# even though CI handles them cleanly. See issue #112.
+ATTR_BEGIN="# >>> flywheel: managed merge-driver attributes (do not edit) >>>"
+ATTR_END="# <<< flywheel: managed merge-driver attributes <<<"
+ATTR_BLOCK="$ATTR_BEGIN
+CHANGELOG.md merge=flywheel-changelog
+# Add a line per release_files entry from .flywheel.yml, e.g.:
+#   pubspec.yaml merge=flywheel-release-file
+$ATTR_END"
+
+if [[ -f .gitattributes ]] && grep -qF "$ATTR_BEGIN" .gitattributes; then
+  # Strip the existing managed block (begin-marker line through end-marker
+  # line, inclusive). sed -i.bak is portable across BSD (macOS) and GNU.
+  sed -i.bak '/^# >>> flywheel: managed merge-driver attributes/,/^# <<< flywheel: managed merge-driver attributes/d' .gitattributes
+  rm -f .gitattributes.bak
+  refreshed=1
+else
+  refreshed=0
+fi
+# Ensure the file ends in a newline before appending so the block sits on
+# its own line. `tail -c 1` of a newline-terminated file is "" via command
+# substitution (trailing newline stripped); a non-empty result means the
+# file's last byte is some non-newline char and we need to insert a break.
+if [[ -f .gitattributes && -s .gitattributes ]] && [[ "$(tail -c 1 .gitattributes)" != "" ]]; then
+  printf '\n' >> .gitattributes
+fi
+printf '%s\n' "$ATTR_BLOCK" >> .gitattributes
+if [[ $refreshed -eq 1 ]]; then
+  echo "  refreshed Flywheel block in .gitattributes"
+else
+  echo "  wrote Flywheel block to .gitattributes"
+fi
+
+# Register the per-clone driver bindings. Idempotent — `git config` overwrites
+# the same key, so re-running init.sh just re-registers the same driver.
+git config merge.flywheel-changelog.name "Flywheel CHANGELOG regenerator" >/dev/null
+git config merge.flywheel-changelog.driver \
+  'bash -c "npx --yes conventional-changelog-cli@5 -p angular -r 0 > \"$1\"" -- %A' >/dev/null
+git config merge.flywheel-release-file.name "Flywheel release-file (keep ours)" >/dev/null
+git config merge.flywheel-release-file.driver true >/dev/null
+echo "  registered Flywheel merge drivers in .git/config"
+
 # 3. App-token secrets.
 #
 # SCOPE controls where the credentials live:
