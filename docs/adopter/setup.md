@@ -180,7 +180,6 @@ jobs:
     uses: point-source/flywheel/.github/workflows/pr.yml@v1
     with:
       app-id: ${{ vars.FLYWHEEL_GH_APP_ID }}
-      flywheel-ref: v1
     secrets:
       app-private-key: ${{ secrets.FLYWHEEL_GH_APP_PRIVATE_KEY }}
 ```
@@ -199,14 +198,13 @@ jobs:
     uses: point-source/flywheel/.github/workflows/push.yml@v1
     with:
       app-id: ${{ vars.FLYWHEEL_GH_APP_ID }}
-      flywheel-ref: v1
     secrets:
       app-private-key: ${{ secrets.FLYWHEEL_GH_APP_PRIVATE_KEY }}
 ```
 
 The reusable workflows ([`pr.yml`](../../.github/workflows/pr.yml) and [`push.yml`](../../.github/workflows/push.yml) in this repo) hold the canonical step list — the `actions/checkout@v6` call, the conduct/release job's `if:` guards, the `semantic-release` invocation with pinned plugin majors, the `@`-mention sanitizer for release bodies (#73), and the post-release back-merge loop with App-token extraheader plumbing (#68, #74). Open them if you want to read the inline shell the bot will run on your repo. Both files are also installed verbatim by `init.sh` in the quick-start path; thin templates live under [`scripts/templates/`](../../scripts/templates/).
 
-The `flywheel-ref: v1` input pins the action ref the reusable workflow uses internally to the same major you pinned the reusable workflow at. It is redundant in normal use (the reusable workflow defaults to `v1` if you omit the input), but keeping it visible at the call site means a single `init.sh --force` upgrades both pins in lockstep. Sandbox/e2e tooling overrides this input to test arbitrary action SHAs against a released reusable workflow.
+Both pins move together via the floating `@v<major>` tag: the reusable workflow file at `@v1` hardcodes its action ref to `point-source/flywheel@v1`. When the floating major advances, the reusable workflow body and the action it invokes update in lockstep. There is no override knob — adopters who need to test arbitrary action SHAs (e.g. against a fork) inline the workflow shell instead of calling the reusable workflow.
 
 > **Permissions intersection.** A reusable workflow's job inherits the intersection of the caller's `permissions:` block and its own. Flywheel's reusable workflows do not declare a `permissions:` block — they rely on the App installation token that the action mints internally, not the runner's `GITHUB_TOKEN`, for every write. Adopters do not need to grant any additional permissions on the caller side beyond the repo's defaults.
 
@@ -459,11 +457,11 @@ Merge the PR. On the resulting push, confirm:
 
 ## 8. Upgrading Flywheel
 
-Flywheel ships as a pair of reusable workflows (`point-source/flywheel/.github/workflows/{pr,push}.yml`) plus the action bundle (`point-source/flywheel`). Your `.github/workflows/flywheel-{pr,push}.yml` callers pin both at `@v<major>` (e.g. `@v1`). Bug fixes and non-breaking features — including changes to the inline shell that the reusable workflow contains (back-merge loop, `@`-mention sanitizer, semantic-release plumbing) — ride the floating major tag and are picked up on the next workflow run with no action from you.
+Flywheel ships as a pair of reusable workflows (`point-source/flywheel/.github/workflows/{pr,push}.yml`) plus the action bundle (`point-source/flywheel`). Your `.github/workflows/flywheel-{pr,push}.yml` callers pin the reusable workflows at `@v<major>` (e.g. `@v1`); the reusable workflows pin the action at the same `@v<major>` internally. Bug fixes and non-breaking features — including changes to the inline shell that the reusable workflow contains (back-merge loop, `@`-mention sanitizer, semantic-release plumbing) — ride the floating major tag and are picked up on the next workflow run with no action from you.
 
 ### 8.1 The fast path (essentially all upgrades within a major)
 
-Within a major, do nothing. The reusable workflow's behavior follows `@v<major>`, and the action ref it runs internally floats with the same major via the `flywheel-ref: v<major>` input. Read the [CHANGELOG](https://github.com/point-source/flywheel/blob/main/CHANGELOG.md) to know what shipped.
+Within a major, do nothing. The reusable workflow's behavior follows `@v<major>`, and the action ref it runs internally is hardcoded to the same major. Read the [CHANGELOG](https://github.com/point-source/flywheel/blob/main/CHANGELOG.md) to know what shipped.
 
 The fixes that historically required adopters to re-run `init.sh --force` (#68 back-merge auth header, #73 `@`-mention sanitizer, #74 post-release back-merge loop) all live inside the reusable workflow now — they propagate via the floating major tag the same way `dist/index.cjs` fixes do.
 
@@ -476,7 +474,7 @@ curl -fsSL https://raw.githubusercontent.com/point-source/flywheel/main/scripts/
 bash /tmp/flywheel-init.sh --force
 ```
 
-`init.sh --force` overwrites `.github/workflows/flywheel-pr.yml` and `flywheel-push.yml` from the latest templates and re-pins them to the latest released major. It leaves your `.flywheel.yml`, App credentials, and rulesets untouched. Review the diff before you commit.
+`init.sh --force` overwrites `.github/workflows/flywheel-pr.yml` and `flywheel-push.yml` from the latest templates and re-pins them to the latest released major. It leaves your `.flywheel.yml`, App credentials, and rulesets untouched. Review the diff before you commit. `init.sh` HEAD-probes the reusable workflow files at the resolved ref before writing the templates, so the rare race between a stable release publishing and the floating tag advancing fails closed with a clear message instead of producing a broken caller.
 
 ### 8.3 Major-version migration
 
@@ -502,7 +500,7 @@ Open a small `chore: post-upgrade smoke` PR and confirm the same things you conf
 
 ### 8.4 Rolling back
 
-Floating major tags don't pin you to a known-good build. If a recent `@v<major>` release misbehaves, edit both pins in your caller workflow YAMLs to a specific tag (e.g. `@v1.2.0` on the `uses:` line and `flywheel-ref: v1.2.0` on the input) until you can investigate. This is also a reasonable default for repos with strict change-control requirements — you trade auto-upgrade for fully reproducible runs.
+Floating major tags don't pin you to a known-good build. If a recent `@v<major>` release misbehaves, edit the `uses:` line in your caller workflow YAMLs to pin a specific tag (e.g. `point-source/flywheel/.github/workflows/pr.yml@v1.2.0`) until you can investigate. The reusable workflow at that tag will reference the matching action SHA. This is also a reasonable default for repos with strict change-control requirements — you trade auto-upgrade for fully reproducible runs.
 
 ## 9. Troubleshooting
 

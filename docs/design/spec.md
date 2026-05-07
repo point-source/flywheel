@@ -502,7 +502,6 @@ jobs:
     uses: point-source/flywheel/.github/workflows/pr.yml@v1
     with:
       app-id: ${{ vars.FLYWHEEL_GH_APP_ID }}
-      flywheel-ref: v1
     secrets:
       app-private-key: ${{ secrets.FLYWHEEL_GH_APP_PRIVATE_KEY }}
 ```
@@ -519,7 +518,6 @@ jobs:
     uses: point-source/flywheel/.github/workflows/push.yml@v1
     with:
       app-id: ${{ vars.FLYWHEEL_GH_APP_ID }}
-      flywheel-ref: v1
     secrets:
       app-private-key: ${{ secrets.FLYWHEEL_GH_APP_PRIVATE_KEY }}
 ```

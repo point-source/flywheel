@@ -10,24 +10,13 @@ on:
         description: Numeric GitHub App ID (vars.FLYWHEEL_GH_APP_ID).
         required: true
         type: string
-      flywheel-ref:
-        description: |
-          Override the action ref this reusable workflow runs internally.
-          Adopters should leave at default — the floating major already
-          floats both the reusable workflow and the action together.
-          Sandbox/e2e tooling overrides this to test arbitrary SHAs.
-        required: false
-        type: string
-        default: v1
     secrets:
       app-private-key:
         description: PEM-format private key (secrets.FLYWHEEL_GH_APP_PRIVATE_KEY).
         required: true
-
 concurrency:
   group: flywheel-pr-${{ github.event.pull_request.number }}
   cancel-in-progress: true
-
 jobs:
   conduct:
     # Only run on 'edited' events when a human triggered the edit.
@@ -40,7 +29,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - uses: point-source/flywheel@${{ inputs.flywheel-ref }}
+      # Pinned to the same major as this reusable workflow's @v<major>
+      # ref. When the floating major tag advances, both this file and
+      # the action update together — adopters and sandbox tooling get a
+      # consistent pair without an override knob.
+      - uses: point-source/flywheel@v1
         with:
           event: pull_request
           app-id: ${{ inputs.app-id }}

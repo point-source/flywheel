@@ -35,10 +35,24 @@ if (!token) throw new Error("SANDBOX_GH_TOKEN is not set");
 if (!actionRef) throw new Error("FLYWHEEL_ACTION_REF is not set");
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
-const pushTpl = readFileSync(join(repoRoot, "scripts/templates/flywheel-push.yml"), "utf8")
-  .replaceAll("__FLYWHEEL_VERSION__", actionRef);
-const prTpl = readFileSync(join(repoRoot, "scripts/templates/flywheel-pr.yml"), "utf8")
-  .replaceAll("__FLYWHEEL_VERSION__", actionRef);
+
+// Source the dogfood inline workflows, not scripts/templates/. The
+// templates are now thin callers of point-source/flywheel/.github/workflows/
+// {pr,push}.yml@<ref>, and the reusable workflow file at <ref> hardcodes
+// `point-source/flywheel@v1` — meaning sandbox e2e of an arbitrary SHA
+// would test the action at v1 (released), not the SHA under test. The
+// dogfood files use `uses: ./`, so we rewrite that to
+// `point-source/flywheel@<sha>` to pin the action at the SHA under test.
+// The dogfood inline shell is kept in lockstep with the reusable
+// workflow body by tests/workflow-template-parity.test.ts.
+const pinAction = (yaml) =>
+  yaml.replace(/uses:\s*\.\//g, `uses: point-source/flywheel@${actionRef}`);
+const pushTpl = pinAction(
+  readFileSync(join(repoRoot, ".github/workflows/flywheel-push.yml"), "utf8"),
+);
+const prTpl = pinAction(
+  readFileSync(join(repoRoot, ".github/workflows/flywheel-pr.yml"), "utf8"),
+);
 const fwYml = readFileSync(join(repoRoot, "tests/e2e/fixtures/sandbox.flywheel.yml"), "utf8");
 
 const FILES = [
