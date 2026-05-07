@@ -52,11 +52,14 @@ def main() -> int:
     state = _secrets.token_urlsafe(16)
     redirect_url = f"http://localhost:{port}/callback"
 
+    # Minimal manifest — only the fields GitHub's validator definitely
+    # accepts. `public` defaults to private when omitted; `default_events`
+    # must either be a non-empty array of valid event names or be omitted
+    # entirely (an empty array trips "Unable to load App Manifest").
     manifest = {
         "name": args.app_name,
         "url": MANIFEST_URL,
         "redirect_url": redirect_url,
-        "public": False,
         "default_permissions": {
             "contents": "write",
             "issues": "write",
@@ -64,7 +67,6 @@ def main() -> int:
             "checks": "write",
             "metadata": "read",
         },
-        "default_events": [],
     }
 
     # GitHub's manifest flow only reads `manifest` from a form-POST body —
@@ -79,14 +81,16 @@ def main() -> int:
     start_url = f"http://localhost:{port}/start"
     manifest_json = json.dumps(manifest)
     start_html = (
-        "<!DOCTYPE html><html><body onload=\"document.forms[0].submit()\" "
+        "<!DOCTYPE html><html><body "
         "style=\"font-family:-apple-system,sans-serif;padding:2rem;max-width:600px;margin:0 auto;\">"
         "<h2>Redirecting to GitHub...</h2>"
         "<p>If your browser doesn't redirect automatically, click the button below.</p>"
-        f"<form action=\"{html.escape(gh_action, quote=True)}?state={html.escape(state, quote=True)}\" method=\"post\">"
+        f"<form id=\"f\" action=\"{html.escape(gh_action, quote=True)}?state={html.escape(state, quote=True)}\" method=\"post\">"
         f"<input type=\"hidden\" name=\"manifest\" value=\"{html.escape(manifest_json, quote=True)}\">"
         "<button type=\"submit\">Continue to GitHub</button>"
-        "</form></body></html>"
+        "</form>"
+        "<script>document.getElementById(\"f\").submit();</script>"
+        "</body></html>"
     )
 
     captured: dict = {}
