@@ -1,3 +1,10 @@
+## [1.1.2-dev.2](https://github.com/point-source/flywheel/compare/v1.1.2-dev.1...v1.1.2-dev.2) (2026-05-07)
+
+
+### Bug Fixes
+
+* **init:** pre-fill Create-App page via POST manifest ([#125](https://github.com/point-source/flywheel/issues/125)) ([c25ef24](https://github.com/point-source/flywheel/commit/c25ef2422bb8820ea1d9f8f9c7b94c149025de39)), closes [#121](https://github.com/point-source/flywheel/issues/121)
+
 ## [1.1.2-dev.1](https://github.com/point-source/flywheel/compare/v1.1.1...v1.1.2-dev.1) (2026-05-07)
 
 
