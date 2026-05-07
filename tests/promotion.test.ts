@@ -4,6 +4,7 @@ import {
   runPromotion,
   computePendingCommits,
   extractClosesRefs,
+  isBackMergePR,
   isPromotionPR,
 } from "../src/promotion.js";
 import {
@@ -586,6 +587,40 @@ describe("isPromotionPR — promotion PR detection used by pr-flow short-circuit
     expect(isPromotionPR(config, "staging", "main", "fix: regular bug fix")).toBe(false);
     expect(isPromotionPR(config, "staging", "main", "promote staging → main")).toBe(false);
     expect(isPromotionPR(config, "staging", "main", "fix: promote main → staging")).toBe(false);
+  });
+});
+
+describe("isBackMergePR — fallback PR detection used by pr-flow short-circuit", () => {
+  it("matches push.yml's deterministic head-branch shape against any managed base", () => {
+    expect(isBackMergePR(config, "chore/back-merge-v1.1.1-into-develop", "develop")).toBe(true);
+    expect(isBackMergePR(config, "chore/back-merge-v1.1.1-into-staging", "staging")).toBe(true);
+    // Single-branch stream — back-merge isn't possible end-to-end, but
+    // detection still matches if push.yml ever opens such a PR.
+    expect(
+      isBackMergePR(config, "chore/back-merge-v1.0.0-into-customer-acme", "customer-acme"),
+    ).toBe(true);
+  });
+
+  it("tolerates the safe_tag slugification push.yml applies", () => {
+    // push.yml: safe_tag="${new_tag//[^A-Za-z0-9._-]/-}" — slashes, spaces,
+    // and other punctuation become '-'. Multi-stream tags like
+    // `customer-acme/v1.2.3` slugify to `customer-acme-v1.2.3`.
+    expect(
+      isBackMergePR(config, "chore/back-merge-customer-acme-v1.2.3-into-develop", "develop"),
+    ).toBe(true);
+  });
+
+  it("rejects when head shape doesn't match", () => {
+    expect(isBackMergePR(config, "feature/x", "develop")).toBe(false);
+    expect(isBackMergePR(config, "chore/back-merge-into-develop", "develop")).toBe(false);
+    expect(isBackMergePR(config, "back-merge-v1.1.1-into-develop", "develop")).toBe(false);
+    // Wrong upstream in the suffix — head says it targets staging but base is
+    // develop. push.yml never produces this, but reject defensively.
+    expect(isBackMergePR(config, "chore/back-merge-v1.1.1-into-staging", "develop")).toBe(false);
+  });
+
+  it("rejects when base is not a managed branch", () => {
+    expect(isBackMergePR(config, "chore/back-merge-v1.1.1-into-feature/x", "feature/x")).toBe(false);
   });
 });
 
