@@ -1,3 +1,10 @@
+# [1.1.0-dev.2](https://github.com/point-source/flywheel/compare/v1.1.0-dev.1...v1.1.0-dev.2) (2026-05-07)
+
+
+### Bug Fixes
+
+* **promotion:** keep duplicate-titled commits pending when SHAs overlap with target ([#103](https://github.com/point-source/flywheel/issues/103)) ([36702b7](https://github.com/point-source/flywheel/commit/36702b7f2de958f4d7c95bab922679520f7db63d))
+
 # [1.1.0-dev.1](https://github.com/point-source/flywheel/compare/v1.0.4-dev.1...v1.1.0-dev.1) (2026-05-06)
 
 
