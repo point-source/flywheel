@@ -11,9 +11,9 @@ Two non-negotiables you'll hit immediately:
 
 ## Where to start
 
-- **Product behavior + design rationale**: [`spec.md`](./spec.md) is authoritative — doc-vs-doc disagreements resolve to spec.md.
+- **Product behavior + design rationale**: [`docs/design/spec.md`](./docs/design/spec.md) is authoritative — doc-vs-doc disagreements resolve to spec.md.
 - **Contribution rules, build/test commands, dogfood loop**: [`CONTRIBUTING.md`](./CONTRIBUTING.md).
-- **User-facing onboarding** (what an adopter reads): [`docs/adopter-setup.md`](./docs/adopter-setup.md).
+- **User-facing onboarding** (what an adopter reads): [`docs/adopter/setup.md`](./docs/adopter/setup.md).
 
 ## Architecture in one paragraph
 
