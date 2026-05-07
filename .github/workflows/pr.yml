@@ -1,0 +1,47 @@
+name: Flywheel — PR (reusable)
+# Reusable workflow holding the canonical PR-event logic. Adopters pin
+# `point-source/flywheel/.github/workflows/pr.yml@v<major>` from a thin
+# caller; bug fixes and template tightening land here and propagate via
+# the floating major tag without an adopter PR. See issue #84.
+on:
+  workflow_call:
+    inputs:
+      app-id:
+        description: Numeric GitHub App ID (vars.FLYWHEEL_GH_APP_ID).
+        required: true
+        type: string
+      flywheel-ref:
+        description: |
+          Override the action ref this reusable workflow runs internally.
+          Adopters should leave at default — the floating major already
+          floats both the reusable workflow and the action together.
+          Sandbox/e2e tooling overrides this to test arbitrary SHAs.
+        required: false
+        type: string
+        default: ""
+    secrets:
+      app-private-key:
+        description: PEM-format private key (secrets.FLYWHEEL_GH_APP_PRIVATE_KEY).
+        required: true
+
+concurrency:
+  group: flywheel-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  conduct:
+    # Only run on 'edited' events when a human triggered the edit.
+    # Bot-driven edits (the Flywheel App rewriting titles/bodies, push-flow
+    # upserting promotion PR bodies) would otherwise flap conduct ↔ push-flow
+    # writes on every promotion-source push.
+    if: |
+      github.event.pull_request.draft == false &&
+      (github.event.action != 'edited' || github.event.sender.type == 'User')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: point-source/flywheel@${{ inputs.flywheel-ref || 'v1' }}
+        with:
+          event: pull_request
+          app-id: ${{ inputs.app-id }}
+          app-private-key: ${{ secrets.app-private-key }}

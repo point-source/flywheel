@@ -157,7 +157,7 @@ fetch_template() {
   fi
   # Substitute the version placeholder. `sed -i.bak ... && rm` is the
   # portable form (BSD sed on macOS requires a suffix arg; GNU accepts it).
-  sed -i.bak "s|@__FLYWHEEL_VERSION__|@${FLYWHEEL_VERSION}|g" "$dest" && rm -f "$dest.bak"
+  sed -i.bak "s|__FLYWHEEL_VERSION__|${FLYWHEEL_VERSION}|g" "$dest" && rm -f "$dest.bak"
 }
 
 # 1. Pick a preset and write .flywheel.yml (skip if it already exists).
@@ -196,9 +196,11 @@ for wf in flywheel-pr.yml flywheel-push.yml; do
   dest=".github/workflows/$wf"
   if [[ -f "$dest" && "$FORCE" -eq 0 ]]; then
     # Surface version drift so adopters know whether their existing template
-    # is current. The placeholder `point-source/flywheel@<ref>` is always
-    # present in flywheel-managed templates.
-    existing_ref="$(grep -m1 -oE 'point-source/flywheel@[^ ]+' "$dest" 2>/dev/null | head -n1 | cut -d@ -f2 || true)"
+    # is current. The placeholder `point-source/flywheel/.github/workflows/...@<ref>`
+    # (reusable workflow form) is always present in flywheel-managed templates;
+    # the older `point-source/flywheel@<ref>` form (pre-#84 inline templates) is
+    # also matched so re-running init.sh on those still detects drift.
+    existing_ref="$(grep -m1 -oE 'point-source/flywheel(/\.github/workflows/[a-z]+\.yml)?@[^ ]+' "$dest" 2>/dev/null | head -n1 | sed -E 's|.*@||' || true)"
     if [[ -n "$existing_ref" && "$existing_ref" != "$FLYWHEEL_VERSION" ]]; then
       echo "  $dest already exists (pinned @${existing_ref}; templates here pin @${FLYWHEEL_VERSION}) — pass --force to overwrite."
     else
