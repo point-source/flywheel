@@ -1,3 +1,10 @@
+# [1.1.0-dev.6](https://github.com/point-source/flywheel/compare/v1.1.0-dev.5...v1.1.0-dev.6) (2026-05-07)
+
+
+### Bug Fixes
+
+* **back-merge:** make CHANGELOG/release_files conflict-free, add PR fallback ([#112](https://github.com/point-source/flywheel/issues/112)) ([#113](https://github.com/point-source/flywheel/issues/113)) ([4befbad](https://github.com/point-source/flywheel/commit/4befbad7db49472329fdddff0a55136de714fc2f)), closes [#101](https://github.com/point-source/flywheel/issues/101)
+
 # [1.1.0-dev.5](https://github.com/point-source/flywheel/compare/v1.1.0-dev.4...v1.1.0-dev.5) (2026-05-07)
 
 
