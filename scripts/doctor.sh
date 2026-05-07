@@ -304,7 +304,10 @@ for wf in flywheel-pr.yml flywheel-push.yml; do
     fail "$path missing in $REPO"
     continue
   fi
-  if echo "$content" | grep -qE "point-source/flywheel@|uses:[[:space:]]*\./"; then
+  # Match either the action ref (`point-source/flywheel@<ver>`), the reusable
+  # workflow ref (`point-source/flywheel/.github/workflows/{pr,push}.yml@<ver>`),
+  # or the local-checkout form used in this repo's dogfood.
+  if echo "$content" | grep -qE "point-source/flywheel(/\.github/workflows/[a-z]+\.yml)?@|uses:[[:space:]]*\./"; then
     ok "$path references the flywheel action"
   else
     fail "$path exists but does not reference point-source/flywheel@<version>"

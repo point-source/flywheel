@@ -461,7 +461,7 @@ This determines whether the promotion PR itself gets `flywheel:auto-merge` or `f
 
 ### Distribution
 
-Flywheel is published to the GitHub Actions marketplace as `point-source/flywheel@v2`. Adopters reference it directly — no forking required. The marketplace Action contains `pr-conductor` (TypeScript/Deno). The two thin entrypoint workflow files (`flywheel-pr.yml`, `flywheel-push.yml`) are copied once into the adopting repo.
+Flywheel is published to the GitHub Actions marketplace as `point-source/flywheel@v1`, and the two adopter-side reusable workflows ride the same major (`point-source/flywheel/.github/workflows/{pr,push}.yml@v1`). Adopters reference both directly — no forking required. The marketplace Action contains `pr-conductor` (TypeScript/Deno); the reusable workflows contain the inline shell that wraps it (semantic-release invocation, `@`-mention sanitizer, back-merge loop). The two thin entrypoint workflow files (`flywheel-pr.yml`, `flywheel-push.yml`) are copied once into the adopting repo and call the reusable workflows.
 
 ### What you need
 
@@ -497,26 +497,13 @@ name: Flywheel — PR
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review, edited]
-concurrency:
-  group: flywheel-pr-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
 jobs:
   conduct:
-    # Only run on 'edited' events when a human triggered the edit.
-    # Bot-driven edits (the Flywheel App rewriting titles/bodies, push-flow
-    # upserting promotion PR bodies) would otherwise flap conduct ↔ push-flow
-    # writes on every promotion-source push.
-    if: |
-      github.event.pull_request.draft == false &&
-      (github.event.action != 'edited' || github.event.sender.type == 'User')
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-      - uses: point-source/flywheel@v2
-        with:
-          event: pull_request
-          app-id: ${{ vars.FLYWHEEL_GH_APP_ID }}
-          app-private-key: ${{ secrets.FLYWHEEL_GH_APP_PRIVATE_KEY }}
+    uses: point-source/flywheel/.github/workflows/pr.yml@v1
+    with:
+      app-id: ${{ vars.FLYWHEEL_GH_APP_ID }}
+    secrets:
+      app-private-key: ${{ secrets.FLYWHEEL_GH_APP_PRIVATE_KEY }}
 ```
 
 ### `flywheel-push.yml` (copy as-is)
@@ -526,76 +513,16 @@ name: Flywheel — Push
 on:
   push:
     branches: ["**"]
-concurrency:
-  group: flywheel-push-${{ github.ref_name }}
-  cancel-in-progress: false
 jobs:
   release:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-          # Don't persist the workflow's default GITHUB_TOKEN as a git
-          # extraheader — it would shadow the App installation token that
-          # semantic-release embeds in its push URL, and the workflow's
-          # token only has read scope here.
-          persist-credentials: false
-      - uses: point-source/flywheel@v2
-        id: flywheel
-        with:
-          event: push
-          app-id: ${{ vars.FLYWHEEL_GH_APP_ID }}
-          app-private-key: ${{ secrets.FLYWHEEL_GH_APP_PRIVATE_KEY }}
-      - name: Run semantic-release
-        # Only runs when pr-conductor confirms this is a managed branch and
-        # has written a .releaserc.json. Unmanaged branch pushes exit cleanly.
-        if: steps.flywheel.outputs.managed_branch == 'true'
-        # Plugins must be co-installed; npx will not resolve them from the
-        # generated .releaserc.json on its own (else MODULE_NOT_FOUND).
-        run: |
-          npx --yes \
-            -p semantic-release@24 \
-            -p @semantic-release/commit-analyzer \
-            -p @semantic-release/release-notes-generator \
-            -p @semantic-release/changelog \
-            -p @semantic-release/exec \
-            -p @semantic-release/git \
-            -p @semantic-release/github \
-            semantic-release
-        env:
-          GITHUB_TOKEN: ${{ steps.flywheel.outputs.token }}
-      - name: Back-merge release into upstream branches
-        if: |
-          steps.flywheel.outputs.managed_branch == 'true' &&
-          steps.flywheel.outputs.back_merge_targets != ''
-        shell: bash
-        env:
-          GITHUB_TOKEN: ${{ steps.flywheel.outputs.token }}
-          BACK_MERGE_TARGETS: ${{ steps.flywheel.outputs.back_merge_targets }}
-          RELEASED_BRANCH: ${{ github.ref_name }}
-        run: |
-          set -euo pipefail
-          new_tags="$(git tag --points-at HEAD)"
-          if [[ -z "$new_tags" ]]; then
-            echo "::notice::No tag at HEAD — semantic-release did not publish; skipping back-merge."
-            exit 0
-          fi
-          new_tag="$(echo "$new_tags" | head -n1)"
-          git config user.name  'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          IFS=',' read -ra UPSTREAMS <<< "$BACK_MERGE_TARGETS"
-          for upstream in "${UPSTREAMS[@]}"; do
-            git fetch origin "$upstream:$upstream"
-            git checkout "$upstream"
-            if git merge --ff-only "$RELEASED_BRANCH" 2>/dev/null; then
-              echo "Fast-forwarded $upstream to $RELEASED_BRANCH."
-            else
-              git merge --no-ff -m "chore: back-merge $new_tag from $RELEASED_BRANCH into $upstream" "$RELEASED_BRANCH"
-            fi
-            git push origin "$upstream"
-          done
+    uses: point-source/flywheel/.github/workflows/push.yml@v1
+    with:
+      app-id: ${{ vars.FLYWHEEL_GH_APP_ID }}
+    secrets:
+      app-private-key: ${{ secrets.FLYWHEEL_GH_APP_PRIVATE_KEY }}
 ```
+
+Both files are thin callers of reusable workflows hosted in `point-source/flywheel`. The reusable workflows ([`pr.yml`](../../.github/workflows/pr.yml), [`push.yml`](../../.github/workflows/push.yml)) hold the canonical step list — the action invocation, the conduct/release job's `if:` guards, the `semantic-release` invocation with pinned plugin majors, the `@`-mention sanitizer, and the back-merge loop with App-token extraheader plumbing. Bug fixes there propagate to adopters via the floating major tag (`@v1`) on the next workflow run, no adopter PR required (#84).
 
 `pr-conductor` sets `managed_branch` output to `true` when the pushed branch is found in a stream in `.flywheel.yml`, and writes `.releaserc.json` to the workspace. If the branch is not managed, it sets `managed_branch` to `false` and exits without writing any files — the semantic-release step is skipped entirely.
 

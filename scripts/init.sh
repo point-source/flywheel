@@ -148,6 +148,32 @@ if [[ -z "$FLYWHEEL_VERSION" ]]; then
 fi
 echo "  templates will pin to: point-source/flywheel@${FLYWHEEL_VERSION}"
 
+# Confirm the reusable workflow files exist at the resolved ref. The
+# adopter caller templates pin
+# `point-source/flywheel/.github/workflows/{pr,push}.yml@$FLYWHEEL_VERSION`,
+# and a 404 there would surface only on the next workflow run as a
+# cryptic "reusable workflow not found." This window can open briefly
+# between a stable release publishing and `release-major-tag.yml`
+# advancing the floating major tag (a few seconds in steady state) —
+# fail closed here so the adopter knows to wait or pin a specific tag.
+# Skip when --version points at a branch (no `refs/heads/` API call
+# needed) or when local templates are in use (developer-mode runs from
+# the repo, where the file is on disk).
+if [[ -z "$LOCAL_TEMPLATES" ]]; then
+  for wf in pr push; do
+    probe_url="https://api.github.com/repos/point-source/flywheel/contents/.github/workflows/${wf}.yml?ref=${FLYWHEEL_VERSION}"
+    if ! curl -fsSL -o /dev/null -H "Accept: application/vnd.github+json" "$probe_url" 2>/dev/null; then
+      echo "error: reusable workflow .github/workflows/${wf}.yml is not present in point-source/flywheel@${FLYWHEEL_VERSION}." >&2
+      echo "  This usually means one of:" >&2
+      echo "    - The floating major tag (${FLYWHEEL_VERSION}) hasn't yet advanced past the first release that introduced reusable workflows." >&2
+      echo "      Wait a few seconds for release-major-tag.yml to run, then re-try." >&2
+      echo "    - You passed --version <ref> pointing at a branch/sha that doesn't have the reusable workflow files." >&2
+      echo "      Pin to a stable tag that does (e.g. --version v1.1.0)." >&2
+      exit 1
+    fi
+  done
+fi
+
 fetch_template() {
   local name="$1" dest="$2"
   if [[ -n "$LOCAL_TEMPLATES" && -f "$LOCAL_TEMPLATES/$name" ]]; then
@@ -157,7 +183,7 @@ fetch_template() {
   fi
   # Substitute the version placeholder. `sed -i.bak ... && rm` is the
   # portable form (BSD sed on macOS requires a suffix arg; GNU accepts it).
-  sed -i.bak "s|@__FLYWHEEL_VERSION__|@${FLYWHEEL_VERSION}|g" "$dest" && rm -f "$dest.bak"
+  sed -i.bak "s|__FLYWHEEL_VERSION__|${FLYWHEEL_VERSION}|g" "$dest" && rm -f "$dest.bak"
 }
 
 # 1. Pick a preset and write .flywheel.yml (skip if it already exists).
@@ -196,9 +222,11 @@ for wf in flywheel-pr.yml flywheel-push.yml; do
   dest=".github/workflows/$wf"
   if [[ -f "$dest" && "$FORCE" -eq 0 ]]; then
     # Surface version drift so adopters know whether their existing template
-    # is current. The placeholder `point-source/flywheel@<ref>` is always
-    # present in flywheel-managed templates.
-    existing_ref="$(grep -m1 -oE 'point-source/flywheel@[^ ]+' "$dest" 2>/dev/null | head -n1 | cut -d@ -f2 || true)"
+    # is current. The placeholder `point-source/flywheel/.github/workflows/...@<ref>`
+    # (reusable workflow form) is always present in flywheel-managed templates;
+    # the older `point-source/flywheel@<ref>` form (pre-#84 inline templates) is
+    # also matched so re-running init.sh on those still detects drift.
+    existing_ref="$(grep -m1 -oE 'point-source/flywheel(/\.github/workflows/[a-z]+\.yml)?@[^ ]+' "$dest" 2>/dev/null | head -n1 | sed -E 's|.*@||' || true)"
     if [[ -n "$existing_ref" && "$existing_ref" != "$FLYWHEEL_VERSION" ]]; then
       echo "  $dest already exists (pinned @${existing_ref}; templates here pin @${FLYWHEEL_VERSION}) — pass --force to overwrite."
     else

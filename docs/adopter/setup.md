@@ -166,7 +166,7 @@ flywheel:
 
 ## 3. Add the Flywheel workflows
 
-Both files reference `point-source/flywheel@v2` — a floating major tag that picks up bug-fix and feature releases automatically. Pin to an exact version like `point-source/flywheel@v2.0.0` if you need fully reproducible runs.
+Both files are thin callers of reusable workflows hosted in `point-source/flywheel`. The reusable workflow file is pinned at `@v1` — a floating major tag that picks up bug-fix and feature releases (including changes to the inline shell that the reusable workflow contains) on the next workflow run, no adopter PR required. Pin to an exact version like `@v1.2.0` if you need fully reproducible runs.
 
 Create `.github/workflows/flywheel-pr.yml`:
 
@@ -175,26 +175,13 @@ name: Flywheel — PR
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review, edited]
-concurrency:
-  group: flywheel-pr-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
 jobs:
   conduct:
-    # Only run on 'edited' events when a human triggered the edit.
-    # Bot-driven edits (the Flywheel App rewriting titles/bodies, push-flow
-    # upserting promotion PR bodies) would otherwise flap conduct ↔ push-flow
-    # writes on every promotion-source push.
-    if: |
-      github.event.pull_request.draft == false &&
-      (github.event.action != 'edited' || github.event.sender.type == 'User')
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-      - uses: point-source/flywheel@v2
-        with:
-          event: pull_request
-          app-id: ${{ vars.FLYWHEEL_GH_APP_ID }}
-          app-private-key: ${{ secrets.FLYWHEEL_GH_APP_PRIVATE_KEY }}
+    uses: point-source/flywheel/.github/workflows/pr.yml@v1
+    with:
+      app-id: ${{ vars.FLYWHEEL_GH_APP_ID }}
+    secrets:
+      app-private-key: ${{ secrets.FLYWHEEL_GH_APP_PRIVATE_KEY }}
 ```
 
 Create `.github/workflows/flywheel-push.yml`:
@@ -206,81 +193,20 @@ name: Flywheel — Push
 on:
   push:
     branches: ["**"]
-concurrency:
-  group: flywheel-push-${{ github.ref_name }}
-  cancel-in-progress: false
 jobs:
   release:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-          # Don't persist the workflow's default GITHUB_TOKEN as a git
-          # extraheader — it would shadow the App installation token that
-          # semantic-release embeds in its push URL, and the workflow's
-          # token only has read scope here.
-          persist-credentials: false
-      - uses: point-source/flywheel@v2
-        id: flywheel
-        with:
-          event: push
-          app-id: ${{ vars.FLYWHEEL_GH_APP_ID }}
-          app-private-key: ${{ secrets.FLYWHEEL_GH_APP_PRIVATE_KEY }}
-      - name: Run semantic-release
-        if: steps.flywheel.outputs.managed_branch == 'true'
-        # Plugins must be co-installed; npx will not resolve them from the
-        # generated .releaserc.json on its own (else MODULE_NOT_FOUND).
-        run: |
-          npx --yes \
-            -p semantic-release@24 \
-            -p @semantic-release/commit-analyzer \
-            -p @semantic-release/release-notes-generator \
-            -p @semantic-release/changelog \
-            -p @semantic-release/exec \
-            -p @semantic-release/git \
-            -p @semantic-release/github \
-            semantic-release
-        env:
-          GITHUB_TOKEN: ${{ steps.flywheel.outputs.token }}
-      - name: Back-merge release into upstream branches
-        # When a release lands on a non-head branch (e.g. main in a develop →
-        # staging → main stream), back-merge the new tag and chore(release)
-        # commit into each upstream branch so semantic-release on those
-        # branches sees the tag in its ancestry. Single-branch streams skip
-        # this step (back_merge_targets is empty).
-        if: |
-          steps.flywheel.outputs.managed_branch == 'true' &&
-          steps.flywheel.outputs.back_merge_targets != ''
-        shell: bash
-        env:
-          GITHUB_TOKEN: ${{ steps.flywheel.outputs.token }}
-          BACK_MERGE_TARGETS: ${{ steps.flywheel.outputs.back_merge_targets }}
-          RELEASED_BRANCH: ${{ github.ref_name }}
-        run: |
-          set -euo pipefail
-          new_tags="$(git tag --points-at HEAD)"
-          if [[ -z "$new_tags" ]]; then
-            echo "::notice::No tag at HEAD — semantic-release did not publish; skipping back-merge."
-            exit 0
-          fi
-          new_tag="$(echo "$new_tags" | head -n1)"
-          git config user.name  'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          IFS=',' read -ra UPSTREAMS <<< "$BACK_MERGE_TARGETS"
-          for upstream in "${UPSTREAMS[@]}"; do
-            git fetch origin "$upstream:$upstream"
-            git checkout "$upstream"
-            if git merge --ff-only "$RELEASED_BRANCH" 2>/dev/null; then
-              echo "Fast-forwarded $upstream to $RELEASED_BRANCH."
-            else
-              git merge --no-ff -m "chore: back-merge $new_tag from $RELEASED_BRANCH into $upstream" "$RELEASED_BRANCH"
-            fi
-            git push origin "$upstream"
-          done
+    uses: point-source/flywheel/.github/workflows/push.yml@v1
+    with:
+      app-id: ${{ vars.FLYWHEEL_GH_APP_ID }}
+    secrets:
+      app-private-key: ${{ secrets.FLYWHEEL_GH_APP_PRIVATE_KEY }}
 ```
 
-Both files are also available verbatim under [`scripts/templates/`](../scripts/templates/) in the Flywheel repo — `init.sh` writes them for you in the quick-start path.
+The reusable workflows ([`pr.yml`](../../.github/workflows/pr.yml) and [`push.yml`](../../.github/workflows/push.yml) in this repo) hold the canonical step list — the `actions/checkout@v6` call, the conduct/release job's `if:` guards, the `semantic-release` invocation with pinned plugin majors, the `@`-mention sanitizer for release bodies (#73), and the post-release back-merge loop with App-token extraheader plumbing (#68, #74). Open them if you want to read the inline shell the bot will run on your repo. Both files are also installed verbatim by `init.sh` in the quick-start path; thin templates live under [`scripts/templates/`](../../scripts/templates/).
+
+Both pins move together via the floating `@v<major>` tag: the reusable workflow file at `@v1` hardcodes its action ref to `point-source/flywheel@v1`. When the floating major advances, the reusable workflow body and the action it invokes update in lockstep. There is no override knob — adopters who need to test arbitrary action SHAs (e.g. against a fork) inline the workflow shell instead of calling the reusable workflow.
+
+> **Permissions intersection.** A reusable workflow's job inherits the intersection of the caller's `permissions:` block and its own. Flywheel's reusable workflows do not declare a `permissions:` block — they rely on the App installation token that the action mints internally, not the runner's `GITHUB_TOKEN`, for every write. Adopters do not need to grant any additional permissions on the caller side beyond the repo's defaults.
 
 > **Back-merge effect on upstream version files.** The back-merge step propagates each release tag's `chore(release)` commit into every upstream branch in the stream. For a `develop → staging → main` topology, a `staging` rc release lands a `chore(release): 1.1.0-rc.1` commit on `develop`. This is intentional — it puts the tag in `develop`'s ancestry so semantic-release's next walk computes the correct next version. Anyone reading `develop`'s version file transiently sees the rc version. There is no opt-out today.
 
@@ -531,60 +457,37 @@ Merge the PR. On the resulting push, confirm:
 
 ## 8. Upgrading Flywheel
 
-Flywheel ships in two pieces, and they upgrade differently:
+Flywheel ships as a pair of reusable workflows (`point-source/flywheel/.github/workflows/{pr,push}.yml`) plus the action bundle (`point-source/flywheel`). Your `.github/workflows/flywheel-{pr,push}.yml` callers pin the reusable workflows at `@v<major>` (e.g. `@v1`); the reusable workflows pin the action at the same `@v<major>` internally. Bug fixes and non-breaking features — including changes to the inline shell that the reusable workflow contains (back-merge loop, `@`-mention sanitizer, semantic-release plumbing) — ride the floating major tag and are picked up on the next workflow run with no action from you.
 
-1. **The action bundle** — `dist/index.cjs` plus the rest of `point-source/flywheel`'s code. Your workflows pin this with `uses: point-source/flywheel@v<major>` (e.g. `@v2`). Bug fixes and non-breaking features ride the floating major tag — they're picked up on the next workflow run with no action from you.
-2. **The two adopter workflow YAMLs** — `flywheel-pr.yml` and `flywheel-push.yml` live in *your* `.github/workflows/`. They're not behind any tag. When the templates in this repo change (e.g. a new step added, an existing step's shell tightened), you need to opt in by re-running `init.sh --force`.
+### 8.1 The fast path (essentially all upgrades within a major)
 
-### 8.1 The fast path (most upgrades)
+Within a major, do nothing. The reusable workflow's behavior follows `@v<major>`, and the action ref it runs internally is hardcoded to the same major. Read the [CHANGELOG](https://github.com/point-source/flywheel/blob/main/CHANGELOG.md) to know what shipped.
 
-Within a major, do nothing. The action's behavior follows `@v<major>`. Read the [CHANGELOG](https://github.com/point-source/flywheel/blob/main/CHANGELOG.md) to know what shipped.
+The fixes that historically required adopters to re-run `init.sh --force` (#68 back-merge auth header, #73 `@`-mention sanitizer, #74 post-release back-merge loop) all live inside the reusable workflow now — they propagate via the floating major tag the same way `dist/index.cjs` fixes do.
 
-### 8.2 Refreshing the workflow YAML
+### 8.2 When the caller shape changes
 
-A handful of fixes ship in the workflow templates rather than the action bundle, because the relevant logic runs as inline shell in your repo's YAML — the back-merge loop, the release-body `@`-mention sanitizer, and any new permissions the action requires. Examples from recent history: PR #68 (back-merge auth header), PR #73 (sanitizer), PR #74 (post-release back-merge after promotion). These do **not** propagate via `@v<major>`.
-
-When to refresh:
-
-- A CHANGELOG entry mentions changes under `templates/flywheel-*.yml` or describes a workflow-level fix.
-- `doctor.sh` reports a step or env var your YAML doesn't have.
-- You're starting a release cycle and want a clean baseline.
-
-How to refresh:
+`init.sh --force` is only relevant for changes to the *caller* template's shape — a new required input on the reusable workflow, a renamed input, the trigger list expanding, etc. These are uncommon and should always be flagged in the CHANGELOG with explicit upgrade instructions. When that happens:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/point-source/flywheel/main/scripts/init.sh -o /tmp/flywheel-init.sh
 bash /tmp/flywheel-init.sh --force
 ```
 
-`init.sh --force` overwrites `.github/workflows/flywheel-pr.yml` and `flywheel-push.yml` from the latest templates and re-pins them to the latest released major. It leaves your `.flywheel.yml`, App credentials, and rulesets untouched. Review the diff before you commit, in case you've intentionally customized the workflow YAML.
+`init.sh --force` overwrites `.github/workflows/flywheel-pr.yml` and `flywheel-push.yml` from the latest templates and re-pins them to the latest released major. It leaves your `.flywheel.yml`, App credentials, and rulesets untouched. Review the diff before you commit. `init.sh` HEAD-probes the reusable workflow files at the resolved ref before writing the templates, so the rare race between a stable release publishing and the floating tag advancing fails closed with a clear message instead of producing a broken caller.
 
-### 8.3 Detecting drift
+### 8.3 Major-version migration
 
-`doctor.sh` validates that both workflow files exist and reference `point-source/flywheel@<version>`, but it does not currently compare your pinned version against the latest release or your workflow YAML against the current templates. Manual checks:
-
-```bash
-# What's the latest released major?
-gh api repos/point-source/flywheel/releases/latest --jq '.tag_name | split(".")[0]'
-
-# What's your repo pinned to?
-grep -h 'point-source/flywheel@' .github/workflows/flywheel-{pr,push}.yml
-```
-
-If the two diverge, plan an `init.sh --force` (or a major-version migration if the major number jumped — see below).
-
-### 8.4 Major-version migration
-
-A new major (e.g. `v2 → v3`) means breaking changes. Pre-flight:
+A new major (e.g. `v1 → v2`) means breaking changes. Pre-flight:
 
 1. Read the major's release notes on the [GH releases page](https://github.com/point-source/flywheel/releases) for `BREAKING CHANGES` entries.
 2. Skim `docs/design/decisions/` for any ADRs flagged in those notes — major bumps usually correspond to an architectural decision documented there.
-3. Check whether any field you set in `.flywheel.yml` was removed or repurposed (e.g. `merge_strategy` was removed in `v1.0.0` per ADR 0001).
+3. Check whether any field you set in `.flywheel.yml` was removed or repurposed.
 
 Then upgrade:
 
 ```bash
-bash /tmp/flywheel-init.sh --version v3 --force   # use the new major
+bash /tmp/flywheel-init.sh --version v2 --force   # use the new major
 ```
 
 Validate:
@@ -593,11 +496,11 @@ Validate:
 curl -fsSL https://raw.githubusercontent.com/point-source/flywheel/main/scripts/doctor.sh | bash
 ```
 
-Open a small `chore: post-upgrade smoke` PR and confirm the same things you confirmed during initial setup (§7). If anything fails, file an issue and roll back (§8.5) while you investigate.
+Open a small `chore: post-upgrade smoke` PR and confirm the same things you confirmed during initial setup (§7). If anything fails, file an issue and roll back (§8.4) while you investigate.
 
-### 8.5 Rolling back
+### 8.4 Rolling back
 
-Floating major tags don't pin you to a known-good build. If a recent `@v<major>` release misbehaves, edit your workflow YAMLs to pin a specific tag (e.g. `point-source/flywheel@v2.0.1`) until you can investigate. This is also a reasonable default for repos with strict change-control requirements — you trade auto-upgrade for fully reproducible runs.
+Floating major tags don't pin you to a known-good build. If a recent `@v<major>` release misbehaves, edit the `uses:` line in your caller workflow YAMLs to pin a specific tag (e.g. `point-source/flywheel/.github/workflows/pr.yml@v1.2.0`) until you can investigate. The reusable workflow at that tag will reference the matching action SHA. This is also a reasonable default for repos with strict change-control requirements — you trade auto-upgrade for fully reproducible runs.
 
 ## 9. Troubleshooting
 
@@ -607,11 +510,7 @@ Floating major tags don't pin you to a known-good build. If a recent `@v<major>`
 
 **Native auto-merge wasn't enabled even though the PR got `flywheel:auto-merge`.** Either the branch doesn't have native auto-merge enabled (check **Settings → General → Pull Requests → Allow auto-merge**), the App lacks **Pull requests: write**, or you're passing a `secrets.GITHUB_TOKEN` somewhere instead of the App credentials (`app-id` / `app-private-key`). `doctor.sh` flags all three. Note: if your repo has no required status checks, the GraphQL `enableAutoMerge` mutation refuses with "Pull request is in clean status" — Flywheel falls through to a direct REST merge, so the PR still merges; the label stays applied.
 
-**Release job failed with `EGITNOPERMISSION` / "denied to github-actions[bot]".** Two distinct causes:
-- The branch ruleset doesn't list the App as a bypass actor — re-run `scripts/apply-rulesets.sh <owner/repo> --app-id <id>`.
-- `actions/checkout@v6` was invoked without `persist-credentials: false`. The default behavior writes the workflow's GITHUB_TOKEN into git's `extraheader`, which shadows the App token semantic-release embeds in its push URL. Use the workflow YAML in §3 verbatim — the flag is already set.
-
-**Release job failed with `MODULE_NOT_FOUND` for `@semantic-release/changelog` (or similar).** `npx semantic-release@24` alone doesn't auto-resolve plugins from the generated `.releaserc.json`. The §3 YAML co-installs them with `npx -p` flags — copy it verbatim.
+**Release job failed with `EGITNOPERMISSION` / "denied to github-actions[bot]".** The branch ruleset doesn't list the App as a bypass actor — re-run `scripts/apply-rulesets.sh <owner/repo> --app-id <id>`. (Other historical causes — `actions/checkout@v6` not setting `persist-credentials: false`, extraheader shadowing — now live in the reusable workflow and can't drift from your repo.)
 
 **Promotion PR didn't appear after merging to a non-terminal branch.** Either the branch is the terminal (last) branch in its stream — terminal branches release but don't promote — or the pending commits are all non-bumping types (`chore`, `style`, `docs`, `test`, `ci`, `build`, `refactor`). Promotion PRs only open when something with release significance is ready to move forward; the non-bumping commits will be included in the next promotion.
 

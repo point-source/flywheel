@@ -1,0 +1,141 @@
+name: Flywheel — Push (reusable)
+# Reusable workflow holding the canonical push-event logic: the action,
+# semantic-release with pinned plugin majors, the @-mention sanitizer
+# (#73), and the back-merge loop (#74). Adopters pin
+# `point-source/flywheel/.github/workflows/push.yml@v<major>` from a thin
+# caller; fixes propagate via the floating major tag. See issue #84.
+on:
+  workflow_call:
+    inputs:
+      app-id:
+        description: Numeric GitHub App ID (vars.FLYWHEEL_GH_APP_ID).
+        required: true
+        type: string
+    secrets:
+      app-private-key:
+        description: PEM-format private key (secrets.FLYWHEEL_GH_APP_PRIVATE_KEY).
+        required: true
+concurrency:
+  group: flywheel-push-${{ github.ref_name }}
+  cancel-in-progress: false
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          # Don't persist the workflow's default GITHUB_TOKEN as a git
+          # extraheader — it would shadow the App installation token that
+          # semantic-release embeds in its push URL, and the workflow's
+          # token only has read scope here.
+          persist-credentials: false
+      # Pinned to the same major as this reusable workflow's @v<major>
+      # ref. When the floating major tag advances, both this file and
+      # the action update together — adopters and sandbox tooling get a
+      # consistent pair without an override knob.
+      - uses: point-source/flywheel@v1
+        id: flywheel
+        with:
+          event: push
+          app-id: ${{ inputs.app-id }}
+          app-private-key: ${{ secrets.app-private-key }}
+      - name: Run semantic-release
+        if: steps.flywheel.outputs.managed_branch == 'true'
+        # Plugins must be co-installed; npx will not resolve them from the
+        # generated .releaserc.json on its own.
+        run: |
+          npx --yes \
+            -p semantic-release@24 \
+            -p @semantic-release/commit-analyzer@13 \
+            -p @semantic-release/release-notes-generator@14 \
+            -p @semantic-release/changelog@6 \
+            -p @semantic-release/exec@7 \
+            -p @semantic-release/git@10 \
+            -p @semantic-release/github@11 \
+            semantic-release
+        env:
+          GITHUB_TOKEN: ${{ steps.flywheel.outputs.token }}
+      - name: Sanitize @-mentions in release body
+        # Squash-commit messages often contain @-prefixed identifiers
+        # (@semantic-release/exec, @v1 floating tag, @octokit/auth-app, …)
+        # that GitHub's release-page renderer parses as user mentions and
+        # surfaces in the release's "Contributors" sidebar — adding bogus
+        # entries like a "v1" contributor. Wrap any @-mention left in the
+        # body with backticks so GitHub leaves it as code text. See #70.
+        if: steps.flywheel.outputs.managed_branch == 'true'
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ steps.flywheel.outputs.token }}
+        run: |
+          set -euo pipefail
+          new_tag="$(git tag --points-at HEAD | head -n1)"
+          if [[ -z "$new_tag" ]]; then
+            echo "::notice::No tag at HEAD — semantic-release did not publish a release. Skipping body sanitize."
+            exit 0
+          fi
+          body="$(gh release view "$new_tag" --json body --jq .body)"
+          # Wrap @<identifier> in backticks where the @ is at line-start or
+          # after whitespace/punctuation that GitHub treats as a mention
+          # boundary. Anything preceded by a word char (email-like
+          # `user@host`) or by a backtick (already inline-coded) is left
+          # alone. The class delimiter is `#` so `@` and `|` can appear
+          # literally.
+          sanitized="$(printf '%s' "$body" | sed -E 's#(^|[[:space:]([])@([A-Za-z0-9][A-Za-z0-9._/-]+)#\1`@\2`#g')"
+          if [[ "$body" != "$sanitized" ]]; then
+            gh release edit "$new_tag" --notes "$sanitized" --repo "$GITHUB_REPOSITORY" >/dev/null
+            echo "Sanitized @-mentions in $new_tag release body."
+          fi
+      - name: Back-merge release into upstream branches
+        # Only runs when this push triggered a release (a tag was created at
+        # HEAD by semantic-release) and the stream has upstream branches.
+        # Replays main's chore(release) commit + tag into each upstream via a
+        # true `git merge` so ancestry is preserved and the next prerelease
+        # cycle computes from a synced state. We deliberately do *not* mark
+        # the back-merge commit `[skip ci]`: that token is a workflow-level
+        # filter, which would leave required status checks `Pending` on any
+        # promotion PR tracking the upstream branch. Adopters who want to
+        # skip CI work on back-merge commits should use a job-level `if:` in
+        # their quality workflows (which reports `success` and clears the
+        # gate).
+        if: |
+          steps.flywheel.outputs.managed_branch == 'true' &&
+          steps.flywheel.outputs.back_merge_targets != ''
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ steps.flywheel.outputs.token }}
+          BACK_MERGE_TARGETS: ${{ steps.flywheel.outputs.back_merge_targets }}
+          RELEASED_BRANCH: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          new_tags="$(git tag --points-at HEAD)"
+          if [[ -z "$new_tags" ]]; then
+            echo "::notice::No tag at HEAD — semantic-release did not publish a release. Skipping back-merge."
+            exit 0
+          fi
+          new_tag="$(echo "$new_tags" | head -n1)"
+          git config user.name  'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          # Configure git auth for fetch + push using the App installation token.
+          # The checkout step ran with persist-credentials: false intentionally
+          # (so the workflow's read-scope default GITHUB_TOKEN couldn't shadow
+          # semantic-release's own push URL during step 3). The back-merge step
+          # needs write scope, so set the extraheader explicitly here using the
+          # App token (already exported as GITHUB_TOKEN). Mirror's actions/checkout's
+          # mechanism. The runner is torn down after the job, so persisting in
+          # .git/config has no security cost.
+          auth_header="Authorization: Basic $(printf 'x-access-token:%s' "$GITHUB_TOKEN" | base64 | tr -d '\n')"
+          git config "http.https://github.com/.extraheader" "$auth_header"
+          IFS=',' read -ra UPSTREAMS <<< "$BACK_MERGE_TARGETS"
+          for upstream in "${UPSTREAMS[@]}"; do
+            echo "::group::Back-merge $RELEASED_BRANCH ($new_tag) → $upstream"
+            git fetch origin "$upstream:$upstream"
+            git checkout "$upstream"
+            if git merge --ff-only "$RELEASED_BRANCH" 2>/dev/null; then
+              echo "Fast-forwarded $upstream to $RELEASED_BRANCH."
+            else
+              git merge --no-ff -m "chore: back-merge $new_tag from $RELEASED_BRANCH into $upstream" "$RELEASED_BRANCH"
+            fi
+            git push origin "$upstream"
+            echo "::endgroup::"
+          done

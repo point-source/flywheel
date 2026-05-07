@@ -2,23 +2,10 @@ name: Flywheel — PR
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review, edited]
-concurrency:
-  group: flywheel-pr-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
 jobs:
   conduct:
-    # Only run on 'edited' events when a human triggered the edit.
-    # Bot-driven edits (the Flywheel App rewriting titles/bodies, push-flow
-    # upserting promotion PR bodies) would otherwise flap conduct ↔ push-flow
-    # writes on every promotion-source push.
-    if: |
-      github.event.pull_request.draft == false &&
-      (github.event.action != 'edited' || github.event.sender.type == 'User')
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-      - uses: point-source/flywheel@__FLYWHEEL_VERSION__
-        with:
-          event: pull_request
-          app-id: ${{ vars.FLYWHEEL_GH_APP_ID }}
-          app-private-key: ${{ secrets.FLYWHEEL_GH_APP_PRIVATE_KEY }}
+    uses: point-source/flywheel/.github/workflows/pr.yml@__FLYWHEEL_VERSION__
+    with:
+      app-id: ${{ vars.FLYWHEEL_GH_APP_ID }}
+    secrets:
+      app-private-key: ${{ secrets.FLYWHEEL_GH_APP_PRIVATE_KEY }}
