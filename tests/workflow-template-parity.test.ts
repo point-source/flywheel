@@ -83,11 +83,14 @@ describe("reusable workflow surface", () => {
       expect(content).toMatch(/flywheel-ref:/);
       // Secret plumbing for the App private key.
       expect(content).toMatch(/secrets:\s*\n[\s\S]*?app-private-key:/);
-      // Action ref uses the input override with a sane default. Adopters
-      // never set it; sandbox/e2e tooling overrides for SHA-pinning.
+      // Action ref uses the input. The default is set in the input
+      // declaration (not via `||`) because expressions in `uses:` only
+      // see the `inputs` context at workflow_call invocation time —
+      // GitHub's static-validation pass on push events can't resolve it.
       expect(content).toMatch(
-        /uses:\s*point-source\/flywheel@\$\{\{\s*inputs\.flywheel-ref\s*\|\|\s*'v1'\s*\}\}/,
+        /uses:\s*point-source\/flywheel@\$\{\{\s*inputs\.flywheel-ref\s*\}\}/,
       );
+      expect(content).toMatch(/flywheel-ref:[\s\S]*?default:\s*v1/);
     });
   }
 });

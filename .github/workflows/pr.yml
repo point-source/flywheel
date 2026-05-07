@@ -18,7 +18,7 @@ on:
           Sandbox/e2e tooling overrides this to test arbitrary SHAs.
         required: false
         type: string
-        default: ""
+        default: v1
     secrets:
       app-private-key:
         description: PEM-format private key (secrets.FLYWHEEL_GH_APP_PRIVATE_KEY).
@@ -40,7 +40,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - uses: point-source/flywheel@${{ inputs.flywheel-ref || 'v1' }}
+      - uses: point-source/flywheel@${{ inputs.flywheel-ref }}
         with:
           event: pull_request
           app-id: ${{ inputs.app-id }}
