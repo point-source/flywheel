@@ -28505,6 +28505,11 @@ function isPromotionPR(config, headRef, baseRef, title) {
   }
   return false;
 }
+function isBackMergePR(config, headRef, baseRef) {
+  if (locateBranch(config, baseRef) === null) return false;
+  const escaped = escapeRegex(baseRef);
+  return new RegExp(`^chore/back-merge-.+-into-${escaped}$`).test(headRef);
+}
 function normalizeTitle(title) {
   return stripPrSuffix(title).trim();
 }
@@ -28655,6 +28660,18 @@ async function runPrFlow({ pr, config, gh, log }) {
     });
     log.info(`PR #${pr.number}: promotion PR \u2014 owned by runPromotion, skipping pr-flow rewrite.`);
     return { kind: "promotion-pr" };
+  }
+  if (isBackMergePR(config, pr.headRef, pr.baseRef)) {
+    await gh.createCheck({
+      name: FLYWHEEL_TITLE_CHECK,
+      conclusion: "success",
+      summary: `Valid conventional commit title.`,
+      headSha: pr.headSha
+    });
+    log.info(
+      `PR #${pr.number}: back-merge fallback PR \u2014 needs human resolution + true merge, skipping pr-flow rewrite.`
+    );
+    return { kind: "back-merge-pr" };
   }
   const commits = await gh.listPullCommits(pr.number);
   const skipCiHits = findSkipCiMarkers([

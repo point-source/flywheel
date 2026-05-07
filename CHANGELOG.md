@@ -1,4 +1,18 @@
+## [1.1.1-dev.2](https://github.com/point-source/flywheel/compare/v1.1.1-dev.1...v1.1.1-dev.2) (2026-05-07)
+
+
+### Bug Fixes
+
+* **back-merge:** unbreak merge driver and stop auto-merging fallback PRs ([#122](https://github.com/point-source/flywheel/issues/122)) ([927ebbb](https://github.com/point-source/flywheel/commit/927ebbb34a17623a514ae88b609f6bdac979c4b4)), closes [#119](https://github.com/point-source/flywheel/issues/119) [#120](https://github.com/point-source/flywheel/issues/120) [#119](https://github.com/point-source/flywheel/issues/119) [#120](https://github.com/point-source/flywheel/issues/120)
+
 ## [1.1.1](https://github.com/point-source/flywheel/compare/v1.1.0...v1.1.1) (2026-05-07)
+
+
+### Bug Fixes
+
+* **pr-flow:** preserve Closes trailers across body rewrite ([#116](https://github.com/point-source/flywheel/issues/116)) ([a81c62d](https://github.com/point-source/flywheel/commit/a81c62d387ef2371bc34c4335914b2438d86f20e)), closes [#115](https://github.com/point-source/flywheel/issues/115)
+
+## [1.1.1-dev.1](https://github.com/point-source/flywheel/compare/v1.1.0...v1.1.1-dev.1) (2026-05-07)
 
 
 ### Bug Fixes
