@@ -391,6 +391,8 @@ This repo uses [Flywheel](https://github.com/point-source/flywheel) to orchestra
 
 **Branch naming.** Use `<type>/<short-kebab-description>` (e.g. `feat/login-rate-limit`, `fix/null-deref-on-empty-list`). Some repos enforce this via ruleset; pushes that don't match are rejected.
 
+**Closing linked issues.** If this PR fixes a tracked issue, include a `Closes #N` trailer in the PR body (or `Fixes #N` / `Resolves #N` — all three are recognised, case-insensitive). Flywheel preserves these trailers when it rewrites the PR body, and the promotion PR onto your default branch aggregates them so the issues auto-close when the release lands. The trailing `(#N)` GitHub appends to a squash-merge title is **not** a closing reference — without an explicit keyword, the issue stays open. AI agents authoring PRs: when the work resolves an issue, always include the trailer; do not rely on the title parenthetical.
+
 **Auto-merge eligibility on `<DEFAULT_TARGET_BRANCH>`.** PRs whose title type is in `[<copy auto_merge list from .flywheel.yml>]` get labeled `flywheel:auto-merge` and enter the merge queue automatically once required checks pass. Any other type — including `feat!` when only `feat` is listed — routes to human review and waits for an approval.
 
 **Required status checks.** Your PR must pass `<list required check names>` before merging. Run them locally before pushing (`<local commands>`) — every re-push to fix a failing required check costs CI minutes.

@@ -84,6 +84,8 @@ Recognized types: `feat`, `fix`, `chore`, `refactor`, `perf`, `style`, `test`, `
 
 **Branch naming.** Use `<type>/<short-kebab-description>` (e.g. `feat/stream-validation`, `fix/empty-diff-promotion`, `chore/address-open-issues`).
 
+**Closing linked issues.** If this PR fixes a tracked issue, include a `Closes #N` trailer in the PR body (or `Fixes #N` / `Resolves #N` — all three are recognised, case-insensitive). The PR template at `.github/pull_request_template.md` prompts for one. Flywheel preserves these trailers when it rewrites the body, and the `develop → main` promotion PR aggregates them into its own body so the issues auto-close when the release lands on `main`. The trailing `(#N)` GitHub appends to a squash-merge title is **not** a closing reference — without an explicit keyword, the issue stays open. AI agents authoring PRs: when the work resolves an issue, always include the trailer; do not rely on the title parenthetical.
+
 **Auto-merge eligibility.** Both `develop` and `main` auto-merge `feat`, `fix`, `fix!`, `chore`, `refactor`, `perf`, `style`, `test`, `docs`, `ci`, `build`. They deliberately **exclude `feat!`** — major bumps require human review on this repo.
 
 **Open PRs only when ready to merge.** A branch is your private work-in-progress; a PR is a request to merge. There is no "draft" intermediate state in this workflow. Iterate on the branch (push, run checks locally, etc.); when the work is ready, push and open the PR. Once open, Flywheel will rewrite the title, label it, and — if eligible — auto-merge as soon as required checks pass.
