@@ -1,3 +1,10 @@
+# [1.1.0-dev.3](https://github.com/point-source/flywheel/compare/v1.1.0-dev.2...v1.1.0-dev.3) (2026-05-07)
+
+
+### Bug Fixes
+
+* **sandbox-reset:** default base to e2e-baseline, preserve it across resets, sweep test/* orphans ([#108](https://github.com/point-source/flywheel/issues/108)) ([2f95b93](https://github.com/point-source/flywheel/commit/2f95b932db2fc8274dd55549c2aa21d709491c92))
+
 # [1.1.0-dev.2](https://github.com/point-source/flywheel/compare/v1.1.0-dev.1...v1.1.0-dev.2) (2026-05-07)
 
 
