@@ -1,0 +1,53 @@
+import { describe, expect, it } from "vitest";
+import { execFileSync, spawnSync } from "node:child_process";
+import { readdirSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+// Static lint pass for every shell script in `scripts/`. Catches the class
+// of bugs that bit the back-merge step repeatedly: unquoted variables,
+// bad printf escaping (the kind that survives `bash -n` because it's
+// inside `$(...)` command substitution), `[ -z $var ]` truthiness traps,
+// SC2086 word-splitting, etc. Skipped if shellcheck isn't on PATH so
+// developer machines without it don't fail the suite — CI installs it.
+
+const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
+const scriptsDir = join(repoRoot, "scripts");
+
+function shellcheckAvailable(): boolean {
+  return spawnSync("shellcheck", ["--version"], { stdio: "ignore" }).status === 0;
+}
+
+function listShellScripts(): string[] {
+  return readdirSync(scriptsDir)
+    .filter((f) => f.endsWith(".sh"))
+    .sort();
+}
+
+describe.skipIf(!shellcheckAvailable())("shellcheck — every scripts/*.sh", () => {
+  const scripts = listShellScripts();
+
+  // One `it` per script so a single broken script fails just one test, not
+  // the suite, and the script name appears verbatim in the test report.
+  for (const name of scripts) {
+    it(`scripts/${name} passes shellcheck`, () => {
+      const r = spawnSync(
+        "shellcheck",
+        // -x follows sourced files; --severity=warning ignores style nits
+        // (info/style) so we stop at real issues. Exclude SC2154 (unused
+        // refs from sourced files we don't follow) at script level via
+        // shellcheck directives if we ever need to; right now scripts/ is
+        // self-contained per file.
+        ["--severity=warning", join(scriptsDir, name)],
+        { encoding: "utf8" },
+      );
+      expect(r.status, `\nshellcheck output:\n${r.stdout}${r.stderr}`).toBe(0);
+    });
+  }
+});
+
+describe("shellcheck — scripts directory itself", () => {
+  it("at least one shell script exists in scripts/ (sanity check)", () => {
+    expect(listShellScripts().length).toBeGreaterThan(0);
+  });
+});
