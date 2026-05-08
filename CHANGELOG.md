@@ -1,3 +1,5 @@
+# [0.0.0](https://github.com/point-source/flywheel/compare/v1.1.4-dev.1...v0.0.0) (2026-05-08)
+
 ## [1.1.4-dev.1](https://github.com/point-source/flywheel/compare/v1.1.3...v1.1.4-dev.1) (2026-05-08)
 
 
@@ -5,7 +7,9 @@
 
 * **release:** extract @-mention sanitizer + retry on tag race ([#131](https://github.com/point-source/flywheel/issues/131)) ([aa46453](https://github.com/point-source/flywheel/commit/aa46453ec6fe2c84f4fff4282f674ad16c47cf54)), closes [#128](https://github.com/point-source/flywheel/issues/128) [#1](https://github.com/point-source/flywheel/issues/1)
 
-# [0.0.0](https://github.com/point-source/flywheel/compare/v1.1.3-dev.1...v0.0.0) (2026-05-08)
+## [1.1.3-dev.1](https://github.com/point-source/flywheel/compare/v1.1.2-dev.3...v1.1.3-dev.1) (2026-05-08)
+
+## [1.1.3](https://github.com/point-source/flywheel/compare/v1.1.3-dev.1...v1.1.3) (2026-05-08)
 
 ## [1.1.3-dev.1](https://github.com/point-source/flywheel/compare/v1.1.2-dev.3...v1.1.3-dev.1) (2026-05-08)
 
