@@ -50,25 +50,13 @@ jobs:
         shell: bash
         env:
           GITHUB_TOKEN: ${{ steps.flywheel.outputs.token }}
-        run: |
-          set -euo pipefail
-          new_tag="$(git tag --points-at HEAD | head -n1)"
-          if [[ -z "$new_tag" ]]; then
-            echo "::notice::No tag at HEAD — semantic-release did not publish a release. Skipping body sanitize."
-            exit 0
-          fi
-          body="$(gh release view "$new_tag" --json body --jq .body)"
-          # Wrap @<identifier> in backticks where the @ is at line-start or
-          # after whitespace/punctuation that GitHub treats as a mention
-          # boundary. Anything preceded by a word char (email-like
-          # `user@host`) or by a backtick (already inline-coded) is left
-          # alone. The class delimiter is `#` so `@` and `|` can appear
-          # literally.
-          sanitized="$(printf '%s' "$body" | sed -E 's#(^|[[:space:]([])@([A-Za-z0-9][A-Za-z0-9._/-]+)#\1`@\2`#g')"
-          if [[ "$body" != "$sanitized" ]]; then
-            gh release edit "$new_tag" --notes "$sanitized" --repo "$GITHUB_REPOSITORY" >/dev/null
-            echo "Sanitized @-mentions in $new_tag release body."
-          fi
+        # Logic lives in scripts/sanitize-release-mentions.sh so it's
+        # lintable (shellcheck in CI) and integration-testable
+        # (tests/sanitize-release-mentions.test.ts). The inline form
+        # halted the 1.1.1 release on a transient 404 race between
+        # `git push --tags` and the release-by-tag lookup; the script
+        # adds retry-with-backoff to close that window. See #130.
+        run: bash scripts/sanitize-release-mentions.sh
       - name: Register Flywheel merge drivers
         # CHANGELOG.md and release_files paths are derived artifacts:
         # semantic-release writes them on each release, humans don't edit them.
