@@ -1,0 +1,13 @@
+{
+  "name": "Flywheel release gate",
+  "target": "branch",
+  "enforcement": "active",
+  "conditions": {
+    "ref_name": {
+      "include": [],
+      "exclude": []
+    }
+  },
+  "rules": [],
+  "bypass_actors": []
+}
