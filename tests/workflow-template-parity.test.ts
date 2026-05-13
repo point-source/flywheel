@@ -148,3 +148,42 @@ describe("reusable workflow surface", () => {
     });
   }
 });
+
+describe("reusable push workflow script invocation", () => {
+  // #134: push.yml's release flow shells out to back-merge.sh and
+  // sanitize-release-mentions.sh, but the working directory at that
+  // point is the *adopter's* checkout (because the reusable workflow
+  // ran `actions/checkout` against the caller). A bare `bash
+  // scripts/<name>.sh` was therefore looking for files that exist only
+  // in this repo and exited 127 on every adopter release — silently
+  // breaking back-merge and stalling promotions. Both workflows must
+  // now invoke the scripts through the action's `scripts_dir` output
+  // (an absolute path to flywheel/scripts/ on the runner).
+  //
+  // Guard against the bare-relative form coming back. Match `.sh`
+  // invocations and require each to be interpolated through the
+  // action's output.
+  for (const file of [".github/workflows/push.yml", ".github/workflows/flywheel-push.yml"]) {
+    it(`${file} invokes every flywheel script through steps.flywheel.outputs.scripts_dir`, () => {
+      const content = readFile(file);
+      // Find every `run:` line that ends in a .sh invocation.
+      const runShLines = content
+        .split("\n")
+        .filter((line) => /^\s*run:\s*.*\.sh\b/.test(line));
+      expect(runShLines.length).toBeGreaterThan(0);
+      for (const line of runShLines) {
+        // Must reference the absolute path via the action output, never
+        // a bare `bash scripts/<name>.sh` (which depends on the
+        // caller's checkout layout).
+        expect(line).toContain("steps.flywheel.outputs.scripts_dir");
+        expect(line).not.toMatch(/run:\s*bash\s+scripts\//);
+      }
+    });
+  }
+
+  it("action.yml declares scripts_dir as an output so the workflow can consume it", () => {
+    const content = readFile("action.yml");
+    // The output block is YAML key `scripts_dir:` under `outputs:`.
+    expect(content).toMatch(/outputs:[\s\S]*?\n\s{2}scripts_dir:\s*\n\s{4}description:/);
+  });
+});
