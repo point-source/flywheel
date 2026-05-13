@@ -1,3 +1,10 @@
+## [1.1.5-dev.1](https://github.com/point-source/flywheel/compare/v1.1.4...v1.1.5-dev.1) (2026-05-13)
+
+
+### Bug Fixes
+
+* **workflow:** stage scripts via action output to fix exit 127 in adopter releases ([#137](https://github.com/point-source/flywheel/issues/137)) ([9bf3be8](https://github.com/point-source/flywheel/commit/9bf3be8fca0e9eee593c7ff2a0839e48cb9261f1)), closes [#135](https://github.com/point-source/flywheel/issues/135) [#136](https://github.com/point-source/flywheel/issues/136) [#134](https://github.com/point-source/flywheel/issues/134)
+
 # [0.0.0](https://github.com/point-source/flywheel/compare/v1.1.4-dev.1...v0.0.0) (2026-05-08)
 
 ## [1.1.4-dev.1](https://github.com/point-source/flywheel/compare/v1.1.3...v1.1.4-dev.1) (2026-05-08)
