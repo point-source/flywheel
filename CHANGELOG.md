@@ -1,11 +1,15 @@
-## [1.1.7](https://github.com/point-source/flywheel/compare/v1.1.6...v1.1.7) (2026-05-13)
+# [0.0.0](https://github.com/point-source/flywheel/compare/v1.1.7-dev.1...v0.0.0) (2026-05-13)
+
+## [1.1.7-dev.1](https://github.com/point-source/flywheel/compare/v1.1.6...v1.1.7-dev.1) (2026-05-13)
 
 
 ### Bug Fixes
 
 * **e2e:** scenario 10 must filter stale fallback PRs from prior runs ([#142](https://github.com/point-source/flywheel/issues/142)) ([a538714](https://github.com/point-source/flywheel/commit/a538714f0f17059773779ee2c25e315f0182ad70))
 
-# [0.0.0](https://github.com/point-source/flywheel/compare/v1.1.6-dev.1...v0.0.0) (2026-05-13)
+## [1.1.6-dev.1](https://github.com/point-source/flywheel/compare/v1.1.5...v1.1.6-dev.1) (2026-05-13)
+
+## [1.1.6](https://github.com/point-source/flywheel/compare/v1.1.6-dev.1...v1.1.6) (2026-05-13)
 
 ## [1.1.6-dev.1](https://github.com/point-source/flywheel/compare/v1.1.5...v1.1.6-dev.1) (2026-05-13)
 
