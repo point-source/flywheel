@@ -1,11 +1,15 @@
-## [1.1.6](https://github.com/point-source/flywheel/compare/v1.1.5...v1.1.6) (2026-05-13)
+# [0.0.0](https://github.com/point-source/flywheel/compare/v1.1.6-dev.1...v0.0.0) (2026-05-13)
+
+## [1.1.6-dev.1](https://github.com/point-source/flywheel/compare/v1.1.5...v1.1.6-dev.1) (2026-05-13)
 
 
 ### Bug Fixes
 
 * **e2e:** waitForRunAfter must assert success conclusion ([#139](https://github.com/point-source/flywheel/issues/139)) ([7c8c542](https://github.com/point-source/flywheel/commit/7c8c542ef69fd40ecb390c2baf1f44f929fd0e8b)), closes [#134](https://github.com/point-source/flywheel/issues/134) [#135](https://github.com/point-source/flywheel/issues/135)
 
-# [0.0.0](https://github.com/point-source/flywheel/compare/v1.1.5-dev.1...v0.0.0) (2026-05-13)
+## [1.1.5-dev.1](https://github.com/point-source/flywheel/compare/v1.1.4...v1.1.5-dev.1) (2026-05-13)
+
+## [1.1.5](https://github.com/point-source/flywheel/compare/v1.1.5-dev.1...v1.1.5) (2026-05-13)
 
 ## [1.1.5-dev.1](https://github.com/point-source/flywheel/compare/v1.1.4...v1.1.5-dev.1) (2026-05-13)
 
