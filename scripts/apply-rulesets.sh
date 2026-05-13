@@ -16,7 +16,7 @@
 #      Optionally adds a GitHub App as a bypass actor so the bot can mint tags.
 #
 # Usage:
-#   ./scripts/apply-rulesets.sh <owner/repo> [--config <path>] [--required-checks "Quality,Build"] [--app-id 12345]
+#   ./scripts/apply-rulesets.sh <owner/repo> [--config <path>] [--required-checks "Quality,Build"] [--release-required-checks "e2e"] [--app-id 12345]
 #
 # --config defaults to ./.flywheel.yml. Use it to apply rulesets that match
 # a config that hasn't been merged to the current working tree yet (e.g.
@@ -29,6 +29,16 @@
 # merged commit and break semantic-release. Pass a custom comma list to
 # extend, or pass "" to disable (not recommended).
 #
+# --release-required-checks defaults to "" (no release gate). When set,
+# applies a fourth ruleset — "Flywheel release gate" — to every branch
+# with `release: production` in .flywheel.yml, requiring the named
+# status checks (CSV) to pass before merge. The App is in bypass on this
+# ruleset too, so semantic-release's direct push of the release commit
+# isn't blocked by the gate. Use this when you want expensive/long-
+# running CI (e.g. an e2e suite) to gate the promotion PR into a
+# production branch without slowing down day-to-day PRs into the
+# prerelease channel. See #134 for the failure mode that motivated it.
+#
 # Dependencies: gh, jq, python3 with PyYAML (preinstalled on macOS; yamllint
 # pulls it in too).
 
@@ -40,15 +50,20 @@ CONFIG_PATH=".flywheel.yml"
 # can override with `--required-checks "..."` (or "" to disable, though
 # disabling drops the skip-ci marker block, which is strongly discouraged).
 REQUIRED_CHECKS="flywheel/conventional-commit"
+# Empty default — no release gate. Adopters opt in by passing
+# `--release-required-checks "<csv>"`; without the flag, behavior is
+# identical to before this option existed.
+RELEASE_REQUIRED_CHECKS=""
 APP_ID="${APP_ID:-}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --config) CONFIG_PATH="$2"; shift 2 ;;
     --required-checks) REQUIRED_CHECKS="$2"; shift 2 ;;
+    --release-required-checks) RELEASE_REQUIRED_CHECKS="$2"; shift 2 ;;
     --app-id) APP_ID="$2"; shift 2 ;;
     -h|--help)
-      sed -n '2,22p' "$0"
+      sed -n '2,32p' "$0"
       exit 0
       ;;
     *)
@@ -100,6 +115,24 @@ if [[ "$branch_count" -eq 0 ]]; then
   echo "error: no branches found in .flywheel.yml" >&2
   exit 1
 fi
+
+# Production-release branches — i.e. those with `release: production`
+# in .flywheel.yml — are the target of the optional release-gate ruleset
+# below. Computed unconditionally so the help/dry output can show what
+# would be gated; only consumed when --release-required-checks is set.
+release_branch_refs_json="$(CONFIG_PATH="$CONFIG_PATH" python3 - <<'PYEOF'
+import json, os, yaml
+with open(os.environ['CONFIG_PATH']) as f:
+    data = yaml.safe_load(f)
+print(json.dumps([
+    f'refs/heads/{b["name"]}'
+    for s in data['flywheel']['streams']
+    for b in s['branches']
+    if b.get('release') == 'production'
+]))
+PYEOF
+)"
+release_branch_count="$(echo "$release_branch_refs_json" | jq 'length')"
 
 # apply_ruleset: idempotent create-or-replace by ruleset name. Re-running
 # this script after .flywheel.yml changes (e.g. adding a branch) must update
@@ -182,5 +215,45 @@ if [[ -n "$APP_ID" ]]; then
 fi
 
 apply_ruleset "$tag_payload"
+
+# Optional release-gate ruleset: stacks on top of the review ruleset for
+# the production-release branches only, requiring additional status
+# checks (e.g. an e2e suite) before a promotion PR can merge. Stacking
+# is additive in GitHub Rulesets — main ends up with the review
+# ruleset's `flywheel/conventional-commit` *and* whatever's listed in
+# --release-required-checks; the prerelease channel (develop) keeps
+# only the review ruleset's gate, so day-to-day PRs aren't slowed down
+# by the long-running release checks.
+if [[ -n "$RELEASE_REQUIRED_CHECKS" ]]; then
+  if [[ "$release_branch_count" -eq 0 ]]; then
+    echo "warning: --release-required-checks set but no branches have 'release: production' in $CONFIG_PATH; skipping release-gate ruleset." >&2
+  else
+    echo "Applying release-gate ruleset to $release_branch_count production branch(es) in $REPO..."
+
+    release_checks_json="$(echo "$RELEASE_REQUIRED_CHECKS" | jq -R 'split(",") | map({context: .})')"
+    release_payload="$(jq \
+      --argjson branches "$release_branch_refs_json" \
+      --argjson checks "$release_checks_json" \
+      '.conditions.ref_name.include = $branches
+       | .rules += [{"type":"required_status_checks","parameters":{"required_status_checks":$checks,"strict_required_status_checks_policy":false}}]' \
+      "$SCRIPT_DIR/rulesets/release-gate.json")"
+
+    # App bypass on the release-gate ruleset too. semantic-release pushes
+    # the chore(release) commit and tag directly to the production branch
+    # (the @semantic-release/git plugin commit, the back-merge commit on
+    # back-merge, etc.). Without bypass, required_status_checks would
+    # block those direct pushes the same way it gates the promotion PR.
+    # Native auto-merge — which is what waits for required checks on the
+    # promotion PR — does *not* go through the bypass path, so the
+    # promotion PR is still gated even with the App in bypass.
+    if [[ -n "$APP_ID" ]]; then
+      release_payload="$(echo "$release_payload" | jq \
+        --arg app_id "$APP_ID" \
+        '.bypass_actors = [{"actor_id": ($app_id | tonumber), "actor_type": "Integration", "bypass_mode": "always"}]')"
+    fi
+
+    apply_ruleset "$release_payload"
+  fi
+fi
 
 echo "Done. Verify with: gh api repos/$REPO/rulesets"
