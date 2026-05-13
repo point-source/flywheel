@@ -56,7 +56,13 @@ jobs:
         # halted the 1.1.1 release on a transient 404 race between
         # `git push --tags` and the release-by-tag lookup; the script
         # adds retry-with-backoff to close that window. See #130.
-        run: bash scripts/sanitize-release-mentions.sh
+        #
+        # `scripts_dir` is an absolute path the action exports back to
+        # its own scripts/ directory on the runner. A bare `bash
+        # scripts/sanitize-release-mentions.sh` would run against the
+        # adopter's checkout (which doesn't have the script) and exit
+        # 127. See #134.
+        run: bash "${{ steps.flywheel.outputs.scripts_dir }}/sanitize-release-mentions.sh"
       - name: Register Flywheel merge drivers
         # CHANGELOG.md and release_files paths are derived artifacts:
         # semantic-release writes them on each release, humans don't edit them.
@@ -138,4 +144,8 @@ jobs:
         # production-halting back-merge bugs (#112, #119, #128) lived in
         # the inline shell that this step used to be — extracted in #128
         # to close that hole.
-        run: bash scripts/back-merge.sh
+        #
+        # Invoked via the action's `scripts_dir` output (absolute path).
+        # See the sanitize step above and #134 for why this can't be a
+        # relative `bash scripts/back-merge.sh` in the reusable workflow.
+        run: bash "${{ steps.flywheel.outputs.scripts_dir }}/back-merge.sh"
