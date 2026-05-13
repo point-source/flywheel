@@ -1,3 +1,5 @@
+# [0.0.0](https://github.com/point-source/flywheel/compare/v1.2.0-dev.1...v0.0.0) (2026-05-13)
+
 # [1.2.0-dev.1](https://github.com/point-source/flywheel/compare/v1.1.7...v1.2.0-dev.1) (2026-05-13)
 
 
@@ -5,7 +7,9 @@
 
 * **rulesets:** add release-gate ruleset for production branches ([#144](https://github.com/point-source/flywheel/issues/144)) ([3bdb1c2](https://github.com/point-source/flywheel/commit/3bdb1c2cdd855ddf06a9950e21fd4a157105ec7d)), closes [#134](https://github.com/point-source/flywheel/issues/134)
 
-# [0.0.0](https://github.com/point-source/flywheel/compare/v1.1.7-dev.1...v0.0.0) (2026-05-13)
+## [1.1.7-dev.1](https://github.com/point-source/flywheel/compare/v1.1.6...v1.1.7-dev.1) (2026-05-13)
+
+## [1.1.7](https://github.com/point-source/flywheel/compare/v1.1.7-dev.1...v1.1.7) (2026-05-13)
 
 ## [1.1.7-dev.1](https://github.com/point-source/flywheel/compare/v1.1.6...v1.1.7-dev.1) (2026-05-13)
 
