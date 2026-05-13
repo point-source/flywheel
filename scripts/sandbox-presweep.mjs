@@ -4,10 +4,22 @@
 // teardown, leaving open PRs behind. The next run heals at startup so the
 // cancelled run can die fast and free.
 //
-// Scope: only PRs whose head ref starts with `e2e-`. This catches every
-// e2e test branch (uniqueBranch("e2e-*")) plus promotion PRs whose head
-// is a managed e2e-* branch (e2e-staging → e2e-main, etc.). It explicitly
-// excludes integration test PRs (head: promote-src-*, pr-title-*, etc.)
+// Scope: PR head ref matches one of:
+//   - `e2e-*`            — test branches (uniqueBranch("e2e-*")) plus
+//                          promotion PRs whose head is a managed e2e-*
+//                          branch (e2e-staging → e2e-main, etc.).
+//   - `chore/back-merge-*` — fallback PRs the back-merge script opens
+//                          when a merge can't be auto-resolved. These
+//                          are tied to a specific release tag (e.g.
+//                          chore/back-merge-v1.0.0-rc.37-into-e2e-develop)
+//                          and become stale immediately once the next
+//                          release supersedes that tag. They were not
+//                          covered by the original presweep, so they
+//                          accumulated indefinitely and false-positived
+//                          scenario 10's "no fallback PR opened"
+//                          assertion on every run.
+//
+// Excluded: integration test PRs (head: promote-src-*, pr-title-*, etc.)
 // which run concurrently in the same sandbox and must not be touched.
 //
 // Idempotent: against a clean sandbox it lists, finds nothing, exits 0.
@@ -19,7 +31,11 @@ import { getOctokit } from "@actions/github";
 
 const OWNER = "point-source";
 const REPO = "flywheel-sandbox";
-const HEAD_PREFIX = "e2e-";
+// Head-ref prefixes the presweep is allowed to close. The matcher is
+// strict prefix (not regex) — anything not starting with one of these
+// is left alone, which keeps integration-test PRs (promote-src-*,
+// pr-title-*, …) running in parallel from getting wiped out.
+const SWEEP_HEAD_PREFIXES = ["e2e-", "chore/back-merge-"];
 
 const token = process.env.SANDBOX_GH_TOKEN;
 if (!token) throw new Error("SANDBOX_GH_TOKEN is not set");
@@ -33,9 +49,13 @@ const open = await octokit.paginate(octokit.rest.pulls.list, {
   per_page: 100,
 });
 
-const targets = open.filter((pr) => pr.head.ref.startsWith(HEAD_PREFIX));
+const targets = open.filter((pr) =>
+  SWEEP_HEAD_PREFIXES.some((prefix) => pr.head.ref.startsWith(prefix)),
+);
 if (targets.length === 0) {
-  console.log(`presweep: no stranded e2e PRs (${open.length} open total, none match head:${HEAD_PREFIX}*)`);
+  console.log(
+    `presweep: no stranded PRs (${open.length} open total, none match head:[${SWEEP_HEAD_PREFIXES.join("|")}]*)`,
+  );
   process.exit(0);
 }
 
@@ -55,4 +75,4 @@ for (const pr of targets) {
     if (status !== 404 && status !== 422) throw err;
   }
 }
-console.log(`presweep: closed ${closed} stranded e2e PR(s)`);
+console.log(`presweep: closed ${closed} stranded PR(s)`);
