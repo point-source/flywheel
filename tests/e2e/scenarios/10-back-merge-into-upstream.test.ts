@@ -60,6 +60,30 @@ describe.skipIf(!hasSandboxToken)(
       // commit paths both advance the tip — we don't need to disambiguate.
       const developBaselineSha = await getRefSha(E2E_DEVELOP);
 
+      // Capture the wall-clock start *and* the set of existing fallback
+      // PR numbers, so the final negative assertion can distinguish a
+      // PR opened by *this* run's back-merge from leftovers a prior run
+      // left behind. presweep doesn't sweep `chore/back-merge-*` PRs —
+      // they pile up across runs whenever a back-merge legitimately
+      // hit the fallback path (the v1.0.0-rc.37 era left one in place
+      // that pre-existed this scenario's first green run). Without
+      // this filter the test reports a regression every time, even
+      // when the current run's back-merge merged cleanly.
+      const testStartedAt = Date.now();
+      const preExistingFallbackNumbers = new Set(
+        (
+          await sandboxOctokit().rest.pulls.list({
+            owner: SANDBOX_OWNER,
+            repo: SANDBOX_REPO,
+            state: "open",
+            base: E2E_DEVELOP,
+            per_page: 100,
+          })
+        ).data
+          .filter((p) => p.head.ref.startsWith("chore/back-merge-"))
+          .map((p) => p.number),
+      );
+
       const branch = uniqueBranch("e2e-back-merge");
       const pr = await createTestPR({
         branch,
@@ -110,20 +134,28 @@ describe.skipIf(!hasSandboxToken)(
       // resolution wiring has regressed — the test surfaces that
       // explicitly rather than silently degrading to "PR was opened
       // for human review."
+      //
+      // Filter to PRs created/updated during *this* run only, by
+      // excluding pre-existing fallback PR numbers and rejecting
+      // anything whose `created_at` predates the test start. Allow
+      // a 5s clock-skew tolerance against the GH API.
       const fallbackPRs = await sandboxOctokit().rest.pulls.list({
         owner: SANDBOX_OWNER,
         repo: SANDBOX_REPO,
         state: "open",
         base: E2E_DEVELOP,
-        per_page: 50,
+        per_page: 100,
       });
-      const fallback = fallbackPRs.data.find((p) =>
-        p.head.ref.startsWith("chore/back-merge-"),
+      const fallback = fallbackPRs.data.find(
+        (p) =>
+          p.head.ref.startsWith("chore/back-merge-") &&
+          !preExistingFallbackNumbers.has(p.number) &&
+          Date.parse(p.created_at) >= testStartedAt - 5_000,
       );
       expect(
         fallback,
         fallback
-          ? `unexpected fallback PR #${fallback.number} (${fallback.html_url}) — ` +
+          ? `unexpected fallback PR #${fallback.number} (${fallback.html_url}) opened during this run — ` +
               "back-merge took the conflict-recovery path; investigate merge-driver wiring"
           : undefined,
       ).toBeUndefined();
