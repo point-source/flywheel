@@ -16,7 +16,7 @@
 #      Optionally adds a GitHub App as a bypass actor so the bot can mint tags.
 #
 # Usage:
-#   ./scripts/apply-rulesets.sh <owner/repo> [--config <path>] [--required-checks "Quality,Build"] [--release-required-checks "e2e"] [--app-id 12345]
+#   ./scripts/apply-rulesets.sh <owner/repo> [--config <path>] [--required-checks "quality,build"] [--release-required-checks "e2e"] [--app-id 12345]
 #
 # --config defaults to ./.flywheel.yml. Use it to apply rulesets that match
 # a config that hasn't been merged to the current working tree yet (e.g.
@@ -177,6 +177,18 @@ if gh api -X PATCH "repos/$REPO" -f delete_branch_on_merge=true >/dev/null 2>&1;
   echo "Enabled delete_branch_on_merge on $REPO (head branches auto-delete on PR merge; stream branches protected by the ruleset above)."
 else
   echo "warning: could not enable delete_branch_on_merge on $REPO — set manually in Settings → General → Pull Requests, or check your gh permissions." >&2
+fi
+
+# Enable allow_auto_merge. The pr-flow conductor schedules GitHub native
+# auto-merge for eligible PRs; native auto-merge waits for the required status
+# checks configured above instead of merging immediately. With allow_auto_merge
+# off (the default for new repos), enablePullRequestAutoMerge is refused and
+# pr-flow can only fall back to a direct merge — which, for an App in the
+# review ruleset's bypass_actors, skips those very checks (#147). Idempotent.
+if gh api -X PATCH "repos/$REPO" -f allow_auto_merge=true >/dev/null 2>&1; then
+  echo "Enabled allow_auto_merge on $REPO (native auto-merge can wait for required checks)."
+else
+  echo "warning: could not enable allow_auto_merge on $REPO — set manually in Settings → General → Pull Requests → Allow auto-merge, or check your gh permissions." >&2
 fi
 
 echo "Applying review ruleset to $branch_count branch(es) in $REPO..."

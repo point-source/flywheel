@@ -68,6 +68,16 @@ export interface GitHubClient {
   disableAutoMerge(prNodeId: string): Promise<void>;
   mergePR(prNumber: number, method: MergeMethod): Promise<MergeResult>;
 
+  /**
+   * Returns the PR's computed `mergeable_state` — "clean", "blocked",
+   * "unstable", "behind", "dirty", "draft", "has_hooks", or "unknown".
+   * GitHub computes this asynchronously, so a freshly-opened PR reports
+   * "unknown" until it settles; this polls briefly past that. pr-flow uses
+   * it to decide whether a declined native auto-merge is safe to direct
+   * merge ("clean" — nothing pending) or must wait ("blocked" etc.) — see #147.
+   */
+  getMergeableState(prNumber: number): Promise<string>;
+
   listPullCommits(prNumber: number): Promise<Commit[]>;
   listBranchCommits(branch: string): Promise<Commit[]>;
 
@@ -179,6 +189,20 @@ export function createGitHubClient(token: string, repoFullName?: string): GitHub
         const status = (err as { status?: number } | undefined)?.status;
         const message = err instanceof Error ? err.message : String(err);
         return { ok: false, reason: message, ...(status !== undefined ? { status } : {}) };
+      }
+    },
+
+    async getMergeableState(pull_number) {
+      // GitHub computes mergeable_state asynchronously — a freshly-opened PR
+      // reports "unknown" until it settles (typically within a couple of
+      // seconds). Poll until it settles so the caller gets a decided value;
+      // if it never does, return "unknown" and let the caller fail safe
+      // (treat it the same as "blocked" — do not direct merge).
+      for (let attempt = 0; ; attempt++) {
+        const res = await octokit.rest.pulls.get({ owner, repo, pull_number });
+        const state = res.data.mergeable_state;
+        if (state !== "unknown" || attempt >= 7) return state;
+        await new Promise((resolve) => setTimeout(resolve, 1500));
       }
     },
 

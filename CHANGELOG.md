@@ -1,11 +1,50 @@
-# [1.2.0](https://github.com/point-source/flywheel/compare/v1.1.7...v1.2.0) (2026-05-13)
+## [1.2.1-dev.5](https://github.com/point-source/flywheel/compare/v1.2.1-dev.4...v1.2.1-dev.5) (2026-05-18)
+
+
+### Bug Fixes
+
+* **quality-template:** match Flywheel commits via merge_group.head_commit context ([#159](https://github.com/point-source/flywheel/issues/159)) ([40fdf4e](https://github.com/point-source/flywheel/commit/40fdf4eaa92edc1332390c07f3d63a6c9494a050)), closes [#150](https://github.com/point-source/flywheel/issues/150)
+
+## [1.2.1-dev.4](https://github.com/point-source/flywheel/compare/v1.2.1-dev.3...v1.2.1-dev.4) (2026-05-18)
+
+
+### Bug Fixes
+
+* **setup:** align quality.yml check name with adopter docs ([#156](https://github.com/point-source/flywheel/issues/156)) ([01aa923](https://github.com/point-source/flywheel/commit/01aa92358ee13813768afacd0d68ae63ce470444)), closes [#149](https://github.com/point-source/flywheel/issues/149)
+
+## [1.2.1-dev.3](https://github.com/point-source/flywheel/compare/v1.2.1-dev.2...v1.2.1-dev.3) (2026-05-18)
+
+
+### Bug Fixes
+
+* **pr-flow:** gate direct-merge fallback on "blocked", not "clean" ([#157](https://github.com/point-source/flywheel/issues/157)) ([d169964](https://github.com/point-source/flywheel/commit/d1699647cfbe8e873733040dc65fa1fa72788201)), closes [#155](https://github.com/point-source/flywheel/issues/155) [#147](https://github.com/point-source/flywheel/issues/147) [#147](https://github.com/point-source/flywheel/issues/147)
+
+## [1.2.1-dev.2](https://github.com/point-source/flywheel/compare/v1.2.1-dev.1...v1.2.1-dev.2) (2026-05-18)
+
+
+### Bug Fixes
+
+* **pr-flow:** gate direct-merge fallback on mergeable_state, not decline text ([#155](https://github.com/point-source/flywheel/issues/155)) ([4089d17](https://github.com/point-source/flywheel/commit/4089d17c448b391a7009d16bf76d5ee2008eb3e5)), closes [#153](https://github.com/point-source/flywheel/issues/153) [#147](https://github.com/point-source/flywheel/issues/147)
+
+## [1.2.1-dev.1](https://github.com/point-source/flywheel/compare/v1.2.0...v1.2.1-dev.1) (2026-05-18)
+
+
+### Bug Fixes
+
+* **pr-flow:** prevent direct-merge fallback from bypassing required checks ([#153](https://github.com/point-source/flywheel/issues/153)) ([3f48d85](https://github.com/point-source/flywheel/commit/3f48d8537659c23e7c728bdb18fbee44786f736a)), closes [#147](https://github.com/point-source/flywheel/issues/147) [#147](https://github.com/point-source/flywheel/issues/147)
+
+# [0.0.0](https://github.com/point-source/flywheel/compare/v1.2.0-dev.1...v0.0.0) (2026-05-13)
+
+# [1.2.0-dev.1](https://github.com/point-source/flywheel/compare/v1.1.7...v1.2.0-dev.1) (2026-05-13)
 
 
 ### Features
 
 * **rulesets:** add release-gate ruleset for production branches ([#144](https://github.com/point-source/flywheel/issues/144)) ([3bdb1c2](https://github.com/point-source/flywheel/commit/3bdb1c2cdd855ddf06a9950e21fd4a157105ec7d)), closes [#134](https://github.com/point-source/flywheel/issues/134)
 
-# [0.0.0](https://github.com/point-source/flywheel/compare/v1.1.7-dev.1...v0.0.0) (2026-05-13)
+## [1.1.7-dev.1](https://github.com/point-source/flywheel/compare/v1.1.6...v1.1.7-dev.1) (2026-05-13)
+
+## [1.1.7](https://github.com/point-source/flywheel/compare/v1.1.7-dev.1...v1.1.7) (2026-05-13)
 
 ## [1.1.7-dev.1](https://github.com/point-source/flywheel/compare/v1.1.6...v1.1.7-dev.1) (2026-05-13)
 

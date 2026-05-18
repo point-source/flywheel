@@ -16,7 +16,7 @@
 #   --skip-secrets        do not prompt for App credentials (FLYWHEEL_GH_APP_ID
 #                         variable, FLYWHEEL_GH_APP_PRIVATE_KEY secret)
 #   --skip-rulesets       do not offer to run apply-rulesets.sh
-#   --required-checks "Quality,Build"   passed through to apply-rulesets.sh
+#   --required-checks "quality,build"   passed through to apply-rulesets.sh
 #   --force               overwrite flywheel-pr.yml / flywheel-push.yml even
 #                         if they already exist (for upgrading workflows
 #                         when a new Flywheel version changes the templates).

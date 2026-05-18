@@ -28197,6 +28197,14 @@ function createGitHubClient(token, repoFullName) {
         return { ok: false, reason: message, ...status !== void 0 ? { status } : {} };
       }
     },
+    async getMergeableState(pull_number) {
+      for (let attempt = 0; ; attempt++) {
+        const res = await octokit.rest.pulls.get({ owner, repo, pull_number });
+        const state = res.data.mergeable_state;
+        if (state !== "unknown" || attempt >= 7) return state;
+        await new Promise((resolve2) => setTimeout(resolve2, 1500));
+      }
+    },
     async listPullCommits(pull_number) {
       const all = await octokit.paginate(octokit.rest.pulls.listCommits, {
         owner,
@@ -28695,12 +28703,6 @@ async function runPrFlow({ pr, config, gh, log }) {
     log.warning(`PR #${pr.number}: skip-ci marker(s) found \u2014 failing check posted.`);
     return { kind: "skip-ci-found" };
   }
-  await gh.createCheck({
-    name: FLYWHEEL_TITLE_CHECK,
-    conclusion: "success",
-    summary: `Valid conventional commit title.`,
-    headSha: pr.headSha
-  });
   const breakingFromBodies = commits.some((c) => detectBreakingInBody(c.body));
   const increment = computeIncrement(parsed, breakingFromBodies);
   const matchKey = parsed.breaking || breakingFromBodies ? `${parsed.type}!` : parsed.type;
@@ -28727,6 +28729,12 @@ async function runPrFlow({ pr, config, gh, log }) {
     await gh.removeLabel(pr.number, FLYWHEEL_NEEDS_REVIEW_LABEL);
     const method = "SQUASH";
     const result = await gh.enableAutoMerge(pr.nodeId, method);
+    await gh.createCheck({
+      name: FLYWHEEL_TITLE_CHECK,
+      conclusion: "success",
+      summary: `Valid conventional commit title.`,
+      headSha: pr.headSha
+    });
     if (result.ok) {
       log.info(`PR #${pr.number}: auto-merge enabled (${method.toLowerCase()}).`);
       return {
@@ -28736,8 +28744,21 @@ async function runPrFlow({ pr, config, gh, log }) {
         merged: false
       };
     }
+    const mergeableState = await gh.getMergeableState(pr.number);
+    if (mergeableState === "blocked" || mergeableState === "unknown") {
+      log.warning(
+        `PR #${pr.number}: native auto-merge declined (${result.reason}) and PR mergeable_state is "${mergeableState}" \u2014 a required check or review is unsatisfied (or unresolved), so NOT falling back to a direct merge, which would bypass it. Label applied; merge requires manual action \u2014 check the repository 'Allow auto-merge' setting and branch protection.`
+      );
+      return {
+        kind: "labeled",
+        label: FLYWHEEL_AUTO_MERGE_LABEL,
+        autoMergeEnabled: false,
+        merged: false,
+        autoMergeReason: result.reason
+      };
+    }
     log.info(
-      `PR #${pr.number}: native auto-merge declined (${result.reason}); attempting direct merge.`
+      `PR #${pr.number}: native auto-merge declined (${result.reason}); mergeable_state is "${mergeableState}" \u2014 attempting direct merge.`
     );
     const directMerge = await gh.mergePR(pr.number, method);
     if (directMerge.ok) {
@@ -28751,7 +28772,7 @@ async function runPrFlow({ pr, config, gh, log }) {
       };
     }
     log.warning(
-      `PR #${pr.number}: native auto-merge and direct merge both failed \u2014 auto-merge: ${result.reason}; direct: ${directMerge.reason}. Label applied; merge requires manual action.`
+      `PR #${pr.number}: native auto-merge declined (${result.reason}) and direct merge failed \u2014 direct: ${directMerge.reason}. Label applied; merge requires manual action.`
     );
     return {
       kind: "labeled",
@@ -28765,6 +28786,12 @@ async function runPrFlow({ pr, config, gh, log }) {
   await gh.addLabels(pr.number, [FLYWHEEL_NEEDS_REVIEW_LABEL]);
   await gh.removeLabel(pr.number, FLYWHEEL_AUTO_MERGE_LABEL);
   await gh.disableAutoMerge(pr.nodeId);
+  await gh.createCheck({
+    name: FLYWHEEL_TITLE_CHECK,
+    conclusion: "success",
+    summary: `Valid conventional commit title.`,
+    headSha: pr.headSha
+  });
   log.info(`PR #${pr.number}: ${matchKey} not in auto_merge list for ${branch.name} \u2192 needs review.`);
   return {
     kind: "labeled",

@@ -135,17 +135,12 @@ export async function runPrFlow({ pr, config, gh, log }: PrFlowDeps): Promise<Pr
     return { kind: "skip-ci-found" };
   }
 
-  // Title is valid and no skip-ci markers — post a passing check so adopters
-  // can require flywheel/conventional-commit in branch protection without it
-  // disappearing for non-failing cases (which would surface as "Expected —
-  // Waiting for status").
-  await gh.createCheck({
-    name: FLYWHEEL_TITLE_CHECK,
-    conclusion: "success",
-    summary: `Valid conventional commit title.`,
-    headSha: pr.headSha,
-  });
-
+  // Title is valid and no skip-ci markers. The passing flywheel/conventional-commit
+  // check is posted further down — after native auto-merge is scheduled on the
+  // eligible path (see the comment there), and unconditionally on the
+  // needs-review path. Adopters can require this check in branch protection
+  // without it disappearing for non-failing cases ("Expected — Waiting for
+  // status").
   const breakingFromBodies = commits.some((c) => detectBreakingInBody(c.body));
   const increment = computeIncrement(parsed, breakingFromBodies);
   const matchKey = parsed.breaking || breakingFromBodies ? `${parsed.type}!` : parsed.type;
@@ -183,7 +178,23 @@ export async function runPrFlow({ pr, config, gh, log }: PrFlowDeps): Promise<Pr
     // exactly one CHANGELOG entry (per the conventional-commit title) and
     // intermediate WIP commits stay invisible.
     const method: MergeMethod = "SQUASH";
+    // Schedule native auto-merge *before* posting the flywheel/conventional-commit
+    // check. While that required check is still unreported the PR sits in a
+    // `blocked` state, so `enablePullRequestAutoMerge` is accepted and the
+    // squash is scheduled; posting the success check immediately after clears
+    // the gate and GitHub merges via native auto-merge — which honors every
+    // required status check. Posting the check first leaves the PR `clean`,
+    // GitHub refuses to schedule auto-merge (nothing to wait on), and the PR
+    // falls through to the direct merge below — which runs under the App token
+    // and bypasses required checks via the review ruleset's `bypass_actors`
+    // entry (#147).
     const result = await gh.enableAutoMerge(pr.nodeId, method);
+    await gh.createCheck({
+      name: FLYWHEEL_TITLE_CHECK,
+      conclusion: "success",
+      summary: `Valid conventional commit title.`,
+      headSha: pr.headSha,
+    });
     if (result.ok) {
       log.info(`PR #${pr.number}: auto-merge enabled (${method.toLowerCase()}).`);
       return {
@@ -194,13 +205,40 @@ export async function runPrFlow({ pr, config, gh, log }: PrFlowDeps): Promise<Pr
       };
     }
 
-    // Native auto-merge declined. Most common cause when an adopter has no
-    // required status checks: the PR is in clean state, so GitHub considers
-    // there's nothing to schedule auto-merge against. Fall back to a direct
-    // merge — the App's installation token can perform it provided branch
-    // protection rules are satisfied.
+    // Native auto-merge declined. Fall back to a direct merge unless the PR's
+    // mergeable_state is "blocked" — the one state that means a *required*
+    // status check or review is unsatisfied. That is the #147 danger: a repo
+    // with required checks but `allow_auto_merge` disabled reports "blocked",
+    // and a direct merge under the App token would bypass the gate via the
+    // review ruleset's `bypass_actors` entry. "unknown" (GitHub still
+    // computing mergeability) is treated the same — fail safe.
+    //
+    // Every other state is safe to direct merge: "clean" (the no-required-
+    // checks adopter) and "unstable" (mergeable, only a *non-required* check
+    // is pending — no required gate to bypass) included. Gating on "clean"
+    // only was wrong: a repo whose PR workflows aren't required checks leaves
+    // PRs "unstable", and the no-required-checks fallback never fired (#147
+    // follow-up). Gating on the decline *reason* string was also wrong —
+    // GitHub's wording is not contractual.
+    const mergeableState = await gh.getMergeableState(pr.number);
+    if (mergeableState === "blocked" || mergeableState === "unknown") {
+      log.warning(
+        `PR #${pr.number}: native auto-merge declined (${result.reason}) and PR mergeable_state is "${mergeableState}" — a required check or review is unsatisfied (or unresolved), so NOT falling back to a direct merge, which would bypass it. Label applied; merge requires manual action — check the repository 'Allow auto-merge' setting and branch protection.`,
+      );
+      return {
+        kind: "labeled",
+        label: FLYWHEEL_AUTO_MERGE_LABEL,
+        autoMergeEnabled: false,
+        merged: false,
+        autoMergeReason: result.reason,
+      };
+    }
+
+    // mergeable_state is "clean"/"unstable"/etc. — no required gate is
+    // outstanding. Fall back to a direct merge — the App's installation token
+    // can perform it.
     log.info(
-      `PR #${pr.number}: native auto-merge declined (${result.reason}); attempting direct merge.`,
+      `PR #${pr.number}: native auto-merge declined (${result.reason}); mergeable_state is "${mergeableState}" — attempting direct merge.`,
     );
     const directMerge = await gh.mergePR(pr.number, method);
     if (directMerge.ok) {
@@ -215,7 +253,7 @@ export async function runPrFlow({ pr, config, gh, log }: PrFlowDeps): Promise<Pr
     }
 
     log.warning(
-      `PR #${pr.number}: native auto-merge and direct merge both failed — auto-merge: ${result.reason}; direct: ${directMerge.reason}. Label applied; merge requires manual action.`,
+      `PR #${pr.number}: native auto-merge declined (${result.reason}) and direct merge failed — direct: ${directMerge.reason}. Label applied; merge requires manual action.`,
     );
     return {
       kind: "labeled",
@@ -234,6 +272,16 @@ export async function runPrFlow({ pr, config, gh, log }: PrFlowDeps): Promise<Pr
   // "not enabled" errors, so both are safe to call unconditionally.
   await gh.removeLabel(pr.number, FLYWHEEL_AUTO_MERGE_LABEL);
   await gh.disableAutoMerge(pr.nodeId);
+  // Post the passing conventional-commit check. There is no auto-merge to
+  // schedule on this path, so ordering relative to the check doesn't matter
+  // here — but the check must still be posted so an adopter requiring it in
+  // branch protection doesn't see a permanent "Expected — Waiting for status".
+  await gh.createCheck({
+    name: FLYWHEEL_TITLE_CHECK,
+    conclusion: "success",
+    summary: `Valid conventional commit title.`,
+    headSha: pr.headSha,
+  });
   log.info(`PR #${pr.number}: ${matchKey} not in auto_merge list for ${branch.name} → needs review.`);
   return {
     kind: "labeled",

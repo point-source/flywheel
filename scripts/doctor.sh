@@ -279,7 +279,7 @@ if repo_settings="$(gh api "repos/$REPO" 2>/dev/null)"; then
   if [[ "$(echo "$repo_settings" | jq -r .allow_auto_merge)" == "true" ]]; then
     ok "allow_auto_merge enabled"
   else
-    fail "allow_auto_merge disabled — enable in Settings → General → Pull Requests → Allow auto-merge"
+    fail "allow_auto_merge disabled — flywheel cannot schedule native auto-merge, so eligible PRs fall back to a direct merge that bypasses required status checks (#147). Re-run scripts/apply-rulesets.sh $REPO, or enable in Settings → General → Pull Requests → Allow auto-merge"
   fi
   if [[ "$(echo "$repo_settings" | jq -r .delete_branch_on_merge)" == "true" ]]; then
     ok "delete_branch_on_merge enabled (head branches auto-delete on merge)"

@@ -271,6 +271,8 @@ jobs:
 
 Flywheel does not invoke or wait for your quality checks — register them yourself as required status checks.
 
+> **Only *required* status checks gate auto-merge.** Native auto-merge merges an eligible PR as soon as its **required** checks pass. A workflow that runs on `pull_request` but is **not** in the branch's required-status-checks list does **not** block the merge — the PR can merge while that check is still running, and even after it has failed. A check that merely *runs* on PRs is informational; only a *required* one is a gate. So if a check must block merges, it has to be a required status check — add it via `apply-rulesets.sh --required-checks` (below). This is also why a green PR can later turn out to have a failing non-required check: the check never had a vote.
+
 **Critical:** any workflow used as a required status check **must include both** `pull_request` and `merge_group` triggers. Without `merge_group`, the merge queue stalls waiting for a check that never fires.
 
 A copy-paste starter ships at [`scripts/templates/quality.yml`](https://github.com/point-source/flywheel/blob/v1/scripts/templates/quality.yml) — fetch it directly into your repo:
@@ -285,18 +287,18 @@ curl -fsSL https://raw.githubusercontent.com/point-source/flywheel/main/scripts/
 Or write it inline:
 
 ```yaml
-name: Quality
+name: quality
 on:
   pull_request:
   merge_group:    # required for merge queue compatibility
 jobs:
-  test:
+  quality:    # job id = the check-run name you register in the ruleset
     # See "Skipping CI on Flywheel-emitted commits" below for why this `if:`
     # is shipped active by default. Remove it to run the full check on every
     # commit — including release / back-merge / promotion-PR ones.
     if: |
-      !startsWith(github.event.head_commit.message || '', 'chore(release):') &&
-      !startsWith(github.event.head_commit.message || '', 'chore: back-merge') &&
+      !startsWith(github.event.merge_group.head_commit.message || '', 'chore(release):') &&
+      !startsWith(github.event.merge_group.head_commit.message || '', 'chore: back-merge') &&
       !contains(github.event.pull_request.title || '', ': promote ')
     runs-on: ubuntu-latest
     steps:
@@ -313,6 +315,8 @@ The `quality.yml` template (and the inline copy above) ships with a job-level `i
 - The bot-managed promotion PR (its title contains `: promote `).
 
 A job-level `if:` that evaluates `false` reports `success` to the required-status-checks rule (per [GitHub's docs on handling skipped but required checks](https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/collaborating-on-repositories-with-code-quality-features/troubleshooting-required-status-checks#handling-skipped-but-required-checks)). This is the GitHub-blessed alternative to `[skip ci]` — which is a *workflow-level* commit-message filter and would leave required checks `Pending` forever, blocking promotion PRs whose head SHA is one of these commits.
+
+The first two clauses resolve only on the `merge_group` trigger — `pull_request` event payloads carry no commit message, so on a PR-triggered run the `: promote ` title is the signal that does the work. Release and back-merge commits are pushed directly to branches and reach a PR-triggered run only via the promotion PR, so this split covers every case. See [ADR 0003](../design/decisions/0003-quality-template-skip-clauses.md) for the full rationale.
 
 > **Skip-ci markers are now actively blocked.** Flywheel's `flywheel/conventional-commit` PR check fails any PR whose title, body, or any commit message contains one of GitHub's six skip-ci magic strings (`[skip ci]`, `[ci skip]`, `[no ci]`, `[skip actions]`, `[actions skip]`, `***NO_CI***`). `apply-rulesets.sh` requires this check by default, so the gate is on automatically as long as you accept the default ruleset. The reason for the hard block: when these markers ride along in a squash-merge body (which by default concatenates the squashed commits' messages), GitHub silently suppresses every workflow on the merged commit — including `Flywheel — Push`, which is what triggers `semantic-release`. The result is "I merged the PR but no release fired," with no surfaceable error. The check exists so this fails fast at PR time, with a clear message naming the offending source.
 
@@ -347,7 +351,7 @@ Flywheel is designed for repos where agent swarms produce dozens or hundreds of 
 The first and third rulesets can be applied in one command. **Pass `--app-id` — it's mandatory**, not optional:
 
 ```bash
-scripts/apply-rulesets.sh <owner/repo> --required-checks "Quality" --app-id <your-app-id>
+scripts/apply-rulesets.sh <owner/repo> --required-checks "quality" --app-id <your-app-id>
 ```
 
 (Or via `curl -fsSL https://raw.githubusercontent.com/point-source/flywheel/main/scripts/apply-rulesets.sh | bash -s -- <owner/repo>` if you don't have the Flywheel repo checked out.)
@@ -373,7 +377,7 @@ Paste the snippet below into the file you've chosen as the source of truth. The 
 | `<DEFAULT_TARGET_BRANCH>` | `.flywheel.yml` | The first branch in the first stream — the entry point of your main-line. In a single-branch config it's just that branch. |
 | `<list other managed branches>` | `.flywheel.yml` | Every `branches[].name` across all streams, **excluding** `<DEFAULT_TARGET_BRANCH>`. May be empty for a single-branch single-stream config. |
 | `<copy auto_merge list from .flywheel.yml>` | `.flywheel.yml` | The `auto_merge` array for the branch you used as `<DEFAULT_TARGET_BRANCH>`. Copy verbatim, including any `!` variants. |
-| `<list required check names>` | repo ruleset | The status checks marked required on your default target branch (e.g. `Quality`). These come from §5 — they aren't in `.flywheel.yml`. |
+| `<list required check names>` | repo ruleset | The status checks marked required on your default target branch (e.g. `quality` — the job id from the `quality.yml` template). These come from §5 — they aren't in `.flywheel.yml`. |
 | `<local commands>` | your `quality.yml` | The local equivalent of whatever `quality.yml` runs in CI (e.g. `npm test`, `pytest`, `./scripts/ci.sh`). |
 
 > **If you are an AI agent reading this doc to configure yourself:** the first three rows above are deterministic — derive them yourself by reading `.flywheel.yml` from the repo root. For the last two, ask the human adopter; they depend on repo configuration outside Flywheel's control.
@@ -425,12 +429,12 @@ This repo uses [Flywheel](https://github.com/point-source/flywheel) to orchestra
 **If your PR was labeled `flywheel:needs-review` and you expected `flywheel:auto-merge`:** the title's commit type is not in the target branch's `auto_merge` list, or you used a breaking variant (`feat!`) when only the non-breaking variant (`feat`) is allowed. Check `.flywheel.yml`.
 ````
 
-Worked example using the three-stage promotion config from §2 (`develop` → `staging` → `main`), with `Quality` registered as the required check:
+Worked example using the three-stage promotion config from §2 (`develop` → `staging` → `main`), with `quality` registered as the required check:
 
 - `<DEFAULT_TARGET_BRANCH>` → `develop` (first branch of the only stream)
 - `<list other managed branches>` → `staging, main`
 - `<copy auto_merge list from .flywheel.yml>` → `fix, fix!, feat, chore, refactor, perf, style, test, docs`
-- `<list required check names>` → `Quality`
+- `<list required check names>` → `quality`
 - `<local commands>` → `npm test && npm run lint` (whatever your `quality.yml` runs)
 
 If your repo already has a `CONTRIBUTING.md`, `CLAUDE.md`, `AGENTS.md`, or equivalent, append the snippet under a new section heading rather than replacing existing content — the instructions are additive and don't conflict with typical "how to navigate this codebase" guidance.
@@ -510,7 +514,7 @@ Floating major tags don't pin you to a known-good build. If a recent `@v<major>`
 
 **Got `flywheel:needs-review` but expected `flywheel:auto-merge`.** Compare the PR's commit type (with `!` if breaking) against the target branch's `auto_merge` list. `fix!` only matches if `fix!` is listed explicitly — listing `fix` doesn't imply `fix!`.
 
-**Native auto-merge wasn't enabled even though the PR got `flywheel:auto-merge`.** Either the branch doesn't have native auto-merge enabled (check **Settings → General → Pull Requests → Allow auto-merge**), the App lacks **Pull requests: write**, or you're passing a `secrets.GITHUB_TOKEN` somewhere instead of the App credentials (`app-id` / `app-private-key`). `doctor.sh` flags all three. Note: if your repo has no required status checks, the GraphQL `enableAutoMerge` mutation refuses with "Pull request is in clean status" — Flywheel falls through to a direct REST merge, so the PR still merges; the label stays applied.
+**Native auto-merge wasn't enabled even though the PR got `flywheel:auto-merge`.** Either the branch doesn't have native auto-merge enabled (check **Settings → General → Pull Requests → Allow auto-merge**), the App lacks **Pull requests: write**, or you're passing a `secrets.GITHUB_TOKEN` somewhere instead of the App credentials (`app-id` / `app-private-key`). `doctor.sh` flags all three. Note: when an eligible PR is already mergeable with no required check pending — e.g. your repo has no required status checks — GitHub's `enableAutoMerge` mutation has nothing to schedule and declines it; Flywheel then falls through to a direct REST merge, so the PR still merges and the label stays applied. If instead a required status check or review is unsatisfied (`mergeable_state` is `blocked`), Flywheel does **not** direct-merge — it leaves the label applied and logs a warning, so the fallback can never bypass your gates.
 
 **Release job failed with `EGITNOPERMISSION` / "denied to github-actions[bot]".** The branch ruleset doesn't list the App as a bypass actor — re-run `scripts/apply-rulesets.sh <owner/repo> --app-id <id>`. (Other historical causes — `actions/checkout@v6` not setting `persist-credentials: false`, extraheader shadowing — now live in the reusable workflow and can't drift from your repo.)
 
