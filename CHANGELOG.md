@@ -1,3 +1,10 @@
+## [1.2.1-dev.4](https://github.com/point-source/flywheel/compare/v1.2.1-dev.3...v1.2.1-dev.4) (2026-05-18)
+
+
+### Bug Fixes
+
+* **setup:** align quality.yml check name with adopter docs ([#156](https://github.com/point-source/flywheel/issues/156)) ([01aa923](https://github.com/point-source/flywheel/commit/01aa92358ee13813768afacd0d68ae63ce470444)), closes [#149](https://github.com/point-source/flywheel/issues/149)
+
 ## [1.2.1-dev.3](https://github.com/point-source/flywheel/compare/v1.2.1-dev.2...v1.2.1-dev.3) (2026-05-18)
 
 
