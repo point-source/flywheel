@@ -297,8 +297,8 @@ jobs:
     # is shipped active by default. Remove it to run the full check on every
     # commit — including release / back-merge / promotion-PR ones.
     if: |
-      !startsWith(github.event.head_commit.message || '', 'chore(release):') &&
-      !startsWith(github.event.head_commit.message || '', 'chore: back-merge') &&
+      !startsWith(github.event.merge_group.head_commit.message || '', 'chore(release):') &&
+      !startsWith(github.event.merge_group.head_commit.message || '', 'chore: back-merge') &&
       !contains(github.event.pull_request.title || '', ': promote ')
     runs-on: ubuntu-latest
     steps:
@@ -315,6 +315,8 @@ The `quality.yml` template (and the inline copy above) ships with a job-level `i
 - The bot-managed promotion PR (its title contains `: promote `).
 
 A job-level `if:` that evaluates `false` reports `success` to the required-status-checks rule (per [GitHub's docs on handling skipped but required checks](https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/collaborating-on-repositories-with-code-quality-features/troubleshooting-required-status-checks#handling-skipped-but-required-checks)). This is the GitHub-blessed alternative to `[skip ci]` — which is a *workflow-level* commit-message filter and would leave required checks `Pending` forever, blocking promotion PRs whose head SHA is one of these commits.
+
+The first two clauses resolve only on the `merge_group` trigger — `pull_request` event payloads carry no commit message, so on a PR-triggered run the `: promote ` title is the signal that does the work. Release and back-merge commits are pushed directly to branches and reach a PR-triggered run only via the promotion PR, so this split covers every case. See [ADR 0003](../design/decisions/0003-quality-template-skip-clauses.md) for the full rationale.
 
 > **Skip-ci markers are now actively blocked.** Flywheel's `flywheel/conventional-commit` PR check fails any PR whose title, body, or any commit message contains one of GitHub's six skip-ci magic strings (`[skip ci]`, `[ci skip]`, `[no ci]`, `[skip actions]`, `[actions skip]`, `***NO_CI***`). `apply-rulesets.sh` requires this check by default, so the gate is on automatically as long as you accept the default ruleset. The reason for the hard block: when these markers ride along in a squash-merge body (which by default concatenates the squashed commits' messages), GitHub silently suppresses every workflow on the merged commit — including `Flywheel — Push`, which is what triggers `semantic-release`. The result is "I merged the PR but no release fired," with no surfaceable error. The check exists so this fails fast at PR time, with a clear message naming the offending source.
 

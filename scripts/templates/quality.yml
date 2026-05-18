@@ -25,18 +25,28 @@ jobs:
     # Skip work on Flywheel-emitted metadata commits and on the bot-managed
     # promotion PR. A job-level `if:` that evaluates false reports `success`
     # to the required-status-checks rule (per GitHub docs), so this clears
-    # the gate without running tests on commits that have no meaningful
-    # signal:
+    # the gate without running tests on commits that carry no test signal:
     #   - `chore(release): ...` — semantic-release version bump
     #   - `chore: back-merge ...` — Flywheel back-merge of a release tag
     #   - PR title containing `: promote ` — the long-lived promotion PR
+    #
+    # The two triggers expose the tip commit differently, so the clauses
+    # are not interchangeable:
+    #   - merge_group carries it at `merge_group.head_commit` — the two
+    #     `startsWith` clauses match it there. (Unqualified `head_commit`
+    #     is a push-only payload field; on these triggers it is always
+    #     empty, so do not use it. See ADR 0003.)
+    #   - pull_request payloads carry no commit message, only the PR
+    #     title. Release and back-merge commits are pushed directly to
+    #     branches, so the only one that reaches a pull_request run is on
+    #     the promotion PR — which the `: promote ` title clause catches.
     # Reference:
     # https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/collaborating-on-repositories-with-code-quality-features/troubleshooting-required-status-checks#handling-skipped-but-required-checks
     # Remove this `if:` (or individual clauses) to opt back in to running
     # the full suite on those commits.
     if: |
-      !startsWith(github.event.head_commit.message || '', 'chore(release):') &&
-      !startsWith(github.event.head_commit.message || '', 'chore: back-merge') &&
+      !startsWith(github.event.merge_group.head_commit.message || '', 'chore(release):') &&
+      !startsWith(github.event.merge_group.head_commit.message || '', 'chore: back-merge') &&
       !contains(github.event.pull_request.title || '', ': promote ')
     runs-on: ubuntu-latest
     steps:
