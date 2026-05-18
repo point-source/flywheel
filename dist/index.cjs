@@ -28632,6 +28632,9 @@ function locateBranch(config, branchRef) {
 
 // src/pr-flow.ts
 var FLYWHEEL_TITLE_CHECK = "flywheel/conventional-commit";
+function isCleanStatusDecline(reason) {
+  return /clean (status|state)/i.test(reason);
+}
 async function runPrFlow({ pr, config, gh, log }) {
   const branch = findBranch(config, pr.baseRef);
   if (!branch) {
@@ -28695,12 +28698,6 @@ async function runPrFlow({ pr, config, gh, log }) {
     log.warning(`PR #${pr.number}: skip-ci marker(s) found \u2014 failing check posted.`);
     return { kind: "skip-ci-found" };
   }
-  await gh.createCheck({
-    name: FLYWHEEL_TITLE_CHECK,
-    conclusion: "success",
-    summary: `Valid conventional commit title.`,
-    headSha: pr.headSha
-  });
   const breakingFromBodies = commits.some((c) => detectBreakingInBody(c.body));
   const increment = computeIncrement(parsed, breakingFromBodies);
   const matchKey = parsed.breaking || breakingFromBodies ? `${parsed.type}!` : parsed.type;
@@ -28727,6 +28724,12 @@ async function runPrFlow({ pr, config, gh, log }) {
     await gh.removeLabel(pr.number, FLYWHEEL_NEEDS_REVIEW_LABEL);
     const method = "SQUASH";
     const result = await gh.enableAutoMerge(pr.nodeId, method);
+    await gh.createCheck({
+      name: FLYWHEEL_TITLE_CHECK,
+      conclusion: "success",
+      summary: `Valid conventional commit title.`,
+      headSha: pr.headSha
+    });
     if (result.ok) {
       log.info(`PR #${pr.number}: auto-merge enabled (${method.toLowerCase()}).`);
       return {
@@ -28736,8 +28739,20 @@ async function runPrFlow({ pr, config, gh, log }) {
         merged: false
       };
     }
+    if (!isCleanStatusDecline(result.reason)) {
+      log.warning(
+        `PR #${pr.number}: native auto-merge declined (${result.reason}) \u2014 not a benign clean-status decline, so NOT falling back to direct merge (that would bypass required checks). Label applied; merge requires manual action \u2014 check the repository 'Allow auto-merge' setting and branch protection.`
+      );
+      return {
+        kind: "labeled",
+        label: FLYWHEEL_AUTO_MERGE_LABEL,
+        autoMergeEnabled: false,
+        merged: false,
+        autoMergeReason: result.reason
+      };
+    }
     log.info(
-      `PR #${pr.number}: native auto-merge declined (${result.reason}); attempting direct merge.`
+      `PR #${pr.number}: native auto-merge declined (${result.reason}); PR is already mergeable \u2014 attempting direct merge.`
     );
     const directMerge = await gh.mergePR(pr.number, method);
     if (directMerge.ok) {
@@ -28751,7 +28766,7 @@ async function runPrFlow({ pr, config, gh, log }) {
       };
     }
     log.warning(
-      `PR #${pr.number}: native auto-merge and direct merge both failed \u2014 auto-merge: ${result.reason}; direct: ${directMerge.reason}. Label applied; merge requires manual action.`
+      `PR #${pr.number}: native auto-merge declined (${result.reason}) and direct merge failed \u2014 direct: ${directMerge.reason}. Label applied; merge requires manual action.`
     );
     return {
       kind: "labeled",
@@ -28765,6 +28780,12 @@ async function runPrFlow({ pr, config, gh, log }) {
   await gh.addLabels(pr.number, [FLYWHEEL_NEEDS_REVIEW_LABEL]);
   await gh.removeLabel(pr.number, FLYWHEEL_AUTO_MERGE_LABEL);
   await gh.disableAutoMerge(pr.nodeId);
+  await gh.createCheck({
+    name: FLYWHEEL_TITLE_CHECK,
+    conclusion: "success",
+    summary: `Valid conventional commit title.`,
+    headSha: pr.headSha
+  });
   log.info(`PR #${pr.number}: ${matchKey} not in auto_merge list for ${branch.name} \u2192 needs review.`);
   return {
     kind: "labeled",
