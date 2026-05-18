@@ -194,14 +194,15 @@ export function createGitHubClient(token: string, repoFullName?: string): GitHub
 
     async getMergeableState(pull_number) {
       // GitHub computes mergeable_state asynchronously — a freshly-opened PR
-      // reports "unknown" until it settles. Poll briefly so the caller gets a
-      // decided value; if it never settles, return "unknown" and let the
-      // caller fail safe (treat it as non-clean).
+      // reports "unknown" until it settles (typically within a couple of
+      // seconds). Poll until it settles so the caller gets a decided value;
+      // if it never does, return "unknown" and let the caller fail safe
+      // (treat it the same as "blocked" — do not direct merge).
       for (let attempt = 0; ; attempt++) {
         const res = await octokit.rest.pulls.get({ owner, repo, pull_number });
         const state = res.data.mergeable_state;
-        if (state !== "unknown" || attempt >= 4) return state;
-        await new Promise((resolve) => setTimeout(resolve, 1000));
+        if (state !== "unknown" || attempt >= 7) return state;
+        await new Promise((resolve) => setTimeout(resolve, 1500));
       }
     },
 
