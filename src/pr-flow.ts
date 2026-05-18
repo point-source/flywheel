@@ -33,24 +33,6 @@ export type PrFlowOutcome =
 
 export const FLYWHEEL_TITLE_CHECK = "flywheel/conventional-commit";
 
-/**
- * GitHub's `enablePullRequestAutoMerge` mutation refuses a PR that is already
- * fully mergeable ("Pull request is in clean status") — there is no pending
- * requirement to schedule the merge against. That decline is benign: an
- * immediate merge is exactly what auto-merge would have done. Every other
- * decline (`allow_auto_merge` disabled, unstable status, merge-method
- * mismatch) means the adopter's required checks are *not* yet satisfied, so a
- * direct merge under the App token would bypass them via the review ruleset's
- * `bypass_actors` entry (#147).
- *
- * Match conservatively: only the recognized clean-status wording is treated as
- * benign. An unrecognized message falls through to the non-benign path, which
- * leaves the PR for manual action rather than risking a bypassing merge.
- */
-export function isCleanStatusDecline(reason: string): boolean {
-  return /clean (status|state)/i.test(reason);
-}
-
 export interface PrFlowDeps {
   pr: PullRequest;
   config: FlywheelConfig;
@@ -223,16 +205,22 @@ export async function runPrFlow({ pr, config, gh, log }: PrFlowDeps): Promise<Pr
       };
     }
 
-    // Native auto-merge declined. Only the benign "clean status" decline — the
-    // PR is already fully mergeable, nothing pending — is safe to direct merge:
-    // that is exactly what auto-merge would have done. Any other decline
-    // (`allow_auto_merge` disabled, unstable status, merge-method mismatch, or
-    // an unrecognized message) means required checks are still outstanding; a
-    // direct merge would bypass them (#147), so leave the label applied and let
-    // the PR wait for manual action.
-    if (!isCleanStatusDecline(result.reason)) {
+    // Native auto-merge declined. Fall back to a direct merge only when the
+    // PR is genuinely already mergeable with nothing outstanding — GitHub's
+    // mergeable_state "clean". That is the no-required-checks adopter, where
+    // an immediate merge is exactly what auto-merge would have done. Any other
+    // state — in particular "blocked", which is what a repo that has required
+    // checks but `allow_auto_merge` disabled reports — means a direct merge
+    // under the App token would bypass the gate via the review ruleset's
+    // `bypass_actors` entry (#147). "unknown" (GitHub still computing
+    // mergeability) is treated as non-clean: fail safe and leave the PR for
+    // manual action. (Gating on the decline *reason* string was too brittle —
+    // GitHub's wording is not contractual and broke the no-required-checks
+    // path; mergeable_state is a stable enum.)
+    const mergeableState = await gh.getMergeableState(pr.number);
+    if (mergeableState !== "clean") {
       log.warning(
-        `PR #${pr.number}: native auto-merge declined (${result.reason}) — not a benign clean-status decline, so NOT falling back to direct merge (that would bypass required checks). Label applied; merge requires manual action — check the repository 'Allow auto-merge' setting and branch protection.`,
+        `PR #${pr.number}: native auto-merge declined (${result.reason}) and PR mergeable_state is "${mergeableState}" (not "clean") — NOT falling back to a direct merge, which would bypass required checks. Label applied; merge requires manual action — check the repository 'Allow auto-merge' setting and branch protection.`,
       );
       return {
         kind: "labeled",
@@ -243,10 +231,11 @@ export async function runPrFlow({ pr, config, gh, log }: PrFlowDeps): Promise<Pr
       };
     }
 
-    // Benign decline: the PR is already mergeable with nothing to wait on. Fall
-    // back to a direct merge — the App's installation token can perform it.
+    // mergeable_state is "clean": the PR is already mergeable with nothing to
+    // wait on. Fall back to a direct merge — the App's installation token can
+    // perform it.
     log.info(
-      `PR #${pr.number}: native auto-merge declined (${result.reason}); PR is already mergeable — attempting direct merge.`,
+      `PR #${pr.number}: native auto-merge declined (${result.reason}); mergeable_state is "clean" — attempting direct merge.`,
     );
     const directMerge = await gh.mergePR(pr.number, method);
     if (directMerge.ok) {
