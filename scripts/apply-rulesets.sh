@@ -179,6 +179,18 @@ else
   echo "warning: could not enable delete_branch_on_merge on $REPO — set manually in Settings → General → Pull Requests, or check your gh permissions." >&2
 fi
 
+# Enable allow_auto_merge. The pr-flow conductor schedules GitHub native
+# auto-merge for eligible PRs; native auto-merge waits for the required status
+# checks configured above instead of merging immediately. With allow_auto_merge
+# off (the default for new repos), enablePullRequestAutoMerge is refused and
+# pr-flow can only fall back to a direct merge — which, for an App in the
+# review ruleset's bypass_actors, skips those very checks (#147). Idempotent.
+if gh api -X PATCH "repos/$REPO" -f allow_auto_merge=true >/dev/null 2>&1; then
+  echo "Enabled allow_auto_merge on $REPO (native auto-merge can wait for required checks)."
+else
+  echo "warning: could not enable allow_auto_merge on $REPO — set manually in Settings → General → Pull Requests → Allow auto-merge, or check your gh permissions." >&2
+fi
+
 echo "Applying review ruleset to $branch_count branch(es) in $REPO..."
 
 review_payload="$(jq \

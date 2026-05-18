@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { runPrFlow } from "../src/pr-flow.js";
+import { FLYWHEEL_TITLE_CHECK, isCleanStatusDecline, runPrFlow } from "../src/pr-flow.js";
 import {
   FLYWHEEL_AUTO_MERGE_LABEL,
   FLYWHEEL_NEEDS_REVIEW_LABEL,
@@ -158,11 +158,13 @@ describe("runPrFlow", () => {
     expect(gh.directMergedPRs).toContain(7);
   });
 
-  it("auto-merge AND direct-merge both fail → labeled, not merged, warning logged", async () => {
+  it("non-benign auto-merge decline (allow_auto_merge disabled) → NO direct merge, label kept, warning", async () => {
+    // allow_auto_merge=false declines enablePullRequestAutoMerge even though
+    // the adopter has required checks. Direct-merging here would bypass those
+    // checks via the App's ruleset bypass, so pr-flow must not fall through.
     const gh = createFakeGh({
       pullCommits: { 7: [makeCommit("a", "fix: x")] },
       enableAutoMergeResponse: { ok: false, reason: "Auto merge is not allowed for this repository" },
-      mergePRResponse: { ok: false, reason: "Required status check 'build' is missing", status: 405 },
     });
     const { log, warnings } = silentLogger();
 
@@ -175,8 +177,62 @@ describe("runPrFlow", () => {
       merged: false,
     });
     expect(gh.prLabels[7]).toContain(FLYWHEEL_AUTO_MERGE_LABEL);
+    expect(gh.calls.some((c) => c.method === "mergePR")).toBe(false);
     expect(gh.directMergedPRs).not.toContain(7);
-    expect(warnings.some((w) => w.includes("native auto-merge and direct merge both failed"))).toBe(true);
+    expect(warnings.some((w) => w.includes("not a benign clean-status decline"))).toBe(true);
+  });
+
+  it("clean-status decline + direct merge fails → labeled, not merged, warning logged", async () => {
+    const gh = createFakeGh({
+      pullCommits: { 7: [makeCommit("a", "fix: x")] },
+      enableAutoMergeResponse: { ok: false, reason: "Pull request is in clean status" },
+      mergePRResponse: { ok: false, reason: "Required status check 'build' is missing", status: 405 },
+    });
+    const { log, warnings } = silentLogger();
+
+    const outcome = await runPrFlow({ pr: makePR(), config: baseConfig, gh, log });
+
+    expect(outcome).toMatchObject({
+      kind: "labeled",
+      label: FLYWHEEL_AUTO_MERGE_LABEL,
+      autoMergeEnabled: false,
+      merged: false,
+    });
+    expect(gh.directMergedPRs).not.toContain(7);
+    expect(warnings.some((w) => w.includes("direct merge failed"))).toBe(true);
+  });
+
+  it("schedules native auto-merge BEFORE posting the conventional-commit check", async () => {
+    // The PR must still be `blocked` (check unreported) when auto-merge is
+    // scheduled, or GitHub refuses it as already-clean. See #147.
+    const gh = createFakeGh({ pullCommits: { 7: [makeCommit("a", "fix: x")] } });
+    const { log } = silentLogger();
+
+    await runPrFlow({ pr: makePR(), config: baseConfig, gh, log });
+
+    const enableIdx = gh.calls.findIndex((c) => c.method === "enableAutoMerge");
+    const checkIdx = gh.calls.findIndex(
+      (c) => c.method === "createCheck" && (c.args as { name?: string }).name === FLYWHEEL_TITLE_CHECK,
+    );
+    expect(enableIdx).toBeGreaterThanOrEqual(0);
+    expect(checkIdx).toBeGreaterThan(enableIdx);
+  });
+
+  it("needs-review PR still posts a passing conventional-commit check", async () => {
+    const gh = createFakeGh({ pullCommits: { 7: [makeCommit("a", "feat: x")] } });
+    const { log } = silentLogger();
+
+    await runPrFlow({
+      pr: makePR({ title: "feat: x", baseRef: "main" }),
+      config: baseConfig,
+      gh,
+      log,
+    });
+
+    expect(gh.createdChecks.find((c) => c.name === FLYWHEEL_TITLE_CHECK)).toMatchObject({
+      name: FLYWHEEL_TITLE_CHECK,
+      conclusion: "success",
+    });
   });
 
   it("unmanaged base ref → no-op: no API calls beyond an info log", async () => {
@@ -662,5 +718,20 @@ describe("runPrFlow", () => {
     }).fields.body!;
     const matches = body.match(/Closes #104/g) ?? [];
     expect(matches).toHaveLength(1);
+  });
+});
+
+describe("isCleanStatusDecline", () => {
+  it("treats the already-mergeable decline as benign", () => {
+    expect(isCleanStatusDecline("Pull request is in clean status")).toBe(true);
+    expect(isCleanStatusDecline("Pull request is in clean state")).toBe(true);
+  });
+
+  it("treats every other decline (and unrecognized messages) as non-benign", () => {
+    expect(isCleanStatusDecline("Auto merge is not allowed for this repository")).toBe(false);
+    expect(isCleanStatusDecline("Pull request is in unstable status")).toBe(false);
+    expect(isCleanStatusDecline("Pull request is in dirty status")).toBe(false);
+    expect(isCleanStatusDecline("some unrecognized graphql error")).toBe(false);
+    expect(isCleanStatusDecline("")).toBe(false);
   });
 });
