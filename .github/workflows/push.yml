@@ -81,52 +81,24 @@ jobs:
         # 127. See #134.
         run: bash "${{ steps.flywheel.outputs.scripts_dir }}/sanitize-release-mentions.sh"
       - name: Register Flywheel merge drivers
-        # CHANGELOG.md and release_files paths are derived artifacts:
-        # semantic-release writes them on each release, humans don't edit them.
-        # When develop accumulates prereleases between promotions, both sides
-        # of a back-merge have rewritten the same lines and `git merge` cannot
-        # auto-resolve — that's issue #112.
-        #
-        # Two custom drivers eliminate the conflict surface:
-        #   - flywheel-changelog: regenerates CHANGELOG.md from git tag
-        #     history (conventional-changelog-cli with the angular preset
-        #     semantic-release uses). Merge result is the union of both
-        #     sides' tags; nothing is lost.
-        #   - flywheel-release-file: `driver = true` is git's built-in
-        #     "always accept ours" — safe for release_files because
-        #     semantic-release rewrites them wholesale on the next run.
-        #
-        # Attributes go in .git/info/attributes (runtime, not committed)
-        # so the rules apply even if the adopter's checked-in
-        # .gitattributes is out of sync with their .flywheel.yml.
+        # Registers the flywheel-changelog and flywheel-release-file git
+        # merge drivers and writes .git/info/attributes so release
+        # back-merges of derived artifacts (CHANGELOG.md, release_files
+        # paths) auto-resolve instead of hitting the #112 conflict.
         if: steps.flywheel.outputs.managed_branch == 'true'
         shell: bash
-        run: |
-          set -euo pipefail
-          git config merge.flywheel-changelog.name "Flywheel CHANGELOG regenerator"
-          # Direct redirect to "%A": git invokes the driver via `sh -c`, which
-          # expands variables in the value before exec. The earlier
-          # `bash -c "... > \"$1\"" -- %A` form looked safer (positional-arg
-          # quoting) but was actually broken: the outer sh expanded `$1` (which
-          # was empty in its context) before reaching the inner bash, so the
-          # inner script reduced to `... > ""` and silently failed. Drop the
-          # indirection — `> "%A"` is correctly quoted at the only layer that
-          # matters (the shell git runs the driver with). See #119.
-          git config merge.flywheel-changelog.driver \
-            'npx --yes conventional-changelog-cli@5 -p angular -r 0 > "%A"'
-          git config merge.flywheel-release-file.name "Flywheel release-file (keep ours)"
-          git config merge.flywheel-release-file.driver true
-          mkdir -p .git/info
-          {
-            echo "CHANGELOG.md merge=flywheel-changelog"
-            if [[ -f .flywheel.yml ]]; then
-              # One-liner because YAML's block-scalar indent rules conflict
-              # with Python's significant indentation (a heredoc'd multi-line
-              # script would either break YAML or break Python). PyYAML is
-              # preinstalled on ubuntu-latest.
-              python3 -c "import yaml; cfg=yaml.safe_load(open('.flywheel.yml')) or {}; files=(cfg.get('flywheel') or {}).get('release_files') or []; [print(e['path']+' merge=flywheel-release-file') for e in files if isinstance(e, dict) and e.get('path')]" 2>/dev/null || true
-            fi
-          } > .git/info/attributes
+        # Logic lives in scripts/register-merge-drivers.sh so it's
+        # lintable (shellcheck in CI) and unit-tested
+        # (tests/register-merge-drivers.test.ts). The driver string was
+        # silently broken once (#119); a typo here disables the driver
+        # and every back-merge conflicts — extracted from inline YAML in
+        # #133 to close that hole.
+        #
+        # Invoked via the action's `scripts_dir` output (absolute path).
+        # A bare `bash scripts/register-merge-drivers.sh` would run
+        # against the adopter's checkout, which doesn't have the script,
+        # and exit 127. See the sanitize / back-merge steps and #134.
+        run: bash "${{ steps.flywheel.outputs.scripts_dir }}/register-merge-drivers.sh"
       - name: Back-merge release into upstream branches
         # Only runs when this push triggered a release (a tag was created at
         # HEAD by semantic-release) and the stream has upstream branches.
