@@ -271,6 +271,8 @@ jobs:
 
 Flywheel does not invoke or wait for your quality checks — register them yourself as required status checks.
 
+> **Only *required* status checks gate auto-merge.** Native auto-merge merges an eligible PR as soon as its **required** checks pass. A workflow that runs on `pull_request` but is **not** in the branch's required-status-checks list does **not** block the merge — the PR can merge while that check is still running, and even after it has failed. A check that merely *runs* on PRs is informational; only a *required* one is a gate. So if a check must block merges, it has to be a required status check — add it via `apply-rulesets.sh --required-checks` (below). This is also why a green PR can later turn out to have a failing non-required check: the check never had a vote.
+
 **Critical:** any workflow used as a required status check **must include both** `pull_request` and `merge_group` triggers. Without `merge_group`, the merge queue stalls waiting for a check that never fires.
 
 A copy-paste starter ships at [`scripts/templates/quality.yml`](https://github.com/point-source/flywheel/blob/v1/scripts/templates/quality.yml) — fetch it directly into your repo:
