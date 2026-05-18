@@ -1,3 +1,10 @@
+## [1.2.1-dev.1](https://github.com/point-source/flywheel/compare/v1.2.0...v1.2.1-dev.1) (2026-05-18)
+
+
+### Bug Fixes
+
+* **pr-flow:** prevent direct-merge fallback from bypassing required checks ([#153](https://github.com/point-source/flywheel/issues/153)) ([3f48d85](https://github.com/point-source/flywheel/commit/3f48d8537659c23e7c728bdb18fbee44786f736a)), closes [#147](https://github.com/point-source/flywheel/issues/147) [#147](https://github.com/point-source/flywheel/issues/147)
+
 # [0.0.0](https://github.com/point-source/flywheel/compare/v1.2.0-dev.1...v0.0.0) (2026-05-13)
 
 # [1.2.0-dev.1](https://github.com/point-source/flywheel/compare/v1.1.7...v1.2.0-dev.1) (2026-05-13)
