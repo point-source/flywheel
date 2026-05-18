@@ -205,22 +205,25 @@ export async function runPrFlow({ pr, config, gh, log }: PrFlowDeps): Promise<Pr
       };
     }
 
-    // Native auto-merge declined. Fall back to a direct merge only when the
-    // PR is genuinely already mergeable with nothing outstanding — GitHub's
-    // mergeable_state "clean". That is the no-required-checks adopter, where
-    // an immediate merge is exactly what auto-merge would have done. Any other
-    // state — in particular "blocked", which is what a repo that has required
-    // checks but `allow_auto_merge` disabled reports — means a direct merge
-    // under the App token would bypass the gate via the review ruleset's
-    // `bypass_actors` entry (#147). "unknown" (GitHub still computing
-    // mergeability) is treated as non-clean: fail safe and leave the PR for
-    // manual action. (Gating on the decline *reason* string was too brittle —
-    // GitHub's wording is not contractual and broke the no-required-checks
-    // path; mergeable_state is a stable enum.)
+    // Native auto-merge declined. Fall back to a direct merge unless the PR's
+    // mergeable_state is "blocked" — the one state that means a *required*
+    // status check or review is unsatisfied. That is the #147 danger: a repo
+    // with required checks but `allow_auto_merge` disabled reports "blocked",
+    // and a direct merge under the App token would bypass the gate via the
+    // review ruleset's `bypass_actors` entry. "unknown" (GitHub still
+    // computing mergeability) is treated the same — fail safe.
+    //
+    // Every other state is safe to direct merge: "clean" (the no-required-
+    // checks adopter) and "unstable" (mergeable, only a *non-required* check
+    // is pending — no required gate to bypass) included. Gating on "clean"
+    // only was wrong: a repo whose PR workflows aren't required checks leaves
+    // PRs "unstable", and the no-required-checks fallback never fired (#147
+    // follow-up). Gating on the decline *reason* string was also wrong —
+    // GitHub's wording is not contractual.
     const mergeableState = await gh.getMergeableState(pr.number);
-    if (mergeableState !== "clean") {
+    if (mergeableState === "blocked" || mergeableState === "unknown") {
       log.warning(
-        `PR #${pr.number}: native auto-merge declined (${result.reason}) and PR mergeable_state is "${mergeableState}" (not "clean") — NOT falling back to a direct merge, which would bypass required checks. Label applied; merge requires manual action — check the repository 'Allow auto-merge' setting and branch protection.`,
+        `PR #${pr.number}: native auto-merge declined (${result.reason}) and PR mergeable_state is "${mergeableState}" — a required check or review is unsatisfied (or unresolved), so NOT falling back to a direct merge, which would bypass it. Label applied; merge requires manual action — check the repository 'Allow auto-merge' setting and branch protection.`,
       );
       return {
         kind: "labeled",
@@ -231,11 +234,11 @@ export async function runPrFlow({ pr, config, gh, log }: PrFlowDeps): Promise<Pr
       };
     }
 
-    // mergeable_state is "clean": the PR is already mergeable with nothing to
-    // wait on. Fall back to a direct merge — the App's installation token can
-    // perform it.
+    // mergeable_state is "clean"/"unstable"/etc. — no required gate is
+    // outstanding. Fall back to a direct merge — the App's installation token
+    // can perform it.
     log.info(
-      `PR #${pr.number}: native auto-merge declined (${result.reason}); mergeable_state is "clean" — attempting direct merge.`,
+      `PR #${pr.number}: native auto-merge declined (${result.reason}); mergeable_state is "${mergeableState}" — attempting direct merge.`,
     );
     const directMerge = await gh.mergePR(pr.number, method);
     if (directMerge.ok) {

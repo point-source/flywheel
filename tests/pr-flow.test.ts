@@ -160,6 +160,30 @@ describe("runPrFlow", () => {
     expect(gh.directMergedPRs).toContain(7);
   });
 
+  it("auto-merge declined + mergeable_state unstable (non-required check pending) → direct-merge fallback succeeds", async () => {
+    // A no-required-checks repo whose PR workflows aren't required checks
+    // leaves a freshly-opened PR "unstable" — mergeable, only a NON-required
+    // check is pending. No required gate to bypass, so the fallback must
+    // still merge (gating on "clean" only wrongly stranded this PR — #147
+    // follow-up, caught by the auto-merge-enablement integration test).
+    const gh = createFakeGh({
+      pullCommits: { 7: [makeCommit("a", "fix: x")] },
+      enableAutoMergeResponse: { ok: false, reason: "Pull request is in clean status" },
+      mergeableState: "unstable",
+    });
+    const { log } = silentLogger();
+
+    const outcome = await runPrFlow({ pr: makePR(), config: baseConfig, gh, log });
+
+    expect(outcome).toMatchObject({
+      kind: "labeled",
+      label: FLYWHEEL_AUTO_MERGE_LABEL,
+      autoMergeEnabled: false,
+      merged: true,
+    });
+    expect(gh.directMergedPRs).toContain(7);
+  });
+
   it("auto-merge declined + mergeable_state blocked (allow_auto_merge disabled) → NO direct merge, label kept, warning", async () => {
     // A repo with required checks but allow_auto_merge disabled declines
     // enablePullRequestAutoMerge and the PR reports mergeable_state "blocked".

@@ -28201,8 +28201,8 @@ function createGitHubClient(token, repoFullName) {
       for (let attempt = 0; ; attempt++) {
         const res = await octokit.rest.pulls.get({ owner, repo, pull_number });
         const state = res.data.mergeable_state;
-        if (state !== "unknown" || attempt >= 4) return state;
-        await new Promise((resolve2) => setTimeout(resolve2, 1e3));
+        if (state !== "unknown" || attempt >= 7) return state;
+        await new Promise((resolve2) => setTimeout(resolve2, 1500));
       }
     },
     async listPullCommits(pull_number) {
@@ -28745,9 +28745,9 @@ async function runPrFlow({ pr, config, gh, log }) {
       };
     }
     const mergeableState = await gh.getMergeableState(pr.number);
-    if (mergeableState !== "clean") {
+    if (mergeableState === "blocked" || mergeableState === "unknown") {
       log.warning(
-        `PR #${pr.number}: native auto-merge declined (${result.reason}) and PR mergeable_state is "${mergeableState}" (not "clean") \u2014 NOT falling back to a direct merge, which would bypass required checks. Label applied; merge requires manual action \u2014 check the repository 'Allow auto-merge' setting and branch protection.`
+        `PR #${pr.number}: native auto-merge declined (${result.reason}) and PR mergeable_state is "${mergeableState}" \u2014 a required check or review is unsatisfied (or unresolved), so NOT falling back to a direct merge, which would bypass it. Label applied; merge requires manual action \u2014 check the repository 'Allow auto-merge' setting and branch protection.`
       );
       return {
         kind: "labeled",
@@ -28758,7 +28758,7 @@ async function runPrFlow({ pr, config, gh, log }) {
       };
     }
     log.info(
-      `PR #${pr.number}: native auto-merge declined (${result.reason}); mergeable_state is "clean" \u2014 attempting direct merge.`
+      `PR #${pr.number}: native auto-merge declined (${result.reason}); mergeable_state is "${mergeableState}" \u2014 attempting direct merge.`
     );
     const directMerge = await gh.mergePR(pr.number, method);
     if (directMerge.ok) {
