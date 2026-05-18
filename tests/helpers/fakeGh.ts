@@ -19,6 +19,8 @@ export interface FakeGhInit {
   openPRs?: Record<string, PRSummary[]>;
   enableAutoMergeResponse?: EnableAutoMergeResult;
   mergePRResponse?: MergeResult;
+  /** PR `mergeable_state` returned by getMergeableState. Defaults to "clean". */
+  mergeableState?: string;
   prLabels?: Record<number, string[]>;
   /** PR-number → body text. Missing entries simulate a 404 (returns null). */
   pullBodies?: Record<number, string | null>;
@@ -53,6 +55,7 @@ export function createFakeGh(init: FakeGhInit = {}): FakeGh {
   const enableAutoMergeResponse: EnableAutoMergeResult = init.enableAutoMergeResponse ?? { ok: true };
   const mergePRResponse: MergeResult =
     init.mergePRResponse ?? { ok: true, sha: "merged0000000000000000000000000000000000" };
+  const mergeableState = init.mergeableState ?? "clean";
 
   const log = (method: string, args: unknown) => calls.push({ method, args });
 
@@ -104,6 +107,11 @@ export function createFakeGh(init: FakeGhInit = {}): FakeGh {
       log("mergePR", { prNumber, method });
       if (mergePRResponse.ok) directMergedPRs.push(prNumber);
       return mergePRResponse;
+    },
+
+    async getMergeableState(prNumber) {
+      log("getMergeableState", { prNumber });
+      return mergeableState;
     },
 
     async listPullCommits(prNumber) {

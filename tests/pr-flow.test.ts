@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { FLYWHEEL_TITLE_CHECK, isCleanStatusDecline, runPrFlow } from "../src/pr-flow.js";
+import { FLYWHEEL_TITLE_CHECK, runPrFlow } from "../src/pr-flow.js";
 import {
   FLYWHEEL_AUTO_MERGE_LABEL,
   FLYWHEEL_NEEDS_REVIEW_LABEL,
@@ -138,10 +138,11 @@ describe("runPrFlow", () => {
     expect(gh.autoMergeDisabledFor).toContain("PR_node_7");
   });
 
-  it("auto-merge declines (clean PR, no required checks) → direct-merge fallback succeeds", async () => {
+  it("auto-merge declined + mergeable_state clean (no required checks) → direct-merge fallback succeeds", async () => {
     const gh = createFakeGh({
       pullCommits: { 7: [makeCommit("a", "fix: x")] },
       enableAutoMergeResponse: { ok: false, reason: "Pull request is in clean status" },
+      mergeableState: "clean",
       // mergePRResponse defaults to { ok: true, sha: "merged..." }
     });
     const { log } = silentLogger();
@@ -155,16 +156,19 @@ describe("runPrFlow", () => {
       merged: true,
     });
     expect(gh.prLabels[7]).toContain(FLYWHEEL_AUTO_MERGE_LABEL);
+    expect(gh.calls.some((c) => c.method === "getMergeableState")).toBe(true);
     expect(gh.directMergedPRs).toContain(7);
   });
 
-  it("non-benign auto-merge decline (allow_auto_merge disabled) → NO direct merge, label kept, warning", async () => {
-    // allow_auto_merge=false declines enablePullRequestAutoMerge even though
-    // the adopter has required checks. Direct-merging here would bypass those
-    // checks via the App's ruleset bypass, so pr-flow must not fall through.
+  it("auto-merge declined + mergeable_state blocked (allow_auto_merge disabled) → NO direct merge, label kept, warning", async () => {
+    // A repo with required checks but allow_auto_merge disabled declines
+    // enablePullRequestAutoMerge and the PR reports mergeable_state "blocked".
+    // Direct-merging here would bypass those checks via the App's ruleset
+    // bypass, so pr-flow must not fall through.
     const gh = createFakeGh({
       pullCommits: { 7: [makeCommit("a", "fix: x")] },
       enableAutoMergeResponse: { ok: false, reason: "Auto merge is not allowed for this repository" },
+      mergeableState: "blocked",
     });
     const { log, warnings } = silentLogger();
 
@@ -179,13 +183,34 @@ describe("runPrFlow", () => {
     expect(gh.prLabels[7]).toContain(FLYWHEEL_AUTO_MERGE_LABEL);
     expect(gh.calls.some((c) => c.method === "mergePR")).toBe(false);
     expect(gh.directMergedPRs).not.toContain(7);
-    expect(warnings.some((w) => w.includes("not a benign clean-status decline"))).toBe(true);
+    expect(warnings.some((w) => w.includes('mergeable_state is "blocked"'))).toBe(true);
   });
 
-  it("clean-status decline + direct merge fails → labeled, not merged, warning logged", async () => {
+  it("auto-merge declined + mergeable_state unknown → NO direct merge (fail safe)", async () => {
+    // GitHub has not finished computing mergeability. Treat as non-clean.
     const gh = createFakeGh({
       pullCommits: { 7: [makeCommit("a", "fix: x")] },
       enableAutoMergeResponse: { ok: false, reason: "Pull request is in clean status" },
+      mergeableState: "unknown",
+    });
+    const { log, warnings } = silentLogger();
+
+    const outcome = await runPrFlow({ pr: makePR(), config: baseConfig, gh, log });
+
+    expect(outcome).toMatchObject({
+      kind: "labeled",
+      label: FLYWHEEL_AUTO_MERGE_LABEL,
+      merged: false,
+    });
+    expect(gh.calls.some((c) => c.method === "mergePR")).toBe(false);
+    expect(warnings.some((w) => w.includes('mergeable_state is "unknown"'))).toBe(true);
+  });
+
+  it("auto-merge declined + mergeable_state clean + direct merge fails → labeled, not merged, warning", async () => {
+    const gh = createFakeGh({
+      pullCommits: { 7: [makeCommit("a", "fix: x")] },
+      enableAutoMergeResponse: { ok: false, reason: "Pull request is in clean status" },
+      mergeableState: "clean",
       mergePRResponse: { ok: false, reason: "Required status check 'build' is missing", status: 405 },
     });
     const { log, warnings } = silentLogger();
@@ -718,20 +743,5 @@ describe("runPrFlow", () => {
     }).fields.body!;
     const matches = body.match(/Closes #104/g) ?? [];
     expect(matches).toHaveLength(1);
-  });
-});
-
-describe("isCleanStatusDecline", () => {
-  it("treats the already-mergeable decline as benign", () => {
-    expect(isCleanStatusDecline("Pull request is in clean status")).toBe(true);
-    expect(isCleanStatusDecline("Pull request is in clean state")).toBe(true);
-  });
-
-  it("treats every other decline (and unrecognized messages) as non-benign", () => {
-    expect(isCleanStatusDecline("Auto merge is not allowed for this repository")).toBe(false);
-    expect(isCleanStatusDecline("Pull request is in unstable status")).toBe(false);
-    expect(isCleanStatusDecline("Pull request is in dirty status")).toBe(false);
-    expect(isCleanStatusDecline("some unrecognized graphql error")).toBe(false);
-    expect(isCleanStatusDecline("")).toBe(false);
   });
 });
