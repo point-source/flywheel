@@ -1,3 +1,10 @@
+## [1.2.1-dev.3](https://github.com/point-source/flywheel/compare/v1.2.1-dev.2...v1.2.1-dev.3) (2026-05-18)
+
+
+### Bug Fixes
+
+* **pr-flow:** gate direct-merge fallback on "blocked", not "clean" ([#157](https://github.com/point-source/flywheel/issues/157)) ([d169964](https://github.com/point-source/flywheel/commit/d1699647cfbe8e873733040dc65fa1fa72788201)), closes [#155](https://github.com/point-source/flywheel/issues/155) [#147](https://github.com/point-source/flywheel/issues/147) [#147](https://github.com/point-source/flywheel/issues/147)
+
 ## [1.2.1-dev.2](https://github.com/point-source/flywheel/compare/v1.2.1-dev.1...v1.2.1-dev.2) (2026-05-18)
 
 
