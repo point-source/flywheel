@@ -287,12 +287,12 @@ curl -fsSL https://raw.githubusercontent.com/point-source/flywheel/main/scripts/
 Or write it inline:
 
 ```yaml
-name: Quality
+name: quality
 on:
   pull_request:
   merge_group:    # required for merge queue compatibility
 jobs:
-  test:
+  quality:    # job id = the check-run name you register in the ruleset
     # See "Skipping CI on Flywheel-emitted commits" below for why this `if:`
     # is shipped active by default. Remove it to run the full check on every
     # commit — including release / back-merge / promotion-PR ones.
@@ -349,7 +349,7 @@ Flywheel is designed for repos where agent swarms produce dozens or hundreds of 
 The first and third rulesets can be applied in one command. **Pass `--app-id` — it's mandatory**, not optional:
 
 ```bash
-scripts/apply-rulesets.sh <owner/repo> --required-checks "Quality" --app-id <your-app-id>
+scripts/apply-rulesets.sh <owner/repo> --required-checks "quality" --app-id <your-app-id>
 ```
 
 (Or via `curl -fsSL https://raw.githubusercontent.com/point-source/flywheel/main/scripts/apply-rulesets.sh | bash -s -- <owner/repo>` if you don't have the Flywheel repo checked out.)
@@ -375,7 +375,7 @@ Paste the snippet below into the file you've chosen as the source of truth. The 
 | `<DEFAULT_TARGET_BRANCH>` | `.flywheel.yml` | The first branch in the first stream — the entry point of your main-line. In a single-branch config it's just that branch. |
 | `<list other managed branches>` | `.flywheel.yml` | Every `branches[].name` across all streams, **excluding** `<DEFAULT_TARGET_BRANCH>`. May be empty for a single-branch single-stream config. |
 | `<copy auto_merge list from .flywheel.yml>` | `.flywheel.yml` | The `auto_merge` array for the branch you used as `<DEFAULT_TARGET_BRANCH>`. Copy verbatim, including any `!` variants. |
-| `<list required check names>` | repo ruleset | The status checks marked required on your default target branch (e.g. `Quality`). These come from §5 — they aren't in `.flywheel.yml`. |
+| `<list required check names>` | repo ruleset | The status checks marked required on your default target branch (e.g. `quality` — the job id from the `quality.yml` template). These come from §5 — they aren't in `.flywheel.yml`. |
 | `<local commands>` | your `quality.yml` | The local equivalent of whatever `quality.yml` runs in CI (e.g. `npm test`, `pytest`, `./scripts/ci.sh`). |
 
 > **If you are an AI agent reading this doc to configure yourself:** the first three rows above are deterministic — derive them yourself by reading `.flywheel.yml` from the repo root. For the last two, ask the human adopter; they depend on repo configuration outside Flywheel's control.
@@ -427,12 +427,12 @@ This repo uses [Flywheel](https://github.com/point-source/flywheel) to orchestra
 **If your PR was labeled `flywheel:needs-review` and you expected `flywheel:auto-merge`:** the title's commit type is not in the target branch's `auto_merge` list, or you used a breaking variant (`feat!`) when only the non-breaking variant (`feat`) is allowed. Check `.flywheel.yml`.
 ````
 
-Worked example using the three-stage promotion config from §2 (`develop` → `staging` → `main`), with `Quality` registered as the required check:
+Worked example using the three-stage promotion config from §2 (`develop` → `staging` → `main`), with `quality` registered as the required check:
 
 - `<DEFAULT_TARGET_BRANCH>` → `develop` (first branch of the only stream)
 - `<list other managed branches>` → `staging, main`
 - `<copy auto_merge list from .flywheel.yml>` → `fix, fix!, feat, chore, refactor, perf, style, test, docs`
-- `<list required check names>` → `Quality`
+- `<list required check names>` → `quality`
 - `<local commands>` → `npm test && npm run lint` (whatever your `quality.yml` runs)
 
 If your repo already has a `CONTRIBUTING.md`, `CLAUDE.md`, `AGENTS.md`, or equivalent, append the snippet under a new section heading rather than replacing existing content — the instructions are additive and don't conflict with typical "how to navigate this codebase" guidance.

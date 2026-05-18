@@ -1,4 +1,4 @@
-# Quality — example PR + merge-queue compatible quality check.
+# quality — example PR + merge-queue compatible quality check.
 #
 # This is a starter template, NOT a workflow Flywheel installs or invokes.
 # Copy it to .github/workflows/quality.yml and replace the placeholder
@@ -11,15 +11,17 @@
 #   waiting for a check that never runs against the merge group's
 #   speculative commit.
 #
-# Keep the job NAME stable — that's what you list in the ruleset under
-# "Required status checks". Renaming the job here means re-pointing every
-# ruleset that references it.
-name: Quality
+# GitHub names a required status check after the JOB, not the workflow.
+# The job id below (`quality`) is the check-run name you list in the ruleset
+# under "Required status checks" — keep workflow name, job id, and the
+# registered check name identical so they can't drift apart. Renaming the
+# job means re-pointing every ruleset that references it.
+name: quality
 on:
   pull_request:
   merge_group:    # required for merge-queue compatibility
 jobs:
-  test:
+  quality:
     # Skip work on Flywheel-emitted metadata commits and on the bot-managed
     # promotion PR. A job-level `if:` that evaluates false reports `success`
     # to the required-status-checks rule (per GitHub docs), so this clears
@@ -42,7 +44,7 @@ jobs:
       # Replace this with your real test invocation. If you have multiple
       # check types (lint, typecheck, unit, integration), it's fine to
       # split them into separate jobs in this same file — each becomes its
-      # own required check. Keep the file's `name:` field above stable so
-      # ruleset references don't drift.
+      # own required check named after its job id, so give each a stable id
+      # and register that exact id in the ruleset.
       - name: Test
         run: ./your-test-script.sh

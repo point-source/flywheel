@@ -16,7 +16,7 @@
 #      Optionally adds a GitHub App as a bypass actor so the bot can mint tags.
 #
 # Usage:
-#   ./scripts/apply-rulesets.sh <owner/repo> [--config <path>] [--required-checks "Quality,Build"] [--release-required-checks "e2e"] [--app-id 12345]
+#   ./scripts/apply-rulesets.sh <owner/repo> [--config <path>] [--required-checks "quality,build"] [--release-required-checks "e2e"] [--app-id 12345]
 #
 # --config defaults to ./.flywheel.yml. Use it to apply rulesets that match
 # a config that hasn't been merged to the current working tree yet (e.g.

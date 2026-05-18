@@ -587,19 +587,19 @@ Quality checks are **not configured in `.flywheel.yml`**. Define them as normal 
 
 ```yaml
 # Example quality check workflow
-name: Quality
+name: quality
 on:
   pull_request:
   merge_group: # required for merge queue compatibility
 jobs:
-  test:
+  quality:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
       - run: ./your-test-script.sh
 ```
 
-The check name registered in branch protection must match the job name exactly (e.g. `test` in the example above).
+The check name registered in branch protection must match the job name exactly — GitHub names a check run after its job, not the workflow (e.g. `quality` in the example above; keeping the workflow `name:` and job id identical avoids the mismatch).
 
 ### Ruleset 1 — Protect managed branches
 
