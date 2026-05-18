@@ -1,3 +1,10 @@
+## [1.2.1-dev.5](https://github.com/point-source/flywheel/compare/v1.2.1-dev.4...v1.2.1-dev.5) (2026-05-18)
+
+
+### Bug Fixes
+
+* **quality-template:** match Flywheel commits via merge_group.head_commit context ([#159](https://github.com/point-source/flywheel/issues/159)) ([40fdf4e](https://github.com/point-source/flywheel/commit/40fdf4eaa92edc1332390c07f3d63a6c9494a050)), closes [#150](https://github.com/point-source/flywheel/issues/150)
+
 ## [1.2.1-dev.4](https://github.com/point-source/flywheel/compare/v1.2.1-dev.3...v1.2.1-dev.4) (2026-05-18)
 
 
