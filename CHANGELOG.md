@@ -1,3 +1,10 @@
+## [1.2.1-dev.2](https://github.com/point-source/flywheel/compare/v1.2.1-dev.1...v1.2.1-dev.2) (2026-05-18)
+
+
+### Bug Fixes
+
+* **pr-flow:** gate direct-merge fallback on mergeable_state, not decline text ([#155](https://github.com/point-source/flywheel/issues/155)) ([4089d17](https://github.com/point-source/flywheel/commit/4089d17c448b391a7009d16bf76d5ee2008eb3e5)), closes [#153](https://github.com/point-source/flywheel/issues/153) [#147](https://github.com/point-source/flywheel/issues/147)
+
 ## [1.2.1-dev.1](https://github.com/point-source/flywheel/compare/v1.2.0...v1.2.1-dev.1) (2026-05-18)
 
 
