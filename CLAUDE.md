@@ -39,3 +39,7 @@ Run a single test file: `npx vitest run tests/<name>.test.ts`. Run by descriptio
 ## Adding a `.flywheel.yml` validation case
 
 Drop a YAML in `test-fixtures/` named for the scenario, then add an `it(...)` block in `tests/config.test.ts` that loads it and asserts the expected validation outcome. Existing fixtures isolate one failure mode each — follow the same pattern.
+
+## `.flywheel.yml` snippets in docs must parse
+
+Every full YAML example shown to adopters (`README.md`, `docs/**/*.md`, `scripts/templates/flywheel.*.yml`) is a recipe they copy verbatim — if the documented "minimal" config doesn't validate, adopters can't get started (see #165). `tests/docs-examples.test.ts` extracts every ```` ```yaml ```` block with a top-level `flywheel:` key plus `streams:` and runs it through `loadConfig`; the unit-test suite fails if any of them produce parse errors. When you add or edit a doc example, run `npx vitest run tests/docs-examples.test.ts` before pushing. Partial snippets (e.g. a standalone `release_files:` block) are excluded by the extractor's filter — keep them partial, or add a `streams:` block to opt into validation.
