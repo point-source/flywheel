@@ -318,17 +318,17 @@ flywheel:
         python bump.py "${version}"
 ```
 
-Each entry is a tagged union: either a declarative `{ pattern, replacement }` pair (Flywheel emits a `sed -i.bak -E` invocation) or a freeform `{ cmd }` (Flywheel runs the shell string verbatim after placeholder substitution). Exactly one form per entry; mixing both is a parse-time error. The sed delimiter is `|`, so `pattern` and `replacement` may not contain a literal `|`.
+Each entry is a tagged union: either a declarative `{ pattern, replacement }` pair (Flywheel emits a `sed -i.bak -E 's|…|…|' '<path>' && rm '<path>.bak'` invocation — single-quoted so user `$`, backticks, `"`, `\`, `&`, spaces, etc. are literal; literal `'` in pattern/replacement/path is escaped automatically) or a freeform `{ cmd }` (Flywheel runs the shell string verbatim after placeholder substitution; shell-safety is the adopter's responsibility for this form). Exactly one form per entry; mixing both is a parse-time error. The sed delimiter is `|`, so `pattern` and `replacement` may not contain a literal `|`; newlines and other control characters in `path`/`pattern`/`replacement` are rejected (the generated sed `s` command is single-line). `suffix` is restricted to the identifier charset `[A-Za-z0-9][A-Za-z0-9-]*` so its value cannot break the shell quoting of the release prepareCmd or the generated tag formats.
 
 Three placeholders are available in `replacement` and `cmd`:
 
 | Placeholder  | Substituted to                       | Notes                                                                                              |
 | ------------ | ------------------------------------ | -------------------------------------------------------------------------------------------------- |
-| `${version}` | `${nextRelease.version}`             | Full semver string (e.g. `1.2.3`, `1.2.3-rc.1`).                                                   |
-| `${channel}` | `${nextRelease.channel \|\| ''}`     | Prerelease channel (`rc`, `dev`, …); empty string on production releases.                          |
-| `${build}`   | `${BUILD}` (shell variable)          | Monotonic integer = `$(git tag --list 'v*' '*/v*' \| wc -l) + 1`. Required for Play Store / App Store. Counts unscoped + stream-scoped tags so multi-stream repos get a single monotonic build counter. |
+| `${version}` | `${nextRelease.version}`             | Full semver string (e.g. `1.2.3`, `1.2.3-rc.1`). Expanded at release time by `@semantic-release/exec`'s Lodash templating. |
+| `${channel}` | `${nextRelease.channel \|\| ''}`     | Prerelease channel (`rc`, `dev`, …); empty string on production releases. Expanded at release time. |
+| `${build}`   | literal integer (resolved at config-generation time) | Monotonic integer = `$(git tag --list 'v*' '*/v*' \| wc -l) + 1`. Required for Play Store / App Store. Counts unscoped + stream-scoped tags so multi-stream repos get a single monotonic build counter. Inlined as a JS integer (not a shell variable) because `@semantic-release/exec`'s Lodash pre-pass would `ReferenceError` on an unset `${BUILD}` template token regardless of `templateSettings` (see issue #95). |
 
-All entries share a single `prepareCmd` that begins `BUILD=$(( $(git tag --list 'v*' '*/v*' | wc -l) + 1 ))` and `&&`-chains every entry. Failure of any step aborts the release. Plugin order is preserved — `@semantic-release/exec` runs after `@semantic-release/changelog` and before `@semantic-release/git`, so file edits land in the same release commit as the changelog.
+All entries are `&&`-chained into a single `prepareCmd` (no `BUILD=…` prefix — the build number is already inlined into each entry that uses `${build}`). Failure of any step aborts the release. Plugin order is preserved — `@semantic-release/exec` runs after `@semantic-release/changelog` and before `@semantic-release/git`, so file edits land in the same release commit as the changelog.
 
 The build number is **tag-count-based**: it counts existing `v*` tags repo-wide and adds one. This is monotonic across rc and prod releases (a property the Play Store and App Store require) but is not a "build number per branch" — every release, regardless of channel, increments it. Adopters who need a different scheme should use the `cmd` form to compute their own.
 

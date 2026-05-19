@@ -162,6 +162,60 @@ flywheel:
     ).toBe(true);
   });
 
+  // The suffix flows into semantic-release prerelease identifiers, channel
+  // names, generated tag formats, and the release prepareCmd. Restricting it
+  // to a plain identifier prevents shell-quoting breakage in the sed program
+  // emitted for declarative release_files (#164) and keeps tag formats sane.
+  it("rejects a suffix containing characters outside the identifier charset", () => {
+    const yamlText = `
+flywheel:
+  streams:
+    - name: only
+      branches:
+        - { name: develop, release: prerelease, suffix: "rc'x", auto_merge: [] }
+        - { name: main, release: production, auto_merge: [] }
+`;
+    const result = loadConfig(yamlText);
+    expect(result.config).toBeNull();
+    expect(
+      result.errors.some((e) =>
+        e.includes("must be an identifier of letters, digits, and hyphens"),
+      ),
+    ).toBe(true);
+  });
+
+  it("rejects a suffix that starts with a hyphen", () => {
+    const yamlText = `
+flywheel:
+  streams:
+    - name: only
+      branches:
+        - { name: develop, release: prerelease, suffix: "-dev", auto_merge: [] }
+        - { name: main, release: production, auto_merge: [] }
+`;
+    const result = loadConfig(yamlText);
+    expect(result.config).toBeNull();
+    expect(
+      result.errors.some((e) =>
+        e.includes("must be an identifier of letters, digits, and hyphens"),
+      ),
+    ).toBe(true);
+  });
+
+  it("accepts a suffix made of letters, digits, and internal hyphens", () => {
+    const yamlText = `
+flywheel:
+  streams:
+    - name: only
+      branches:
+        - { name: develop, release: prerelease, suffix: "rc-1", auto_merge: [] }
+        - { name: main, release: production, auto_merge: [] }
+`;
+    const result = loadConfig(yamlText);
+    expect(result.errors).toEqual([]);
+    expect(result.config!.streams[0]!.branches[0]!.suffix).toBe("rc-1");
+  });
+
   it("rejects unknown release mode", () => {
     const yamlText = `
 flywheel:
@@ -259,6 +313,92 @@ flywheel:
       const result = loadConfig(yamlText);
       expect(result.config).toBeNull();
       expect(result.errors.some((e) => e.includes("sed delimiter"))).toBe(true);
+    });
+
+    // Flywheel renders declarative entries into a single-line sed `s` command,
+    // so newline / control characters in path / pattern / replacement cannot
+    // be quoted or escaped into safety — reject at config time (#164).
+    it("rejects a newline in the pattern", () => {
+      const yamlText = `
+flywheel:
+  streams:
+    - name: only
+      branches:
+        - { name: main, release: production, auto_merge: [] }
+  release_files:
+    - path: pubspec.yaml
+      pattern: "line1\\nline2"
+      replacement: "x"
+`;
+      const result = loadConfig(yamlText);
+      expect(result.config).toBeNull();
+      expect(
+        result.errors.some((e) =>
+          e.includes("must not contain newlines or control characters"),
+        ),
+      ).toBe(true);
+    });
+
+    it("rejects a newline in the replacement", () => {
+      const yamlText = `
+flywheel:
+  streams:
+    - name: only
+      branches:
+        - { name: main, release: production, auto_merge: [] }
+  release_files:
+    - path: pubspec.yaml
+      pattern: "x"
+      replacement: "a\\nb"
+`;
+      const result = loadConfig(yamlText);
+      expect(result.config).toBeNull();
+      expect(
+        result.errors.some((e) =>
+          e.includes("must not contain newlines or control characters"),
+        ),
+      ).toBe(true);
+    });
+
+    it("rejects a newline in the path", () => {
+      const yamlText = `
+flywheel:
+  streams:
+    - name: only
+      branches:
+        - { name: main, release: production, auto_merge: [] }
+  release_files:
+    - path: "bad\\npath.yaml"
+      pattern: "x"
+      replacement: "y"
+`;
+      const result = loadConfig(yamlText);
+      expect(result.config).toBeNull();
+      expect(
+        result.errors.some((e) =>
+          e.includes("path: must not contain newlines or control characters"),
+        ),
+      ).toBe(true);
+    });
+
+    // The character classes the original validation worried about ($, ", \, &,
+    // spaces) are now handled by escaping in src/release-rc.ts — the
+    // declarative form must continue to accept them.
+    it("accepts spaces, quotes, $, \\, & in declarative pattern/replacement/path", () => {
+      const yamlText = `
+flywheel:
+  streams:
+    - name: only
+      branches:
+        - { name: main, release: production, auto_merge: [] }
+  release_files:
+    - path: "some dir/file.txt"
+      pattern: "old.*"
+      replacement: "new & shiny \\"v$1\\" 'q' \\\\"
+`;
+      const result = loadConfig(yamlText);
+      expect(result.errors).toEqual([]);
+      expect(result.config!.release_files).toHaveLength(1);
     });
 
     it("rejects empty release_files list", () => {

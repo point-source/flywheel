@@ -1,3 +1,8 @@
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import { describe, expect, it } from "vitest";
 
 import { generateReleaseRc, chooseTagFormat } from "../src/release-rc.js";
@@ -182,8 +187,8 @@ describe("generateReleaseRc", () => {
         "@semantic-release/exec",
         {
           prepareCmd:
-            'sed -i.bak -E "s|^version: .*|version: ${nextRelease.version}+7|" pubspec.yaml && ' +
-            "rm pubspec.yaml.bak",
+            "sed -i.bak -E 's|^version: .*|version: ${nextRelease.version}+7|' " +
+            "'pubspec.yaml' && rm 'pubspec.yaml.bak'",
         },
       ]);
       expect(rc.plugins).toContainEqual([
@@ -331,6 +336,119 @@ describe("generateReleaseRc", () => {
       )!;
       expect(execEntry[1].prepareCmd).toContain("${nextRelease.channel || ''}");
       expect(execEntry[1].prepareCmd).not.toContain("${nextRelease.channel}-");
+    });
+
+    // The next block is the shell-safety contract for the declarative form
+    // (issue #164). The sed program is single-quoted (so $, `, ", \ in the
+    // pattern/replacement stay literal), sed-replacement metacharacters & and
+    // \ are escaped, and the path is single-quoted. The ${nextRelease.*}
+    // Lodash tokens still expand because @semantic-release/exec runs Lodash
+    // before the shell.
+    describe("shell-safety of declarative entries (#164)", () => {
+      const getPrepareCmd = (config: FlywheelConfig, buildNumber?: number): string => {
+        const rc = generateReleaseRc(config.streams[0]!, config, buildNumber);
+        const exec = rc.plugins.find(
+          (p): p is [string, { prepareCmd: string }] =>
+            Array.isArray(p) && p[0] === "@semantic-release/exec",
+        )!;
+        return exec[1].prepareCmd;
+      };
+
+      it("emits a single-quoted sed program (not double-quoted)", () => {
+        const cmd = getPrepareCmd({
+          ...baseConfig,
+          release_files: [
+            { path: "VERSION", pattern: "old", replacement: "new" },
+          ],
+        });
+        expect(cmd).toContain("sed -i.bak -E 's|old|new|' 'VERSION'");
+        expect(cmd).not.toContain('"s|');
+      });
+
+      it("single-quotes the path so spaces and metacharacters are literal", () => {
+        const cmd = getPrepareCmd({
+          ...baseConfig,
+          release_files: [
+            { path: "some dir/my file.txt", pattern: "x", replacement: "y" },
+          ],
+        });
+        expect(cmd).toContain("'some dir/my file.txt'");
+        expect(cmd).toContain("rm 'some dir/my file.txt.bak'");
+      });
+
+      it("escapes & in the replacement so it does not expand to the whole match", () => {
+        const cmd = getPrepareCmd({
+          ...baseConfig,
+          release_files: [
+            { path: "f", pattern: "old", replacement: "a & b" },
+          ],
+        });
+        expect(cmd).toContain("'s|old|a \\& b|'");
+      });
+
+      it("escapes \\ in the replacement so it is not a sed escape", () => {
+        const cmd = getPrepareCmd({
+          ...baseConfig,
+          release_files: [
+            { path: "f", pattern: "old", replacement: "a\\nb" },
+          ],
+        });
+        // user `\` → sed `\\` (literal backslash) so the output is `a\nb`,
+        // not a newline.
+        expect(cmd).toContain("'s|old|a\\\\nb|'");
+      });
+
+      it("leaves $ literal inside the single-quoted sed program (no shell expansion)", () => {
+        const cmd = getPrepareCmd({
+          ...baseConfig,
+          release_files: [
+            { path: "f", pattern: "old", replacement: "price $5" },
+          ],
+        });
+        expect(cmd).toContain("'s|old|price $5|'");
+      });
+
+      it("escapes a literal single-quote in pattern/replacement/path", () => {
+        const cmd = getPrepareCmd({
+          ...baseConfig,
+          release_files: [
+            {
+              path: "it's.txt",
+              pattern: "it's",
+              replacement: "wasn't",
+            },
+          ],
+        });
+        // Each ' breaks out of the surrounding '…' with the '\'' incantation.
+        expect(cmd).toContain("'s|it'\\''s|wasn'\\''t|'");
+        expect(cmd).toContain("'it'\\''s.txt'");
+        expect(cmd).toContain("'it'\\''s.txt.bak'");
+      });
+
+      // End-to-end proof: actually run the emitted command and verify the
+      // file content is exactly what the user wrote, character for character.
+      // Use a placeholder-free entry so the prepareCmd is pure shell (no
+      // Lodash template tokens left to expand). Per CLAUDE.md, this is
+      // release-path code — worth executing, not just asserting on strings.
+      it("the emitted command edits the file literally — &, $, \\, ', spaces all preserved", () => {
+        const dir = mkdtempSync(join(tmpdir(), "flywheel-rc-"));
+        const file = join(dir, "version with space.txt");
+        writeFileSync(file, "VERSION = old\n");
+        const cmd = getPrepareCmd({
+          ...baseConfig,
+          release_files: [
+            {
+              path: file,
+              pattern: "old",
+              replacement: "release & build \\o/ \"$HOME\" 'quoted'",
+            },
+          ],
+        });
+        execFileSync("sh", ["-c", cmd]);
+        expect(readFileSync(file, "utf8")).toBe(
+          "VERSION = release & build \\o/ \"$HOME\" 'quoted'\n",
+        );
+      });
     });
   });
 
