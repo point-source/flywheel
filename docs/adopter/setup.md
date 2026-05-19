@@ -205,7 +205,7 @@ jobs:
 
 The reusable workflows ([`pr.yml`](../../.github/workflows/pr.yml) and [`push.yml`](../../.github/workflows/push.yml) in this repo) hold the canonical step list — the `actions/checkout@v6` call, the conduct/release job's `if:` guards, the `semantic-release` invocation with pinned plugin majors, the `@`-mention sanitizer for release bodies (#73), and the post-release back-merge loop with App-token extraheader plumbing (#68, #74). Open them if you want to read the inline shell the bot will run on your repo. Both files are also installed verbatim by `init.sh` in the quick-start path; thin templates live under [`scripts/templates/`](../../scripts/templates/).
 
-Both pins move together via the floating `@v<major>` tag: the reusable workflow file at `@v1` hardcodes its action ref to `point-source/flywheel@v1`. When the floating major advances, the reusable workflow body and the action it invokes update in lockstep. There is no override knob — adopters who need to test arbitrary action SHAs (e.g. against a fork) inline the workflow shell instead of calling the reusable workflow.
+Both pins move together. For floating `@v<major>` callers, the floating major tag itself advances both the reusable workflow file and the action it invokes when a new release ships (see `release-major-tag.yml`). For exact callers (e.g. `@v1.2.0`), the reusable workflow's internal action ref is sed-bumped to the matching `@v1.2.0` during the chore(release) commit via this repo's own `release_files` — so an exact workflow tag pins both the YAML shell and the action SHA in lockstep (issue #166). There is no override knob — adopters who need to test arbitrary action SHAs (e.g. against a fork) inline the workflow shell instead of calling the reusable workflow.
 
 > **Permissions intersection.** A reusable workflow's job inherits the intersection of the caller's `permissions:` block and its own. Flywheel's reusable workflows do not declare a `permissions:` block — they rely on the App installation token that the action mints internally, not the runner's `GITHUB_TOKEN`, for every write. Adopters do not need to grant any additional permissions on the caller side beyond the repo's defaults.
 
@@ -507,7 +507,7 @@ Open a small `chore: post-upgrade smoke` PR and confirm the same things you conf
 
 ### 8.4 Rolling back
 
-Floating major tags don't pin you to a known-good build. If a recent `@v<major>` release misbehaves, edit the `uses:` line in your caller workflow YAMLs to pin a specific tag (e.g. `point-source/flywheel/.github/workflows/pr.yml@v1.2.0`) until you can investigate. The reusable workflow at that tag will reference the matching action SHA. This is also a reasonable default for repos with strict change-control requirements — you trade auto-upgrade for fully reproducible runs.
+Floating major tags don't pin you to a known-good build. If a recent `@v<major>` release misbehaves, edit the `uses:` line in your caller workflow YAMLs to pin a specific tag (e.g. `point-source/flywheel/.github/workflows/pr.yml@v1.2.0`) until you can investigate. The reusable workflow at that tag references the matching action SHA — Flywheel sed-bumps the internal `point-source/flywheel@v…` ref into the chore(release) commit at release time via its own `release_files` (issue #166), so the YAML shell and the action SHA stay in lockstep on any exact tag. This is also a reasonable default for repos with strict change-control requirements — you trade auto-upgrade for fully reproducible runs.
 
 ## 9. Troubleshooting
 
