@@ -121,13 +121,46 @@ function buildPrepareCmd(
 
 function renderEntry(entry: ReleaseFile, buildNumber: number | undefined): string {
   if ("cmd" in entry) {
+    // Freeform escape hatch: run verbatim after placeholder substitution.
+    // Shell safety is the adopter's responsibility for this form.
     return substitutePlaceholders(entry.cmd, buildNumber);
   }
-  const replacement = substitutePlaceholders(entry.replacement, buildNumber);
+  // Declarative form: emit a sed `s|…|…|` invocation that is shell-safe by
+  // construction. The sed program is single-quoted so the shell leaves $, `,
+  // \, and " in the pattern/replacement literal; the path is single-quoted so
+  // spaces and metacharacters are literal. The ${nextRelease.*} Lodash tokens
+  // still expand because @semantic-release/exec runs Lodash before the shell.
+  const pattern = escapeForSingleQuotedShell(entry.pattern);
+  // Escape sed-replacement metacharacters (\ and &) and the shell single quote
+  // on the user's literal text *before* substituting placeholders: the
+  // injected `${nextRelease.channel || ''}` token contains a ' that must reach
+  // Lodash unescaped, so it must not pass through escapeForSingleQuotedShell.
+  let replacement = escapeSedReplacement(entry.replacement);
+  replacement = escapeForSingleQuotedShell(replacement);
+  replacement = substitutePlaceholders(replacement, buildNumber);
   return (
-    `sed -i.bak -E "s|${entry.pattern}|${replacement}|" ${entry.path}` +
-    ` && rm ${entry.path}.bak`
+    `sed -i.bak -E 's|${pattern}|${replacement}|' ${singleQuote(entry.path)}` +
+    ` && rm ${singleQuote(entry.path + ".bak")}`
   );
+}
+
+// Escape a string for embedding inside a single-quoted shell context: close
+// the quote, emit an escaped quote, reopen. Safe for any byte except a newline
+// (rejected at config validation, since a sed `s` command must be one line).
+function escapeForSingleQuotedShell(s: string): string {
+  return s.replace(/'/g, "'\\''");
+}
+
+// Wrap a string as a complete single-quoted shell argument.
+function singleQuote(s: string): string {
+  return `'${escapeForSingleQuotedShell(s)}'`;
+}
+
+// Escape the metacharacters of a sed `s` command's replacement half so the
+// text is substituted literally: `\` is the escape character and `&` expands
+// to the whole match. The `|` delimiter is rejected at config validation.
+function escapeSedReplacement(s: string): string {
+  return s.replace(/\\/g, "\\\\").replace(/&/g, "\\&");
 }
 
 function substitutePlaceholders(
