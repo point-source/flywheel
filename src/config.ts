@@ -19,6 +19,21 @@ const STREAM_KEYS = new Set(["name", "branches"]);
 const RELEASE_FILE_KEYS = new Set(["path", "pattern", "replacement", "cmd"]);
 const RELEASE_MODES = new Set<ReleaseMode>(["none", "prerelease", "production"]);
 
+// A prerelease suffix flows into tag formats and the release prepareCmd, so it
+// must be a plain identifier (letters/digits/hyphens, no leading hyphen).
+const SUFFIX_PATTERN = /^[A-Za-z0-9][A-Za-z0-9-]*$/;
+
+// True if the string contains a newline or other control character. Such
+// characters cannot be embedded in the single-line sed `s` command Flywheel
+// generates for declarative release_files entries.
+function hasControlChars(s: string): boolean {
+  for (let i = 0; i < s.length; i++) {
+    const code = s.charCodeAt(i);
+    if (code < 0x20 || code === 0x7f) return true;
+  }
+  return false;
+}
+
 export interface ConfigLoadResult {
   config: FlywheelConfig | null;
   errors: string[];
@@ -156,6 +171,14 @@ function parseBranch(value: unknown, path: string, errors: string[]): Branch | n
   if (value.suffix !== undefined) {
     if (typeof value.suffix !== "string" || value.suffix.length === 0) {
       errors.push(`${path}.suffix: must be a non-empty string identifier (e.g. "dev").`);
+    } else if (!SUFFIX_PATTERN.test(value.suffix)) {
+      // The suffix becomes a semantic-release prerelease id / channel name and
+      // is interpolated into generated tag formats and the release prepareCmd;
+      // restrict it to a safe identifier so it cannot break shell quoting.
+      errors.push(
+        `${path}.suffix: must be an identifier of letters, digits, and hyphens ` +
+          `starting with a letter or digit (e.g. "dev", "rc", "rc-1").`,
+      );
     } else {
       suffix = value.suffix;
     }
@@ -244,6 +267,10 @@ function parseReleaseFiles(value: unknown, errors: string[]): ReleaseFile[] | un
       errors.push(`${path}.path: required non-empty string.`);
       return;
     }
+    if (hasControlChars(filePath)) {
+      errors.push(`${path}.path: must not contain newlines or control characters.`);
+      return;
+    }
     const hasPattern = item.pattern !== undefined || item.replacement !== undefined;
     const hasCmd = item.cmd !== undefined;
     if (hasPattern && hasCmd) {
@@ -267,6 +294,13 @@ function parseReleaseFiles(value: unknown, errors: string[]): ReleaseFile[] | un
       }
       if (typeof replacement !== "string") {
         errors.push(`${path}.replacement: required string when using declarative form.`);
+        return;
+      }
+      if (hasControlChars(pattern) || hasControlChars(replacement)) {
+        errors.push(
+          `${path}: pattern/replacement must not contain newlines or control characters ` +
+            "— Flywheel renders them into a single-line sed command.",
+        );
         return;
       }
       if (pattern.includes("|") || replacement.includes("|")) {
@@ -322,22 +356,28 @@ function validateStreams(
     }
   }
 
-  // Rule 1b: same suffix used by >1 prerelease branch — tags would collide.
-  const suffixOwners = new Map<string, string[]>();
+  // Rule 1b: same suffix used by >1 prerelease branch *within a stream* — tags
+  // would collide. Suffix uniqueness is scoped to the stream, not the repo:
+  // every stream gets its own scoped tagFormat (`v${version}` for the primary,
+  // `${stream}/v${version}` otherwise — see release-rc.ts:chooseTagFormat), so
+  // the same suffix in two different streams produces tags in distinct
+  // namespaces and cannot collide.
   for (const s of streams) {
+    const suffixOwners = new Map<string, string[]>();
     for (const b of s.branches) {
       if (b.release === "prerelease" && typeof b.suffix === "string") {
         const spots = suffixOwners.get(b.suffix) ?? [];
-        spots.push(`${s.name}/${b.name}`);
+        spots.push(b.name);
         suffixOwners.set(b.suffix, spots);
       }
     }
-  }
-  for (const [label, spots] of suffixOwners) {
-    if (spots.length > 1) {
-      errors.push(
-        `suffix "${label}" used by multiple prerelease branches (${spots.join(", ")}) — tags would collide.`,
-      );
+    for (const [label, spots] of suffixOwners) {
+      if (spots.length > 1) {
+        errors.push(
+          `stream "${s.name}": suffix "${label}" used by multiple prerelease branches ` +
+            `(${spots.join(", ")}) — tags would collide.`,
+        );
+      }
     }
   }
 

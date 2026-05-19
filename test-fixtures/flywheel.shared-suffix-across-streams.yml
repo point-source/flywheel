@@ -1,0 +1,17 @@
+flywheel:
+  streams:
+    - name: main-line
+      branches:
+        - name: develop
+          release: prerelease
+          suffix: rc
+          auto_merge: [fix]
+        - name: main
+          release: production
+          auto_merge: []
+    - name: customer-acme
+      branches:
+        - name: customer-acme
+          release: prerelease
+          suffix: rc
+          auto_merge: [fix]

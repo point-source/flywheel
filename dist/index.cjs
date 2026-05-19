@@ -27797,6 +27797,14 @@ var BRANCH_KEYS = /* @__PURE__ */ new Set(["name", "release", "suffix", "auto_me
 var STREAM_KEYS = /* @__PURE__ */ new Set(["name", "branches"]);
 var RELEASE_FILE_KEYS = /* @__PURE__ */ new Set(["path", "pattern", "replacement", "cmd"]);
 var RELEASE_MODES = /* @__PURE__ */ new Set(["none", "prerelease", "production"]);
+var SUFFIX_PATTERN = /^[A-Za-z0-9][A-Za-z0-9-]*$/;
+function hasControlChars(s) {
+  for (let i = 0; i < s.length; i++) {
+    const code = s.charCodeAt(i);
+    if (code < 32 || code === 127) return true;
+  }
+  return false;
+}
 function loadConfig(yamlText) {
   const errors = [];
   const warnings = [];
@@ -27912,6 +27920,10 @@ function parseBranch(value, path, errors) {
   if (value.suffix !== void 0) {
     if (typeof value.suffix !== "string" || value.suffix.length === 0) {
       errors.push(`${path}.suffix: must be a non-empty string identifier (e.g. "dev").`);
+    } else if (!SUFFIX_PATTERN.test(value.suffix)) {
+      errors.push(
+        `${path}.suffix: must be an identifier of letters, digits, and hyphens starting with a letter or digit (e.g. "dev", "rc", "rc-1").`
+      );
     } else {
       suffix = value.suffix;
     }
@@ -27994,6 +28006,10 @@ function parseReleaseFiles(value, errors) {
       errors.push(`${path}.path: required non-empty string.`);
       return;
     }
+    if (hasControlChars(filePath)) {
+      errors.push(`${path}.path: must not contain newlines or control characters.`);
+      return;
+    }
     const hasPattern = item.pattern !== void 0 || item.replacement !== void 0;
     const hasCmd = item.cmd !== void 0;
     if (hasPattern && hasCmd) {
@@ -28017,6 +28033,12 @@ function parseReleaseFiles(value, errors) {
       }
       if (typeof replacement !== "string") {
         errors.push(`${path}.replacement: required string when using declarative form.`);
+        return;
+      }
+      if (hasControlChars(pattern) || hasControlChars(replacement)) {
+        errors.push(
+          `${path}: pattern/replacement must not contain newlines or control characters \u2014 Flywheel renders them into a single-line sed command.`
+        );
         return;
       }
       if (pattern.includes("|") || replacement.includes("|")) {
@@ -28062,21 +28084,21 @@ function validateStreams(streams, errors, notices) {
       );
     }
   }
-  const suffixOwners = /* @__PURE__ */ new Map();
   for (const s of streams) {
+    const suffixOwners = /* @__PURE__ */ new Map();
     for (const b of s.branches) {
       if (b.release === "prerelease" && typeof b.suffix === "string") {
         const spots = suffixOwners.get(b.suffix) ?? [];
-        spots.push(`${s.name}/${b.name}`);
+        spots.push(b.name);
         suffixOwners.set(b.suffix, spots);
       }
     }
-  }
-  for (const [label, spots] of suffixOwners) {
-    if (spots.length > 1) {
-      errors.push(
-        `suffix "${label}" used by multiple prerelease branches (${spots.join(", ")}) \u2014 tags would collide.`
-      );
+    for (const [label, spots] of suffixOwners) {
+      if (spots.length > 1) {
+        errors.push(
+          `stream "${s.name}": suffix "${label}" used by multiple prerelease branches (${spots.join(", ")}) \u2014 tags would collide.`
+        );
+      }
     }
   }
   for (const s of streams) {
@@ -28951,8 +28973,20 @@ function renderEntry(entry, buildNumber) {
   if ("cmd" in entry) {
     return substitutePlaceholders(entry.cmd, buildNumber);
   }
-  const replacement = substitutePlaceholders(entry.replacement, buildNumber);
-  return `sed -i.bak -E "s|${entry.pattern}|${replacement}|" ${entry.path} && rm ${entry.path}.bak`;
+  const pattern = escapeForSingleQuotedShell(entry.pattern);
+  let replacement = escapeSedReplacement(entry.replacement);
+  replacement = escapeForSingleQuotedShell(replacement);
+  replacement = substitutePlaceholders(replacement, buildNumber);
+  return `sed -i.bak -E 's|${pattern}|${replacement}|' ${singleQuote(entry.path)} && rm ${singleQuote(entry.path + ".bak")}`;
+}
+function escapeForSingleQuotedShell(s) {
+  return s.replace(/'/g, "'\\''");
+}
+function singleQuote(s) {
+  return `'${escapeForSingleQuotedShell(s)}'`;
+}
+function escapeSedReplacement(s) {
+  return s.replace(/\\/g, "\\\\").replace(/&/g, "\\&");
 }
 function substitutePlaceholders(input, buildNumber) {
   const withVersionAndChannel = input.replace(/\$\{version\}/g, "${nextRelease.version}").replace(/\$\{channel\}/g, "${nextRelease.channel || ''}");

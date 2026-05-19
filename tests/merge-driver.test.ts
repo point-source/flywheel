@@ -10,7 +10,8 @@ import { join } from "node:path";
 // (no conflict, file contains the marker the stub wrote).
 //
 // The stub stands in for `npx --yes conventional-changelog-cli@5 …` from
-// push.yml / init.sh — same `> "%A"` redirect shape, no network. If git's
+// register-merge-drivers.sh / init.sh — same `> "%A"` redirect shape, no
+// network. If git's
 // custom-driver wiring breaks, this catches it without round-tripping through
 // a real release. See #119 for the bug it regresses against (the prior
 // `bash -c "... > \"$1\"" -- %A` form was silently broken: outer `sh -c`
@@ -50,9 +51,9 @@ describe("flywheel-changelog merge driver", () => {
   it("auto-resolves CHANGELOG.md conflict during back-merge", () => {
     const work = setupRepo();
     try {
-      // Register the driver shape used by push.yml / init.sh — same
-      // single-layer `> "%A"` redirect, but echoing a marker instead of
-      // shelling out to npx.
+      // Register the driver shape used by register-merge-drivers.sh /
+      // init.sh — same single-layer `> "%A"` redirect, but echoing a
+      // marker instead of shelling out to npx.
       git(
         work,
         "config",
@@ -76,16 +77,16 @@ describe("flywheel-changelog merge driver", () => {
     }
   });
 
-  it("regression: driver string in init.sh and push.yml workflows does not nest shells", () => {
+  it("regression: driver string in init.sh and register-merge-drivers.sh does not nest shells", () => {
     // The pre-#119 form `bash -c "... > \"$1\"" -- %A` was silently broken
     // because the outer shell git uses to invoke the driver expanded `$1`
     // (empty in its context) before the inner bash ran. Guard against the
-    // pattern coming back.
+    // pattern coming back. The workflow step that used to carry this string
+    // inline was extracted to scripts/register-merge-drivers.sh in #133.
     const repoRoot = join(__dirname, "..");
     for (const path of [
       "scripts/init.sh",
-      ".github/workflows/push.yml",
-      ".github/workflows/flywheel-push.yml",
+      "scripts/register-merge-drivers.sh",
     ]) {
       const content = readFileSync(join(repoRoot, path), "utf8");
       expect(content, `${path} should not use the broken nested-shell form`).not.toMatch(

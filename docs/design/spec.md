@@ -140,7 +140,7 @@ flywheel:
 
           # Required iff release: prerelease. Semver pre-release identifier
           # (becomes the `-<suffix>.N` part of the version). Must be unique
-          # across all prerelease branches in the repo.
+          # across the prerelease branches within the same stream.
           suffix: dev
 
           # Required. Commit types that auto-merge into this branch without human review.
@@ -203,7 +203,7 @@ See [`decisions/0001-hybrid-merge-strategy.md`](./decisions/0001-hybrid-merge-st
 #### Release modes
 
 - **`none`** — the branch is in the promotion chain (auto-promotion PRs are still upserted to and from it) but pushes do **not** run semantic-release. No tag is created, no GitHub Release is published, no `.releaserc.json` is written. Use this when an integration branch should accumulate work and auto-promote without producing its own release artifacts. The terminal branch of a stream cannot be `release: none` (validation error).
-- **`prerelease`** — pushes release a prerelease tag using `suffix` as the identifier (e.g. `v1.3.0-dev.4`). Each `suffix` must be unique across all prerelease branches in the repo (otherwise tags collide).
+- **`prerelease`** — pushes release a prerelease tag using `suffix` as the identifier (e.g. `v1.3.0-dev.4`). Each `suffix` must be unique across the prerelease branches within the same stream (otherwise tags collide). The same `suffix` may be reused in a different stream — each stream gets its own scoped `tagFormat`, so the tags live in distinct namespaces.
 - **`production`** — pushes release a production tag (e.g. `v1.3.0`). At most one production branch is allowed per stream, and it must be the terminal branch.
 
 ### Valid `auto_merge` entries
@@ -224,7 +224,7 @@ A `fix!` entry matches PRs of type `fix` with a breaking change — indicated by
 - More than one stream has a terminal branch (last branch) with `release: production` — tag collision is unavoidable in a single repo. Give all but one stream a prerelease terminal branch.
 - The terminal branch of a stream has `release: none` — the terminal branch must be `release: prerelease` or `release: production`, otherwise the stream never produces a release.
 - A `suffix` is set without `release: prerelease`, or `release: prerelease` is set without a `suffix`.
-- The same `suffix` is used by more than one prerelease branch — tags would collide.
+- The same `suffix` is used by more than one prerelease branch within the same stream — tags would collide.
 - An `auto_merge` entry is not a recognized conventional commit type (with or without `!`).
 - A stream contains only one branch — a single-branch stream is valid (immediate release, no promotion) but `pr-conductor` emits an info notice so the user can confirm this is intentional.
 
@@ -318,17 +318,17 @@ flywheel:
         python bump.py "${version}"
 ```
 
-Each entry is a tagged union: either a declarative `{ pattern, replacement }` pair (Flywheel emits a `sed -i.bak -E` invocation) or a freeform `{ cmd }` (Flywheel runs the shell string verbatim after placeholder substitution). Exactly one form per entry; mixing both is a parse-time error. The sed delimiter is `|`, so `pattern` and `replacement` may not contain a literal `|`.
+Each entry is a tagged union: either a declarative `{ pattern, replacement }` pair (Flywheel emits a `sed -i.bak -E 's|…|…|' '<path>' && rm '<path>.bak'` invocation — single-quoted so user `$`, backticks, `"`, `\`, `&`, spaces, etc. are literal; literal `'` in pattern/replacement/path is escaped automatically) or a freeform `{ cmd }` (Flywheel runs the shell string verbatim after placeholder substitution; shell-safety is the adopter's responsibility for this form). Exactly one form per entry; mixing both is a parse-time error. The sed delimiter is `|`, so `pattern` and `replacement` may not contain a literal `|`; newlines and other control characters in `path`/`pattern`/`replacement` are rejected (the generated sed `s` command is single-line). `suffix` is restricted to the identifier charset `[A-Za-z0-9][A-Za-z0-9-]*` so its value cannot break the shell quoting of the release prepareCmd or the generated tag formats.
 
 Three placeholders are available in `replacement` and `cmd`:
 
 | Placeholder  | Substituted to                       | Notes                                                                                              |
 | ------------ | ------------------------------------ | -------------------------------------------------------------------------------------------------- |
-| `${version}` | `${nextRelease.version}`             | Full semver string (e.g. `1.2.3`, `1.2.3-rc.1`).                                                   |
-| `${channel}` | `${nextRelease.channel \|\| ''}`     | Prerelease channel (`rc`, `dev`, …); empty string on production releases.                          |
-| `${build}`   | `${BUILD}` (shell variable)          | Monotonic integer = `$(git tag --list 'v*' '*/v*' \| wc -l) + 1`. Required for Play Store / App Store. Counts unscoped + stream-scoped tags so multi-stream repos get a single monotonic build counter. |
+| `${version}` | `${nextRelease.version}`             | Full semver string (e.g. `1.2.3`, `1.2.3-rc.1`). Expanded at release time by `@semantic-release/exec`'s Lodash templating. |
+| `${channel}` | `${nextRelease.channel \|\| ''}`     | Prerelease channel (`rc`, `dev`, …); empty string on production releases. Expanded at release time. |
+| `${build}`   | literal integer (resolved at config-generation time) | Monotonic integer = `$(git tag --list 'v*' '*/v*' \| wc -l) + 1`. Required for Play Store / App Store. Counts unscoped + stream-scoped tags so multi-stream repos get a single monotonic build counter. Inlined as a JS integer (not a shell variable) because `@semantic-release/exec`'s Lodash pre-pass would `ReferenceError` on an unset `${BUILD}` template token regardless of `templateSettings` (see issue #95). |
 
-All entries share a single `prepareCmd` that begins `BUILD=$(( $(git tag --list 'v*' '*/v*' | wc -l) + 1 ))` and `&&`-chains every entry. Failure of any step aborts the release. Plugin order is preserved — `@semantic-release/exec` runs after `@semantic-release/changelog` and before `@semantic-release/git`, so file edits land in the same release commit as the changelog.
+All entries are `&&`-chained into a single `prepareCmd` (no `BUILD=…` prefix — the build number is already inlined into each entry that uses `${build}`). Failure of any step aborts the release. Plugin order is preserved — `@semantic-release/exec` runs after `@semantic-release/changelog` and before `@semantic-release/git`, so file edits land in the same release commit as the changelog.
 
 The build number is **tag-count-based**: it counts existing `v*` tags repo-wide and adds one. This is monotonic across rc and prod releases (a property the Play Store and App Store require) but is not a "build number per branch" — every release, regardless of channel, increments it. Adopters who need a different scheme should use the `cmd` form to compute their own.
 

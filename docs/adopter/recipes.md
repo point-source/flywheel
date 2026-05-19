@@ -17,7 +17,7 @@ release_files:
     replacement: <template>   # supports ${version}, ${channel}, ${build}
 ```
 
-Flywheel emits `sed -i.bak -E "s|<pattern>|<replacement>|" <path> && rm <path>.bak`.
+Flywheel emits `sed -i.bak -E 's|<pattern>|<replacement>|' '<path>' && rm '<path>.bak'`. The sed program and the path are single-quoted so that spaces, `$`, backticks, `"`, `\`, and `&` in your pattern, replacement, or path are passed through literally — you do not need to shell-escape them yourself. Newlines and other control characters in `path`/`pattern`/`replacement` are rejected at validation time (a sed `s` command must fit on one line).
 
 **Exec form** (for formats where regex is awkward — TOML, XML, multi-line edits):
 

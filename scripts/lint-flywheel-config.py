@@ -103,7 +103,7 @@ def main():
                     elif not isinstance(suffix, str) or not suffix:
                         emit("FAIL", f"branch {bname!r}: suffix must be a non-empty string identifier (e.g. 'dev')")
                     else:
-                        suffix_to_branches.setdefault(suffix, []).append((sname, bname))
+                        suffix_to_branches.setdefault((sname, suffix), []).append(bname)
                 else:
                     if suffix is not None:
                         emit("FAIL", f"branch {bname!r}: suffix is only valid when release is 'prerelease' (got release: {release!r})")
@@ -142,10 +142,12 @@ def main():
         if len(slist) > 1:
             emit("FAIL", f"branch {bname!r} listed in multiple streams: {', '.join(slist)} — branches must belong to exactly one stream")
 
-    for label, occurrences in suffix_to_branches.items():
-        if len(occurrences) > 1:
-            spots = ", ".join(f"{s}/{b}" for s, b in occurrences)
-            emit("FAIL", f"suffix {label!r} used by multiple prerelease branches ({spots}) — tags would collide")
+    # Suffix uniqueness is scoped per-stream: every stream gets its own scoped
+    # tagFormat, so the same suffix in two different streams cannot collide.
+    for (sname, label), branches in suffix_to_branches.items():
+        if len(branches) > 1:
+            spots = ", ".join(branches)
+            emit("FAIL", f"stream {sname!r}: suffix {label!r} used by multiple prerelease branches ({spots}) — tags would collide")
 
     if "release_files" in root:
         validate_release_files(root["release_files"])
