@@ -117,6 +117,7 @@ flywheel:
     - name: main-line
       branches:
         - name: main
+          release: production
           auto_merge: [fix, chore, docs]
 ```
 
