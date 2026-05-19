@@ -28062,21 +28062,21 @@ function validateStreams(streams, errors, notices) {
       );
     }
   }
-  const suffixOwners = /* @__PURE__ */ new Map();
   for (const s of streams) {
+    const suffixOwners = /* @__PURE__ */ new Map();
     for (const b of s.branches) {
       if (b.release === "prerelease" && typeof b.suffix === "string") {
         const spots = suffixOwners.get(b.suffix) ?? [];
-        spots.push(`${s.name}/${b.name}`);
+        spots.push(b.name);
         suffixOwners.set(b.suffix, spots);
       }
     }
-  }
-  for (const [label, spots] of suffixOwners) {
-    if (spots.length > 1) {
-      errors.push(
-        `suffix "${label}" used by multiple prerelease branches (${spots.join(", ")}) \u2014 tags would collide.`
-      );
+    for (const [label, spots] of suffixOwners) {
+      if (spots.length > 1) {
+        errors.push(
+          `stream "${s.name}": suffix "${label}" used by multiple prerelease branches (${spots.join(", ")}) \u2014 tags would collide.`
+        );
+      }
     }
   }
   for (const s of streams) {

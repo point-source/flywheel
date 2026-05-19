@@ -322,22 +322,28 @@ function validateStreams(
     }
   }
 
-  // Rule 1b: same suffix used by >1 prerelease branch — tags would collide.
-  const suffixOwners = new Map<string, string[]>();
+  // Rule 1b: same suffix used by >1 prerelease branch *within a stream* — tags
+  // would collide. Suffix uniqueness is scoped to the stream, not the repo:
+  // every stream gets its own scoped tagFormat (`v${version}` for the primary,
+  // `${stream}/v${version}` otherwise — see release-rc.ts:chooseTagFormat), so
+  // the same suffix in two different streams produces tags in distinct
+  // namespaces and cannot collide.
   for (const s of streams) {
+    const suffixOwners = new Map<string, string[]>();
     for (const b of s.branches) {
       if (b.release === "prerelease" && typeof b.suffix === "string") {
         const spots = suffixOwners.get(b.suffix) ?? [];
-        spots.push(`${s.name}/${b.name}`);
+        spots.push(b.name);
         suffixOwners.set(b.suffix, spots);
       }
     }
-  }
-  for (const [label, spots] of suffixOwners) {
-    if (spots.length > 1) {
-      errors.push(
-        `suffix "${label}" used by multiple prerelease branches (${spots.join(", ")}) — tags would collide.`,
-      );
+    for (const [label, spots] of suffixOwners) {
+      if (spots.length > 1) {
+        errors.push(
+          `stream "${s.name}": suffix "${label}" used by multiple prerelease branches ` +
+            `(${spots.join(", ")}) — tags would collide.`,
+        );
+      }
     }
   }
 

@@ -51,12 +51,20 @@ describe("loadConfig", () => {
     ).toBe(true);
   });
 
-  it("flags duplicate suffix across prerelease branches", () => {
+  it("flags duplicate suffix across prerelease branches within a stream", () => {
     const result = loadConfig(fx("flywheel.dup-prerelease.yml"));
     expect(result.config).toBeNull();
     expect(
-      result.errors.some((e) => e.includes('suffix "dev" used by multiple prerelease branches')),
+      result.errors.some((e) =>
+        e.includes('stream "stream-a": suffix "dev" used by multiple prerelease branches'),
+      ),
     ).toBe(true);
+  });
+
+  it("accepts the same suffix used by prerelease branches in different streams", () => {
+    const result = loadConfig(fx("flywheel.shared-suffix-across-streams.yml"));
+    expect(result.config).not.toBeNull();
+    expect(result.errors).toEqual([]);
   });
 
   it("flags duplicate stream names", () => {
