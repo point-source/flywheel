@@ -1,3 +1,10 @@
+## [1.2.2-dev.1](https://github.com/point-source/flywheel/compare/v1.2.1...v1.2.2-dev.1) (2026-05-19)
+
+
+### Bug Fixes
+
+* scope prerelease suffix uniqueness per-stream ([#163](https://github.com/point-source/flywheel/issues/163)) ([#168](https://github.com/point-source/flywheel/issues/168)) ([62cb296](https://github.com/point-source/flywheel/commit/62cb2964e893c0e269f648a4f6fbc75ea491b05d))
+
 ## [1.2.1](https://github.com/point-source/flywheel/compare/v1.2.0...v1.2.1) (2026-05-18)
 
 
