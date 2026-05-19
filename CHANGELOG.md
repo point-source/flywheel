@@ -1,3 +1,11 @@
+## [1.2.2](https://github.com/point-source/flywheel/compare/v1.2.1...v1.2.2) (2026-05-19)
+
+
+### Bug Fixes
+
+* **release-rc:** make declarative release_files shell-safe ([#164](https://github.com/point-source/flywheel/issues/164)) ([#170](https://github.com/point-source/flywheel/issues/170)) ([c0e4111](https://github.com/point-source/flywheel/commit/c0e41116ef473d3a4ce9e4cbade9bc96c01e127c)), closes [#95](https://github.com/point-source/flywheel/issues/95)
+* scope prerelease suffix uniqueness per-stream ([#163](https://github.com/point-source/flywheel/issues/163)) ([#168](https://github.com/point-source/flywheel/issues/168)) ([62cb296](https://github.com/point-source/flywheel/commit/62cb2964e893c0e269f648a4f6fbc75ea491b05d))
+
 ## [1.2.2-dev.2](https://github.com/point-source/flywheel/compare/v1.2.2-dev.1...v1.2.2-dev.2) (2026-05-19)
 
 
