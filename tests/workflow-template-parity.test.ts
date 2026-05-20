@@ -18,18 +18,19 @@ import { dirname, join } from "node:path";
 // to be hardcoded — `${{ inputs.X }}` in `uses:` fails GitHub's
 // static-validation pass on push events.
 //
-// The two files should differ on exactly two lines:
+// The two files differ on a known set of lines:
 //   - the workflow trigger block (reusable: `on: workflow_call:` with
 //     inputs/secrets; dogfood: `on: pull_request:` / `on: push:`)
-//   - the action `uses:` line (reusable: `point-source/flywheel@v<ver>`,
-//     where the version is the floating major on trunk and the exact
-//     version after release_files sed-bumps it at release time — see
-//     issue #166; dogfood: `./`)
+//   - the action-invocation shape: the reusable resolves its own ref via
+//     `github.workflow_ref` and checks the action out into `_flywheel/`
+//     before invoking it as `./_flywheel`; the dogfood uses `./` directly
+//     against the calling repo's checkout. See #166 / #178 for the
+//     `workflow_ref` rationale.
 //
-// Mismatch beyond those means the inline shell is drifting — catch it
-// at PR time. PR #42 added @semantic-release/exec to the dogfood but
-// not the template, breaking semantic-release on develop; this test is
-// the same kind of guard at a different file pair.
+// Mismatch beyond that means the inline shell is drifting — catch it at
+// PR time. PR #42 added @semantic-release/exec to the dogfood but not
+// the template, breaking semantic-release on develop; this test is the
+// same kind of guard at a different file pair.
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -99,17 +100,29 @@ describe("reusable workflow / dogfood inline-shell parity", () => {
 
       // Normalize the legitimate differences between a reusable workflow
       // and a top-level dogfood workflow:
-      //   - Reusable uses `point-source/flywheel@v<ver>` (`@v<major>` on
-      //     trunk; `@v<exact>` after release_files sed-bumps it at
-      //     release time); dogfood uses `./` (local checkout —
-      //     exercises in-PR action code).
+      //   - Reusable resolves its own ref via `github.workflow_ref` and
+      //     checks the action out into `_flywheel/`; dogfood uses `./`
+      //     directly against the calling repo's checkout.
       //   - Reusable reads app-id/secret from workflow_call inputs;
       //     dogfood reads them directly from repo Vars/Secrets.
-      //   - Reusable carries an explanatory comment on the action-ref
-      //     pin that the dogfood doesn't need.
+      //   - Reusable carries an explanatory comment on the ref-resolution
+      //     pattern that the dogfood doesn't need.
       const rNormalized = r
-        .replace(/^\s*# Pinned to this release's exact version[\s\S]*?See issue #166\.\n/m, "")
-        .replace(/uses:\s*point-source\/flywheel@v[0-9][A-Za-z0-9.\-]*/g, "uses: ./")
+        // Strip the comment block explaining workflow_ref resolution.
+        .replace(/^\s*# Resolve the action ref[\s\S]*?See issue #166\.\n/m, "")
+        // Strip the resolve-own-ref step.
+        .replace(
+          /^\s*- name: Resolve own ref\n\s*id: self\n\s*run: echo "ref=\$\{GITHUB_WORKFLOW_REF##\*@\}" >> "\$GITHUB_OUTPUT"\n/m,
+          "",
+        )
+        // Strip the secondary checkout step that pulls the action into _flywheel/.
+        .replace(
+          /^\s*- uses: actions\/checkout@v6\n\s*with:\n\s*repository: point-source\/flywheel\n\s*ref: \$\{\{ steps\.self\.outputs\.ref \}\}\n\s*path: _flywheel\n/m,
+          "",
+        )
+        // Reusable invokes the local action via the secondary checkout path;
+        // dogfood invokes it against the primary checkout.
+        .replace(/uses:\s*\.\/_flywheel/g, "uses: ./")
         .replace(/\$\{\{\s*inputs\.app-id\s*\}\}/g, "${{ vars.FLYWHEEL_GH_APP_ID }}")
         .replace(
           /\$\{\{\s*secrets\.app-private-key\s*\}\}/g,
@@ -145,12 +158,16 @@ describe("reusable workflow surface", () => {
       expect(content).toMatch(/^on:\s*\n\s*workflow_call:/m);
       expect(content).toMatch(/inputs:\s*\n[\s\S]*?app-id:/);
       expect(content).toMatch(/secrets:\s*\n[\s\S]*?app-private-key:/);
-      // Action ref. The value is `@v<major>` on trunk pre-first-release
-      // and `@v<exact>` after release_files bakes the exact version into
-      // the chore(release) commit (see issue #166). Hardcoded form —
-      // expressions in `uses:` referencing inputs fail GitHub's
-      // static validator (see PR #111 commit msg).
-      expect(content).toMatch(/uses:\s*point-source\/flywheel@v[0-9][A-Za-z0-9.\-]*/);
+      // The action ref is resolved at runtime from `github.workflow_ref`
+      // so the action SHA matches whatever ref the caller pinned the
+      // workflow at. Expressions in `uses:` referencing inputs fail
+      // GitHub's static validator (see PR #111 commit msg), so the
+      // workflow_ref shell-extraction + secondary checkout is the
+      // documented path. See #166 / #178.
+      expect(content).toMatch(/echo "ref=\$\{GITHUB_WORKFLOW_REF##\*@\}"/);
+      expect(content).toMatch(/repository:\s*point-source\/flywheel/);
+      expect(content).toMatch(/path:\s*_flywheel/);
+      expect(content).toMatch(/uses:\s*\.\/_flywheel/);
     });
   }
 });

@@ -1,22 +1,4 @@
 flywheel:
-  # Bump the action ref baked into the reusable workflows at release time so
-  # that pinning a workflow to an exact tag (e.g. .../pr.yml@v1.2.0) also pins
-  # the action SHA it invokes. Without this, both files would point at the
-  # floating @v<major> and the exact-tag rollback claim in
-  # docs/adopter/setup.md would be false. See issue #166.
-  #
-  # The pattern matches both forms the line takes across the release cycle:
-  #   - @v1               (trunk source-of-truth before the first templated release)
-  #   - @v1.2.3, @v1.2.3-dev.1 (post-release / post-back-merge state)
-  # The replacement resolves to point-source/flywheel@v${nextRelease.version}
-  # via substitutePlaceholders in src/release-rc.ts.
-  release_files:
-    - path: .github/workflows/pr.yml
-      pattern: 'point-source/flywheel@v[0-9][A-Za-z0-9.\-]*'
-      replacement: 'point-source/flywheel@v${version}'
-    - path: .github/workflows/push.yml
-      pattern: 'point-source/flywheel@v[0-9][A-Za-z0-9.\-]*'
-      replacement: 'point-source/flywheel@v${version}'
   streams:
     - name: main-line
       branches:
