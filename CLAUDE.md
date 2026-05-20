@@ -4,10 +4,19 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 This repo is a Flywheel adopter. The contribution rules — PR title format, target branch, branch naming, things-not-to-do — live in [`CONTRIBUTING.md`](./CONTRIBUTING.md) and apply to you the same as a human contributor. Read it before opening a PR.
 
-Two non-negotiables you'll hit immediately:
+Three non-negotiables you'll hit immediately:
 
-1. **Target `develop`**, not `main`. The `develop → main` promotion is bot-managed by `flywheel-push.yml`; PRs into `main` get rejected on protected-branch rules.
-2. **PR titles must be Conventional Commits.** Flywheel rewrites malformed titles automatically, but the rewrite + re-run round-trip costs CI minutes that add up across many concurrent PRs.
+1. **Work in a sibling worktree off `origin/develop`.** This repo is routinely worked on by multiple agents in parallel, and the main working tree is shared — a `git checkout` there stomps on the other agent's WIP and produces confusing `git status` output across both sessions. Before any edits, create the worktree:
+
+   ```bash
+   git fetch origin develop
+   git worktree add ../flywheel-<task-slug> -b <type>/<task-slug> origin/develop
+   ```
+
+   Then edit, build, and commit inside `../flywheel-<task-slug>`. Sibling-directory worktrees (not `.claude/worktrees/`) are the convention here — `git worktree list` shows existing examples like `flywheel-133`. In the Claude Code harness, follow `git worktree add` with `EnterWorktree(path: "../flywheel-<task-slug>")` to switch the session into it; in other harnesses use `git -C <path> …` for git commands (cd-ing in compound commands triggers permission prompts). Clean up after merge with `git worktree remove ../flywheel-<task-slug>`. Apply this even when no other agent is visible — one extra `git worktree add` is cheaper than two agents fighting over one working tree.
+
+2. **Target `develop`**, not `main`. The `develop → main` promotion is bot-managed by `flywheel-push.yml`; PRs into `main` get rejected on protected-branch rules.
+3. **PR titles must be Conventional Commits.** Flywheel rewrites malformed titles automatically, but the rewrite + re-run round-trip costs CI minutes that add up across many concurrent PRs.
 
 ## Where to start
 
