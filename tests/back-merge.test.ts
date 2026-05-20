@@ -93,7 +93,11 @@ function setupRepo(opts: {
   developChangelog: string;
   mainChangelog: string;
   /** If non-null, tag main's HEAD with this name. */
-  releaseTag: string | null;
+  releaseTag?: string | null;
+  /** If set, tag main's HEAD with each of these names — used to exercise
+   * the "floating major + real release tag at the same commit" case
+   * (#174). Takes precedence over `releaseTag` when both are present. */
+  releaseTags?: string[];
   /** If true, develop is set to a strict ancestor of main (ff-only succeeds). */
   developIsAncestor?: boolean;
   /** Extra file changes on develop only (creates non-CHANGELOG divergence). */
@@ -102,6 +106,8 @@ function setupRepo(opts: {
    * non-CHANGELOG conflict that the merge driver doesn't cover). */
   mainExtraFile?: { path: string; content: string };
 }): Fixture {
+  const tagsToApply =
+    opts.releaseTags ?? (opts.releaseTag ? [opts.releaseTag] : []);
   const remote = mkdtempSync(join(tmpdir(), "flywheel-bm-remote-"));
   execFileSync("git", ["init", "-q", "--bare", "-b", "main"], { cwd: remote });
 
@@ -128,7 +134,7 @@ function setupRepo(opts: {
       git(clone, "add", opts.mainExtraFile.path);
       git(clone, "commit", "-q", "-m", `main: ${opts.mainExtraFile.path}`);
     }
-    if (opts.releaseTag) git(clone, "tag", opts.releaseTag);
+    for (const t of tagsToApply) git(clone, "tag", t);
   } else {
     // Diverge: develop and main both edit CHANGELOG (and optional extras).
     git(clone, "checkout", "-q", "develop");
@@ -149,11 +155,11 @@ function setupRepo(opts: {
       git(clone, "add", opts.mainExtraFile.path);
       git(clone, "commit", "-q", "-m", `main: ${opts.mainExtraFile.path}`);
     }
-    if (opts.releaseTag) git(clone, "tag", opts.releaseTag);
+    for (const t of tagsToApply) git(clone, "tag", t);
   }
 
   git(clone, "push", "-q", "origin", "main", "develop");
-  if (opts.releaseTag) git(clone, "push", "-q", "origin", opts.releaseTag);
+  for (const t of tagsToApply) git(clone, "push", "-q", "origin", t);
 
   const { binDir: ghStubBin, callsLog: ghCallsLog } = setupGhStub();
   return {
@@ -250,6 +256,35 @@ describe("back-merge.sh — integration", () => {
       expect(remoteHead(fx.remote, "develop")).toBe(remoteHead(fx.remote, "main"));
       // No fallback PR.
       expect(ghCalls(fx.ghCallsLog).filter((l) => l.startsWith("pr\tcreate"))).toEqual([]);
+    } finally {
+      fx.cleanup();
+    }
+  });
+
+  it("skips the floating `v1` alias when both `v1` and `v1.1.0` point at HEAD (#174)", () => {
+    // release-major-tag.yml force-floats `v1` onto every stable release
+    // commit, so on a back-merge run after a release-major-tag pass,
+    // HEAD carries both `v1` and the real release tag. Picking `v1`
+    // would slug into branch names and commit messages as the wrong
+    // tag. In the unexpected-conflict path that's what surfaces.
+    const fx = setupRepo({
+      developChangelog: "## [1.0.0]\nInitial.\n",
+      mainChangelog: "## [1.0.0]\nInitial.\n",
+      releaseTags: ["v1", "v1.1.0"],
+      developExtraFile: { path: "src/foo.ts", content: "1" },
+      mainExtraFile: { path: "src/foo.ts", content: "2" },
+    });
+    try {
+      const r = runBackMerge(fx);
+      expect(r.exitCode, r.stderr).toBe(0);
+      // Group label and fallback PR head both encode new_tag — both must
+      // pick v1.1.0, not the floating v1 alias.
+      expect(r.stdout).toMatch(/Back-merge main \(v1\.1\.0\) → develop/);
+      const create = ghCalls(fx.ghCallsLog).find((l) => l.startsWith("pr\tcreate"));
+      expect(create, "fallback PR should be created").toBeDefined();
+      expect(create).toMatch(/--head\tchore\/back-merge-v1\.1\.0-into-develop/);
+      // Defensive: make sure the slug never collapses to the floating major.
+      expect(create).not.toMatch(/--head\tchore\/back-merge-v1-into-develop/);
     } finally {
       fx.cleanup();
     }
