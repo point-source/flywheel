@@ -29,11 +29,22 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      # Pinned to the same major as this reusable workflow's @v<major>
-      # ref. When the floating major tag advances, both this file and
-      # the action update together — adopters and sandbox tooling get a
-      # consistent pair without an override knob.
-      - uses: point-source/flywheel@v1
+      # Resolve the action ref from this workflow's own pinned ref so the
+      # action SHA stays in lockstep with the reusable workflow's tag.
+      # Adopters who pin `pr.yml@v1.2.3` get the action at `@v1.2.3`;
+      # adopters who pin `@v1` (floating major) get whatever v1 currently
+      # points at. github.workflow_ref is
+      # `org/repo/.github/workflows/pr.yml@<ref>`; the suffix after the
+      # final `@` is the ref to check the action out at. See issue #166.
+      - name: Resolve own ref
+        id: self
+        run: echo "ref=${GITHUB_WORKFLOW_REF##*@}" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v6
+        with:
+          repository: point-source/flywheel
+          ref: ${{ steps.self.outputs.ref }}
+          path: _flywheel
+      - uses: ./_flywheel
         with:
           event: pull_request
           app-id: ${{ inputs.app-id }}
