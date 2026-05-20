@@ -1,3 +1,10 @@
+## [1.2.3-dev.1](https://github.com/point-source/flywheel/compare/v1.2.2...v1.2.3-dev.1) (2026-05-20)
+
+
+### Bug Fixes
+
+* **release:** skip floating major tag in points-at HEAD selection ([#176](https://github.com/point-source/flywheel/issues/176)) ([240873a](https://github.com/point-source/flywheel/commit/240873a1d006894e2e2202c87bbe978c61383878)), closes [#174](https://github.com/point-source/flywheel/issues/174)
+
 ## [1.2.2](https://github.com/point-source/flywheel/compare/v1.2.1...v1.2.2) (2026-05-19)
 
 
