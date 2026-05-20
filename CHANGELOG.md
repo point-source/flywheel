@@ -1,3 +1,11 @@
+## [1.2.3](https://github.com/point-source/flywheel/compare/v1.2.2...v1.2.3) (2026-05-20)
+
+
+### Bug Fixes
+
+* **release:** resolve action ref from github.workflow_ref at runtime ([#180](https://github.com/point-source/flywheel/issues/180)) ([9a09630](https://github.com/point-source/flywheel/commit/9a09630d7b02317cfa79a4528c8a15869b92f8d6)), closes [#172](https://github.com/point-source/flywheel/issues/172) [#178](https://github.com/point-source/flywheel/issues/178) [#172](https://github.com/point-source/flywheel/issues/172) [#166](https://github.com/point-source/flywheel/issues/166) [#178](https://github.com/point-source/flywheel/issues/178)
+* **release:** skip floating major tag in points-at HEAD selection ([#176](https://github.com/point-source/flywheel/issues/176)) ([240873a](https://github.com/point-source/flywheel/commit/240873a1d006894e2e2202c87bbe978c61383878)), closes [#174](https://github.com/point-source/flywheel/issues/174)
+
 ## [1.2.3-dev.2](https://github.com/point-source/flywheel/compare/v1.2.3-dev.1...v1.2.3-dev.2) (2026-05-20)
 
 
