@@ -21,10 +21,8 @@ import { dirname, join } from "node:path";
 // The two files should differ on exactly two lines:
 //   - the workflow trigger block (reusable: `on: workflow_call:` with
 //     inputs/secrets; dogfood: `on: pull_request:` / `on: push:`)
-//   - the action `uses:` line (reusable: `point-source/flywheel@v<ver>`,
-//     where the version is the floating major on trunk and the exact
-//     version after release_files sed-bumps it at release time — see
-//     issue #166; dogfood: `./`)
+//   - the action `uses:` line (reusable: `point-source/flywheel@v1`;
+//     dogfood: `./`)
 //
 // Mismatch beyond those means the inline shell is drifting — catch it
 // at PR time. PR #42 added @semantic-release/exec to the dogfood but
@@ -99,17 +97,15 @@ describe("reusable workflow / dogfood inline-shell parity", () => {
 
       // Normalize the legitimate differences between a reusable workflow
       // and a top-level dogfood workflow:
-      //   - Reusable uses `point-source/flywheel@v<ver>` (`@v<major>` on
-      //     trunk; `@v<exact>` after release_files sed-bumps it at
-      //     release time); dogfood uses `./` (local checkout —
-      //     exercises in-PR action code).
+      //   - Reusable uses `point-source/flywheel@v1`; dogfood uses `./`
+      //     (local checkout — exercises in-PR action code).
       //   - Reusable reads app-id/secret from workflow_call inputs;
       //     dogfood reads them directly from repo Vars/Secrets.
       //   - Reusable carries an explanatory comment on the action-ref
       //     pin that the dogfood doesn't need.
       const rNormalized = r
-        .replace(/^\s*# Pinned to this release's exact version[\s\S]*?See issue #166\.\n/m, "")
-        .replace(/uses:\s*point-source\/flywheel@v[0-9][A-Za-z0-9.\-]*/g, "uses: ./")
+        .replace(/^\s*# Pinned to the same major[\s\S]*?override knob\.\n/m, "")
+        .replace(/uses:\s*point-source\/flywheel@v1/g, "uses: ./")
         .replace(/\$\{\{\s*inputs\.app-id\s*\}\}/g, "${{ vars.FLYWHEEL_GH_APP_ID }}")
         .replace(
           /\$\{\{\s*secrets\.app-private-key\s*\}\}/g,
@@ -145,12 +141,10 @@ describe("reusable workflow surface", () => {
       expect(content).toMatch(/^on:\s*\n\s*workflow_call:/m);
       expect(content).toMatch(/inputs:\s*\n[\s\S]*?app-id:/);
       expect(content).toMatch(/secrets:\s*\n[\s\S]*?app-private-key:/);
-      // Action ref. The value is `@v<major>` on trunk pre-first-release
-      // and `@v<exact>` after release_files bakes the exact version into
-      // the chore(release) commit (see issue #166). Hardcoded form —
-      // expressions in `uses:` referencing inputs fail GitHub's
-      // static validator (see PR #111 commit msg).
-      expect(content).toMatch(/uses:\s*point-source\/flywheel@v[0-9][A-Za-z0-9.\-]*/);
+      // Action ref pinned to the same major as the reusable workflow's
+      // own @v<major> ref. Hardcoded — expressions in `uses:` referencing
+      // inputs fail GitHub's static validator (see PR #111 commit msg).
+      expect(content).toMatch(/uses:\s*point-source\/flywheel@v1/);
     });
   }
 });
