@@ -361,6 +361,8 @@ scripts/apply-rulesets.sh <owner/repo> --required-checks "quality" --app-id <you
 
 The rules in this section apply to **everyone opening PRs against your repo** — human contributors and AI agents (Claude Code, Cursor, Copilot, Codex, internal swarms) alike. Flywheel doesn't care who authored a PR; it only cares whether the PR title is a Conventional Commit, whether it targets the right branch, and whether the commit type is auto-mergeable. Document the rules once, in a form both audiences can find.
 
+> The snippet below is the **repo-specific** form contributors read inside your repo. The **generic** form — same rules, no placeholders, with explicit "what to ask your maintainer for" pointers — lives in [`contributing-to-a-flywheel-repo.md`](./contributing-to-a-flywheel-repo.md). If you want a one-line `CONTRIBUTING.md` instead of pasting the snippet, that doc is the link to send contributors to.
+
 Two failure modes if you don't:
 
 - **Humans** figure it out from the `flywheel:needs-review` label or a maintainer comment, but every back-and-forth costs a round-trip and a fresh CI run.
@@ -387,6 +389,8 @@ Paste the snippet below into the file you've chosen as the source of truth. The 
 ## How this repo handles PRs (Flywheel)
 
 This repo uses [Flywheel](https://github.com/point-source/flywheel) to orchestrate PRs and releases. Read these rules before opening a PR — non-compliant PRs get labeled `flywheel:needs-review` and stall.
+
+**How releases happen here.** You don't cut releases manually. A release is published automatically when you merge a PR whose title bumps the version: `feat:` (minor), `fix:` / `perf:` (patch), or anything `!`-suffixed (major). Non-bumping types (`chore`, `style`, `docs`, `test`, `ci`, `build`, `refactor`) accumulate silently and ship with the next qualifying PR. There is no `git tag`, no "release" button, no `release` workflow you trigger by hand.
 
 **Target branch.** Open all PRs against `<DEFAULT_TARGET_BRANCH>` unless explicitly asked otherwise. Do **not** PR directly into other managed branches (`<list other managed branches>`) — Flywheel manages branch-to-branch promotion automatically via bot-authored promotion PRs.
 
