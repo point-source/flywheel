@@ -95,8 +95,14 @@ exit 0
   return { binDir, callsLog, stateDir };
 }
 
-/** Real local git repo with a single commit. Optionally tags HEAD. */
-function setupRepo(opts: { releaseTag: string | null }): Fixture {
+/** Real local git repo with a single commit. Optionally tags HEAD with
+ * one or more tag names — `releaseTag` is the single-tag convenience
+ * form; `releaseTags` is for cases where HEAD carries multiple tags
+ * (e.g. the floating `v1` major sitting on top of `v1.2.3`, #174). */
+function setupRepo(opts: {
+  releaseTag?: string | null;
+  releaseTags?: string[];
+}): Fixture {
   const repo = mkdtempSync(join(tmpdir(), "flywheel-sanitize-repo-"));
   execFileSync("git", ["init", "-q", "-b", "main"], { cwd: repo });
   git(repo, "config", "user.email", "test@test");
@@ -104,7 +110,8 @@ function setupRepo(opts: { releaseTag: string | null }): Fixture {
   writeFileSync(join(repo, "README.md"), "# repo\n");
   git(repo, "add", ".");
   git(repo, "commit", "-q", "-m", "init");
-  if (opts.releaseTag) git(repo, "tag", opts.releaseTag);
+  const tags = opts.releaseTags ?? (opts.releaseTag ? [opts.releaseTag] : []);
+  for (const t of tags) git(repo, "tag", t);
 
   const { binDir: ghStubBin, callsLog: ghCallsLog, stateDir: ghStateDir } = setupGhStub();
   return {
@@ -167,6 +174,63 @@ function lastEditNotes(stateDir: string): string | null {
 describe("sanitize-release-mentions.sh — integration", () => {
   it("exits 0 with notice when no tag points at HEAD", () => {
     const fx = setupRepo({ releaseTag: null });
+    try {
+      const r = runSanitize(fx);
+      expect(r.exitCode, r.stderr).toBe(0);
+      expect(r.stdout).toMatch(/No tag at HEAD/);
+      expect(ghCalls(fx.ghCallsLog)).toEqual([]);
+    } finally {
+      fx.cleanup();
+    }
+  });
+
+  it("skips the floating `v1` alias when both `v1` and `v1.2.3` point at HEAD (#174)", () => {
+    // After release-major-tag.yml force-floats `v1` onto a stable
+    // chore(release) commit, HEAD carries both tags and `git tag` sorts
+    // `v1` first. The script must skip the floating alias and pick the
+    // real release tag, otherwise `gh release view v1` 404s forever.
+    const fx = setupRepo({ releaseTags: ["v1", "v1.2.3"] });
+    try {
+      const body = "Release notes with @someone in them.\n";
+      const r = runSanitize(fx, { body });
+      expect(r.exitCode, r.stderr).toBe(0);
+      const views = ghCalls(fx.ghCallsLog).filter((l) => l.startsWith("release\tview"));
+      // Every `release view` call must target the real tag, never `v1`.
+      expect(views.length).toBeGreaterThan(0);
+      for (const call of views) {
+        expect(call).toContain("v1.2.3");
+        expect(call.split("\t")).not.toContain("v1");
+      }
+    } finally {
+      fx.cleanup();
+    }
+  });
+
+  it("skips the floating `<stream>/v1` alias on a scoped-stream release", () => {
+    // Scoped-stream variant of #174 — release-major-tag.sh derives
+    // `stream/v1` from `stream/v1.2.3`, so the same collision happens
+    // alphabetically.
+    const fx = setupRepo({ releaseTags: ["stream/v1", "stream/v1.2.3"] });
+    try {
+      const body = "Notes\n";
+      const r = runSanitize(fx, { body });
+      expect(r.exitCode, r.stderr).toBe(0);
+      const views = ghCalls(fx.ghCallsLog).filter((l) => l.startsWith("release\tview"));
+      expect(views.length).toBeGreaterThan(0);
+      for (const call of views) {
+        expect(call).toContain("stream/v1.2.3");
+        expect(call.split("\t")).not.toContain("stream/v1");
+      }
+    } finally {
+      fx.cleanup();
+    }
+  });
+
+  it("treats a lone floating `v1` (no `vX.Y.Z` at HEAD) as no release", () => {
+    // Degenerate case — shouldn't happen in practice (release-major-tag
+    // only floats when a real release tag exists) but the filter must
+    // not pick `v1` as a release tag. Falls through to the no-tag path.
+    const fx = setupRepo({ releaseTag: "v1" });
     try {
       const r = runSanitize(fx);
       expect(r.exitCode, r.stderr).toBe(0);
