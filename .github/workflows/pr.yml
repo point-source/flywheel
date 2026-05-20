@@ -29,14 +29,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      # Pinned to this release's exact version. The literal below is the
-      # trunk source-of-truth (`@v<major>` before the first templated
-      # release, `@v<exact>` after); semantic-release sed-bumps the line
-      # to `@v${nextRelease.version}` during the release commit via the
-      # release_files entry in .flywheel.yml. The chore(release) commit
-      # — and therefore the tag created at it — references the matching
-      # action SHA, so pinning .../pr.yml@v<exact> also pins the action.
-      # See issue #166.
+      # Pinned to the same major as this reusable workflow's @v<major>
+      # ref. When the floating major tag advances, both this file and
+      # the action update together — adopters and sandbox tooling get a
+      # consistent pair without an override knob.
       - uses: point-source/flywheel@v1
         with:
           event: pull_request
