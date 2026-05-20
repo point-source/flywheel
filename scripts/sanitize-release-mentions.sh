@@ -39,7 +39,16 @@ set -euo pipefail
 : "${GITHUB_TOKEN:?GITHUB_TOKEN must be set}"
 : "${GITHUB_REPOSITORY:?GITHUB_REPOSITORY must be set}"
 
-new_tag="$(git tag --points-at HEAD | head -n1)"
+# `git tag --points-at HEAD` lists every tag at HEAD alphabetically. On
+# stable releases, release-major-tag.yml force-moves the floating major
+# (`v1` or `<stream>/v1`, per scripts/release-major-tag.sh) onto the
+# same commit, so the alphabetically-first tag is the floating major —
+# which is never a GitHub Release, so `gh release view v1` 404s forever
+# (#174). Skip floating-major aliases and pick the next tag, which is
+# the `vX.Y.Z` semantic-release just published. The `|| true` keeps
+# pipefail happy when grep finds nothing left — the empty-string branch
+# below handles "no real release tag at HEAD".
+new_tag="$(git tag --points-at HEAD | grep -Ev '^(.+/)?v[0-9]+$' | head -n1 || true)"
 if [[ -z "$new_tag" ]]; then
   echo "::notice::No tag at HEAD — semantic-release did not publish a release. Skipping body sanitize."
   exit 0

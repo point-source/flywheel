@@ -38,7 +38,15 @@ set -euo pipefail
 : "${RELEASED_BRANCH:?RELEASED_BRANCH must be set}"
 : "${BACK_MERGE_TARGETS:?BACK_MERGE_TARGETS must be set}"
 
-new_tags="$(git tag --points-at HEAD)"
+# `git tag --points-at HEAD` lists every tag at HEAD alphabetically.
+# After release-major-tag.yml floats `v1` (or `<stream>/v1`, per
+# scripts/release-major-tag.sh) onto the chore(release) commit, that
+# commit carries both the floating major and the real `vX.Y.Z` — and
+# the alias sorts first. Picking it as `new_tag` would produce wrong
+# commit messages and branch-name slugs on every back-merge. Filter
+# floating-major aliases so we pick the tag semantic-release just
+# published. See #174.
+new_tags="$(git tag --points-at HEAD | grep -Ev '^(.+/)?v[0-9]+$' || true)"
 if [[ -z "$new_tags" ]]; then
   echo "::notice::No tag at HEAD — semantic-release did not publish a release. Skipping back-merge."
   exit 0
