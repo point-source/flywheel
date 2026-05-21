@@ -33,7 +33,7 @@ curl -fsSL https://raw.githubusercontent.com/point-source/flywheel/main/scripts/
 
 The hand-rolled equivalent — four files in your repo:
 
-```
+```text
 your-repo/
 ├── .flywheel.yml                    ← you write this
 └── .github/workflows/
@@ -64,7 +64,7 @@ See **[docs/adopter/setup.md](./docs/adopter/setup.md)** for the full setup walk
 
 ## How it works
 
-```
+```text
 agent / developer pushes a branch
         │
         ▼
@@ -112,40 +112,40 @@ workflow_run: build completed
 
 Flywheel mints its own installation token from the GitHub App credentials you supply via the `app-id` / `app-private-key` inputs. The App needs these scopes:
 
-| Scope          | Purpose                                                        |
-| -------------- | -------------------------------------------------------------- |
-| Contents: r/w  | Tag creation, `.releaserc.json` write to workspace             |
-| Pull req: r/w  | PR creation, body updates, native auto-merge enabling          |
-| Issues: r/w    | Adding / removing the `flywheel:*` labels on PRs               |
-| Checks: r/w    | Posting the `flywheel/conventional-commit` check               |
-| Metadata: read | Required for any token interacting with a repo                 |
+| Scope          | Purpose                                               |
+| -------------- | ----------------------------------------------------- |
+| Contents: r/w  | Tag creation, `.releaserc.json` write to workspace    |
+| Pull req: r/w  | PR creation, body updates, native auto-merge enabling |
+| Issues: r/w    | Adding / removing the `flywheel:*` labels on PRs      |
+| Checks: r/w    | Posting the `flywheel/conventional-commit` check      |
+| Metadata: read | Required for any token interacting with a repo        |
 
 Adopters store `FLYWHEEL_GH_APP_ID` as a repo Variable (it's not sensitive — the App ID is printed on the App's settings page) and `FLYWHEEL_GH_APP_PRIVATE_KEY` as a repo Secret, and pass them straight into the action — no separate `actions/create-github-app-token` step. Personal Access Tokens are not supported (they don't reliably propagate the cross-workflow trigger semantics Flywheel relies on); `secrets.GITHUB_TOKEN` is similarly insufficient (it cannot trigger downstream workflows from PRs it creates).
 
 ## Inputs and outputs
 
-| Input             | Required | Description                                                |
-| ----------------- | -------- | ---------------------------------------------------------- |
-| `event`           | yes      | `pull_request` or `push`                                   |
-| `app-id`          | yes      | GitHub App ID; typically `vars.FLYWHEEL_GH_APP_ID`         |
+| Input             | Required | Description                                                            |
+| ----------------- | -------- | ---------------------------------------------------------------------- |
+| `event`           | yes      | `pull_request` or `push`                                               |
+| `app-id`          | yes      | GitHub App ID; typically `vars.FLYWHEEL_GH_APP_ID`                     |
 | `app-private-key` | yes      | App private key (PEM); typically `secrets.FLYWHEEL_GH_APP_PRIVATE_KEY` |
 
-| Output                | Description                                                                                                                                          |
-| --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `token`               | Minted installation token (masked). Pass to downstream steps that need it (e.g. `semantic-release`).                                                  |
-| `managed_branch`      | `'true'` if the pushed/targeted branch is in a stream; `'false'` otherwise.                                                                          |
-| `back_merge_targets`  | Comma-separated list of upstream branches in the same stream that should receive a back-merge after this branch releases. Empty for single-branch streams or when the branch is the head of its stream. |
+| Output               | Description                                                                                                                                                                                             |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `token`              | Minted installation token (masked). Pass to downstream steps that need it (e.g. `semantic-release`).                                                                                                    |
+| `managed_branch`     | `'true'` if the pushed/targeted branch is in a stream; `'false'` otherwise.                                                                                                                             |
+| `back_merge_targets` | Comma-separated list of upstream branches in the same stream that should receive a back-merge after this branch releases. Empty for single-branch streams or when the branch is the head of its stream. |
 
 ## Conventional commit types
 
 Flywheel recognizes the standard conventional commit types: `feat`, `fix`, `chore`, `refactor`, `perf`, `style`, `test`, `docs`, `build`, `ci`, `revert`. Append `!` to indicate a breaking change. The `BREAKING CHANGE:` and `BREAKING-CHANGE:` footers in commit bodies are also detected.
 
-| Commit                                                          | Increment |
-| --------------------------------------------------------------- | --------- |
-| Any type with `!` or `BREAKING CHANGE:` footer                  | major     |
-| `feat`                                                          | minor     |
-| `fix`, `perf`                                                   | patch     |
-| `chore`, `refactor`, `style`, `test`, `docs`, `build`, `ci`     | none      |
+| Commit                                                      | Increment |
+| ----------------------------------------------------------- | --------- |
+| Any type with `!` or `BREAKING CHANGE:` footer              | major     |
+| `feat`                                                      | minor     |
+| `fix`, `perf`                                               | patch     |
+| `chore`, `refactor`, `style`, `test`, `docs`, `build`, `ci` | none      |
 
 Non-bumping commits accumulate silently until a qualifying commit lands.
 
