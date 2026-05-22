@@ -10,10 +10,10 @@ Three non-negotiables you'll hit immediately:
 
    ```bash
    git fetch origin develop
-   git worktree add ../flywheel-<task-slug> -b <type>/<task-slug> origin/develop
+   git worktree add --no-track ../flywheel-<task-slug> -b <type>/<task-slug> origin/develop
    ```
 
-   Then edit, build, and commit inside `../flywheel-<task-slug>`. Sibling-directory worktrees (not `.claude/worktrees/`) are the convention here — `git worktree list` shows existing examples like `flywheel-133`. In the Claude Code harness, follow `git worktree add` with `EnterWorktree(path: "../flywheel-<task-slug>")` to switch the session into it; in other harnesses use `git -C <path> …` for git commands (cd-ing in compound commands triggers permission prompts). Clean up after merge with `git worktree remove ../flywheel-<task-slug>`. Apply this even when no other agent is visible — one extra `git worktree add` is cheaper than two agents fighting over one working tree.
+   The `--no-track` flag is required: branching from a remote-tracking ref otherwise sets `origin/develop` as the new branch's upstream (git prints `set up to track 'origin/develop'`), and a stray `git push`/`git pull` could then move commits onto `develop`. A worktree branch must have no upstream until it is pushed with `-u`. Then edit, build, and commit inside `../flywheel-<task-slug>`. Sibling-directory worktrees (not `.claude/worktrees/`) are the convention here — `git worktree list` shows existing examples like `flywheel-133`. In the Claude Code harness, follow `git worktree add` with `EnterWorktree(path: "../flywheel-<task-slug>")` to switch the session into it; in other harnesses use `git -C <path> …` for git commands (cd-ing in compound commands triggers permission prompts). Clean up after merge with `git worktree remove ../flywheel-<task-slug>`. Apply this even when no other agent is visible — one extra `git worktree add` is cheaper than two agents fighting over one working tree.
 
 2. **Target `develop`**, not `main`. The `develop → main` promotion is bot-managed by `flywheel-push.yml`; PRs into `main` get rejected on protected-branch rules.
 3. **PR titles must be Conventional Commits.** Flywheel rewrites malformed titles automatically, but the rewrite + re-run round-trip costs CI minutes that add up across many concurrent PRs.
