@@ -77,6 +77,13 @@ describe.skipIf(!ghAuthenticated())("init.sh deterministic file emission", () =>
             written.includes("__FLYWHEEL_VERSION__"),
             `${wf} should have no placeholder remaining`,
           ).toBe(false);
+          // The generated caller must pass `flywheel-version` so the
+          // reusable workflow checks the action source out at the same
+          // ref the caller pinned the workflow at — both stamped from
+          // --version. See SPEC §spec:action-version-lockstep.
+          expect(written, `${wf} passes flywheel-version`).toContain(
+            `flywheel-version: ${TEST_VERSION}`,
+          );
         }
 
         // .gitattributes block is what makes back-merges conflict-free

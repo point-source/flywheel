@@ -8,7 +8,7 @@
 
 ## Action version lockstep §spec:action-version-lockstep
 
-*Status: not started*
+*Status: in progress*
 
 Flywheel runs as adopter-side CI: an adopter's repository invokes flywheel
 on its `pull_request` and `push` events. Every part of flywheel an adopter

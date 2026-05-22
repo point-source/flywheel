@@ -21,11 +21,12 @@ import { dirname, join } from "node:path";
 // The two files differ on a known set of lines:
 //   - the workflow trigger block (reusable: `on: workflow_call:` with
 //     inputs/secrets; dogfood: `on: pull_request:` / `on: push:`)
-//   - the action-invocation shape: the reusable resolves its own ref via
-//     `github.workflow_ref` and checks the action out into `_flywheel/`
+//   - the action-invocation shape: the reusable checks the action source
+//     out into `_flywheel/` at the caller-supplied `flywheel-version` ref
 //     before invoking it as `./_flywheel`; the dogfood uses `./` directly
-//     against the calling repo's checkout. See #166 / #178 for the
-//     `workflow_ref` rationale.
+//     against the calling repo's checkout. See SPEC
+//     §spec:action-version-lockstep and #183 for why the ref is a
+//     caller-supplied input rather than runtime-resolved.
 //
 // Mismatch beyond that means the inline shell is drifting — catch it at
 // PR time. PR #42 added @semantic-release/exec to the dogfood but not
@@ -100,24 +101,23 @@ describe("reusable workflow / dogfood inline-shell parity", () => {
 
       // Normalize the legitimate differences between a reusable workflow
       // and a top-level dogfood workflow:
-      //   - Reusable resolves its own ref via `github.workflow_ref` and
-      //     checks the action out into `_flywheel/`; dogfood uses `./`
+      //   - Reusable checks the action source out into `_flywheel/` at
+      //     the caller-supplied `flywheel-version` ref; dogfood uses `./`
       //     directly against the calling repo's checkout.
       //   - Reusable reads app-id/secret from workflow_call inputs;
       //     dogfood reads them directly from repo Vars/Secrets.
-      //   - Reusable carries an explanatory comment on the ref-resolution
-      //     pattern that the dogfood doesn't need.
+      //   - Reusable carries an explanatory comment on the action-source
+      //     checkout that the dogfood doesn't need.
       const rNormalized = r
-        // Strip the comment block explaining workflow_ref resolution.
-        .replace(/^\s*# Resolve the action ref[\s\S]*?See issue #166\.\n/m, "")
-        // Strip the resolve-own-ref step.
+        // Strip the comment block explaining the action-source checkout.
         .replace(
-          /^\s*- name: Resolve own ref\n\s*id: self\n\s*run: echo "ref=\$\{GITHUB_WORKFLOW_REF##\*@\}" >> "\$GITHUB_OUTPUT"\n/m,
+          /^\s*# Check the Flywheel action source out[\s\S]*?§spec:action-version-lockstep\.\n/m,
           "",
         )
-        // Strip the secondary checkout step that pulls the action into _flywheel/.
+        // Strip the secondary checkout step that pulls the action into
+        // _flywheel/ at the caller-supplied ref.
         .replace(
-          /^\s*- uses: actions\/checkout@v6\n\s*with:\n\s*repository: point-source\/flywheel\n\s*ref: \$\{\{ steps\.self\.outputs\.ref \}\}\n\s*path: _flywheel\n/m,
+          /^\s*- uses: actions\/checkout@v6\n\s*with:\n\s*repository: point-source\/flywheel\n\s*ref: \$\{\{ inputs\.flywheel-version \}\}\n\s*path: _flywheel\n/m,
           "",
         )
         // Reusable invokes the local action via the secondary checkout path;
@@ -147,6 +147,11 @@ describe("adopter caller templates", () => {
       expect(content).toMatch(
         /app-private-key:\s*\$\{\{\s*secrets\.FLYWHEEL_GH_APP_PRIVATE_KEY\s*\}\}/,
       );
+      // The caller must pass `flywheel-version` so the reusable workflow
+      // checks the action source out at the same ref the caller pinned
+      // the workflow at. init.sh stamps __FLYWHEEL_VERSION__ in both
+      // places from --version. See SPEC §spec:action-version-lockstep.
+      expect(content).toMatch(/flywheel-version:\s*__FLYWHEEL_VERSION__/);
     });
   }
 });
@@ -158,13 +163,17 @@ describe("reusable workflow surface", () => {
       expect(content).toMatch(/^on:\s*\n\s*workflow_call:/m);
       expect(content).toMatch(/inputs:\s*\n[\s\S]*?app-id:/);
       expect(content).toMatch(/secrets:\s*\n[\s\S]*?app-private-key:/);
-      // The action ref is resolved at runtime from `github.workflow_ref`
-      // so the action SHA matches whatever ref the caller pinned the
-      // workflow at. Expressions in `uses:` referencing inputs fail
-      // GitHub's static validator (see PR #111 commit msg), so the
-      // workflow_ref shell-extraction + secondary checkout is the
-      // documented path. See #166 / #178.
-      expect(content).toMatch(/echo "ref=\$\{GITHUB_WORKFLOW_REF##\*@\}"/);
+      // The action source ref is a caller-supplied `flywheel-version`
+      // input — optional, defaulting to the floating major `v1` so
+      // callers that omit it keep working. The reusable workflow checks
+      // the action out at that ref; it does NOT derive its own ref from
+      // `github.workflow_ref` (that holds the caller's ref, which is
+      // absent from point-source/flywheel for non-default-branch
+      // callers — #183). See SPEC §spec:action-version-lockstep.
+      expect(content).toMatch(/flywheel-version:\s*\n[\s\S]*?required:\s*false/);
+      expect(content).toMatch(/flywheel-version:[\s\S]*?default:\s*v1/);
+      expect(content).not.toMatch(/GITHUB_WORKFLOW_REF/);
+      expect(content).toMatch(/ref:\s*\$\{\{\s*inputs\.flywheel-version\s*\}\}/);
       expect(content).toMatch(/repository:\s*point-source\/flywheel/);
       expect(content).toMatch(/path:\s*_flywheel/);
       expect(content).toMatch(/uses:\s*\.\/_flywheel/);
