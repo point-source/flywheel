@@ -1,24 +1,5 @@
 # flywheel — Roadmap
 
-## Interim version-input fix
-
-### §road:interim-version-input
-
-Add an optional `flywheel-version` input to `.github/workflows/pr.yml` and
-`push.yml` that supplies the action-source checkout ref in place of the
-`GITHUB_WORKFLOW_REF` "Resolve own ref" step, thread it through the
-`scripts/templates/flywheel-pr.yml`/`flywheel-push.yml` callers and
-`scripts/init.sh`, and update `tests/workflow-template-parity.test.ts`.
-Implements §spec:action-version-lockstep.
-
-**Verify:** Run `scripts/init.sh` against a scratch repo and confirm the
-generated `flywheel-pr.yml`/`flywheel-push.yml` callers pass
-`flywheel-version`. In an adopter repo on the patched reusable workflows,
-open a PR from a non-default branch — the `Flywheel — PR` conduct job's
-action-source checkout step succeeds with no `fatal: couldn't find remote
-ref`. Omitting `flywheel-version` runs the action at the floating major; an
-exact value runs it at that tag.
-
 ## Composite-action distribution
 
 ### §road:composite-action-core
