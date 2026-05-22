@@ -1,3 +1,10 @@
+## [1.2.4-dev.1](https://github.com/point-source/flywheel/compare/v1.2.3...v1.2.4-dev.1) (2026-05-22)
+
+
+### Bug Fixes
+
+* add flywheel-version input to reusable workflows ([#183](https://github.com/point-source/flywheel/issues/183)) ([#187](https://github.com/point-source/flywheel/issues/187)) ([c0dec38](https://github.com/point-source/flywheel/commit/c0dec3884592844dc0ddb84f8e37db73769dc771))
+
 ## [1.2.3](https://github.com/point-source/flywheel/compare/v1.2.2...v1.2.3) (2026-05-20)
 
 
