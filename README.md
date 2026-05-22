@@ -62,6 +62,8 @@ flywheel:
 
 See **[docs/adopter/setup.md](./docs/adopter/setup.md)** for the full setup walkthrough including the workflow templates, branch protection rulesets, and required secret scopes.
 
+> **Contributing to a repo that already uses Flywheel?** You don't need to read any of the above. Start with [docs/adopter/contributing-to-a-flywheel-repo.md](./docs/adopter/contributing-to-a-flywheel-repo.md) — a one-page, config-independent TLDR aimed at contributors, not adopters.
+
 ## How it works
 
 ```

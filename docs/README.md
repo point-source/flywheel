@@ -17,6 +17,7 @@ For anyone adopting Flywheel into their own repo.
 
 - **[adopter/setup.md](./adopter/setup.md)** — full setup walkthrough: GitHub App, secrets, workflow files, `.flywheel.yml`, branch rulesets, contributor brief.
 - **[adopter/recipes.md](./adopter/recipes.md)** — canonical `release_files:` recipes per ecosystem (Flutter, Cargo, .NET, Gradle, etc.).
+- **[adopter/contributing-to-a-flywheel-repo.md](./adopter/contributing-to-a-flywheel-repo.md)** — one-page TLDR for contributors to a repo that uses Flywheel (not for adopters configuring it).
 
 ## Maintainer
 
