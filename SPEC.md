@@ -120,7 +120,7 @@ exists to guarantee.
 
 ## Immutable release support §spec:immutable-release-support
 
-*Status: in progress*
+*Status: complete*
 
 GitHub immutable releases (generally available October 2025) freeze a
 release's git tag and attached assets the moment the release is published —
@@ -149,35 +149,32 @@ having immutable releases enabled does not imply its releases carry assets.
 No signal available to flywheel answers the question, so the adopter states
 the intent explicitly. §req:constraints
 
-**Draft creation.** When `release_as_draft` is `true`, the `.releaserc.json`
-that `src/release-rc.ts` generates configures `@semantic-release/github`
-with `draftRelease: true`, so the GitHub Release is created as an
-unpublished draft instead of being published. When `release_as_draft` is
-`false` or absent, `@semantic-release/github` is configured exactly as
-today and the release publishes immediately — an adopter who has not opted
-in observes no change whatsoever. §req:success-criteria
+**Draft creation.** When `release_as_draft` is `true`, semantic-release
+creates the GitHub Release as an unpublished draft instead of publishing it
+(passed through to `@semantic-release/github` as its `draftRelease`
+option). When `release_as_draft` is `false` or absent, the release
+publishes immediately — an adopter who has not opted in observes no change
+whatsoever. §req:success-criteria
 
 `@semantic-release/github` stays in the plugin chain rather than being
 removed: it still generates the release notes, posts the released-in
 comments, and produces the release object the adopter's build attaches to.
-`draftRelease` is the single documented deviation from the plugin's
-defaults.
+`draftRelease` is the single deviation from the plugin's defaults.
 
-The draft state changes nothing else in the release run. semantic-release
-core creates and pushes the git tag, and `@semantic-release/git` commits
-the changelog, regardless of whether the release object is a draft. The
-release-body @-mention sanitizer and the back-merge step operate
-identically — the sanitizer edits the body of the draft (drafts are fully
-mutable), and the back-merge replays the `chore(release)` commit and tag,
-which are branch-and-tag operations independent of the release object.
+Tag creation, the changelog commit, the release-body @-mention sanitizer,
+and the back-merge step are all independent of the release object's
+published state — they are branch and tag operations, or edits to a
+still-mutable draft body. This independence is what makes concurrency safe.
 
 **Concurrency.** semantic-release derives the next version from git tags,
 never from GitHub Release objects. Because the tag is created and pushed on
 every release run irrespective of `draftRelease`, releases cut in quick
 succession compute correct, monotonic versions even while earlier releases
 remain unpublished drafts. The draft state of a release object is invisible
-to version computation; a test exercises consecutive draft releases and
-asserts the version sequence. §req:success-criteria
+to version computation. The e2e scenario
+`tests/e2e/scenarios/11-release-as-draft.test.ts` exercises consecutive
+draft releases and asserts the version sequence.
+§req:success-criteria
 
 **Handoff to the adopter's build.** flywheel's responsibility ends when the
 draft release exists. The adopter's build owns attaching the artifact and

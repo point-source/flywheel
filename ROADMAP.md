@@ -31,18 +31,3 @@ merge a PR from a non-default branch — flywheel runs on `pull_request` and
 `.github/workflows/pr.yml`/`push.yml` are absent from `point-source/flywheel`.
 Re-scaffold pinned at an exact `@vX.Y.Z` and confirm every flywheel file runs
 at that version.
-
-## Immutable release support
-
-### §road:draft-release-e2e
-
-Add an end-to-end scenario under `tests/e2e/scenarios` that runs a release
-with `release_as_draft` enabled, asserts the GitHub Release is created
-unpublished with its git tag present, and asserts that two releases cut
-back-to-back — the first left as an unpublished draft — receive correct
-consecutive versions. Implements §spec:immutable-release-support.
-
-**Verify:** Run `npm run test:e2e` against a sandbox repository configured
-with `release_as_draft: true`; the new scenario passes, confirming the
-draft creation path and that concurrent unpublished drafts do not perturb
-semantic-release's tag-based version computation.
