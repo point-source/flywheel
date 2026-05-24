@@ -27791,7 +27791,8 @@ function isBumping(type2, breaking) {
 // src/config.ts
 var TOP_LEVEL_KEYS = /* @__PURE__ */ new Set([
   "streams",
-  "release_files"
+  "release_files",
+  "release_as_draft"
 ]);
 var BRANCH_KEYS = /* @__PURE__ */ new Set(["name", "release", "suffix", "auto_merge"]);
 var STREAM_KEYS = /* @__PURE__ */ new Set(["name", "branches"]);
@@ -27835,6 +27836,7 @@ function loadConfig(yamlText) {
   }
   const streams = parseStreams(root.streams, errors);
   const releaseFiles = parseReleaseFiles(root.release_files, errors);
+  const releaseAsDraft = parseReleaseAsDraft(root.release_as_draft, errors);
   if (streams && streams.length > 0) {
     validateStreams(streams, errors, notices);
   }
@@ -27844,12 +27846,23 @@ function loadConfig(yamlText) {
   return {
     config: {
       streams,
-      ...releaseFiles ? { release_files: releaseFiles } : {}
+      ...releaseFiles ? { release_files: releaseFiles } : {},
+      ...releaseAsDraft !== void 0 ? { release_as_draft: releaseAsDraft } : {}
     },
     errors,
     warnings,
     notices
   };
+}
+function parseReleaseAsDraft(value, errors) {
+  if (value === void 0) return void 0;
+  if (typeof value !== "boolean") {
+    errors.push(
+      `flywheel.release_as_draft: must be a boolean (got ${JSON.stringify(value)}).`
+    );
+    return void 0;
+  }
+  return value;
 }
 function parseStreams(value, errors) {
   if (value === void 0) {
@@ -28899,6 +28912,7 @@ var import_node_util = require("node:util");
 // src/release-rc.ts
 var EXEC_PLUGIN = "@semantic-release/exec";
 var GIT_PLUGIN = "@semantic-release/git";
+var GITHUB_PLUGIN = "@semantic-release/github";
 var DEFAULT_PLUGINS = [
   "@semantic-release/commit-analyzer",
   "@semantic-release/release-notes-generator",
@@ -28931,13 +28945,17 @@ var DEFAULT_PLUGINS = [
       message: "chore(release): ${nextRelease.version}\n\n${nextRelease.notes}"
     }
   ],
-  "@semantic-release/github"
+  GITHUB_PLUGIN
 ];
 function generateReleaseRc(targetStream, config, buildNumber) {
   const tagFormat = chooseTagFormat(targetStream, config.streams);
   const releasingBranches = targetStream.branches.filter((b) => b.release !== "none");
   const branches = releasingBranches.map((b) => mapBranch(b, releasingBranches.length === 1)).filter((b) => b !== null);
-  const plugins = buildPlugins(config.release_files, buildNumber);
+  const plugins = buildPlugins(
+    config.release_files,
+    buildNumber,
+    config.release_as_draft ?? false
+  );
   return { tagFormat, branches, plugins };
 }
 function usesBuildPlaceholder(releaseFiles) {
@@ -28945,13 +28963,16 @@ function usesBuildPlaceholder(releaseFiles) {
     (entry) => "cmd" in entry ? entry.cmd.includes("${build}") : entry.replacement.includes("${build}")
   );
 }
-function buildPlugins(releaseFiles, buildNumber) {
+function buildPlugins(releaseFiles, buildNumber, releaseAsDraft) {
+  const plugins = DEFAULT_PLUGINS.map(
+    (entry) => entry === GITHUB_PLUGIN && releaseAsDraft ? [GITHUB_PLUGIN, { draftRelease: true }] : entry
+  );
   if (!releaseFiles || releaseFiles.length === 0) {
-    return [...DEFAULT_PLUGINS];
+    return plugins;
   }
   const prepareCmd = buildPrepareCmd(releaseFiles, buildNumber);
   const extraAssets = releaseFiles.map((f) => f.path);
-  return DEFAULT_PLUGINS.map((entry) => {
+  return plugins.map((entry) => {
     if (entry === EXEC_PLUGIN) {
       return [EXEC_PLUGIN, { prepareCmd }];
     }
