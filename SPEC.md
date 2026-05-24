@@ -120,7 +120,7 @@ exists to guarantee.
 
 ## Immutable release support §spec:immutable-release-support
 
-*Status: not started*
+*Status: in progress*
 
 GitHub immutable releases (generally available October 2025) freeze a
 release's git tag and attached assets the moment the release is published —

@@ -30,6 +30,11 @@ export type ReleaseFile = ReleaseFileDeclarative | ReleaseFileExec;
 export interface FlywheelConfig {
   streams: Stream[];
   release_files?: ReleaseFile[];
+  // When true, releases are created as unpublished GitHub Drafts instead of
+  // being published immediately, so a separate build workflow can attach
+  // artifacts to the release before it becomes immutable. See
+  // SPEC §spec:immutable-release-support.
+  release_as_draft?: boolean;
 }
 
 export interface ParsedTitle {

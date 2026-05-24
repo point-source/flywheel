@@ -12,6 +12,7 @@ import { ALLOWED_AUTO_MERGE_ENTRIES } from "./conventional.js";
 const TOP_LEVEL_KEYS = new Set([
   "streams",
   "release_files",
+  "release_as_draft",
 ]);
 
 const BRANCH_KEYS = new Set(["name", "release", "suffix", "auto_merge"]);
@@ -76,6 +77,7 @@ export function loadConfig(yamlText: string): ConfigLoadResult {
 
   const streams = parseStreams(root.streams, errors);
   const releaseFiles = parseReleaseFiles(root.release_files, errors);
+  const releaseAsDraft = parseReleaseAsDraft(root.release_as_draft, errors);
 
   if (streams && streams.length > 0) {
     validateStreams(streams, errors, notices);
@@ -89,11 +91,28 @@ export function loadConfig(yamlText: string): ConfigLoadResult {
     config: {
       streams: streams!,
       ...(releaseFiles ? { release_files: releaseFiles } : {}),
+      ...(releaseAsDraft !== undefined ? { release_as_draft: releaseAsDraft } : {}),
     },
     errors,
     warnings,
     notices,
   };
+}
+
+// release_as_draft is repository-wide: GitHub's own immutable-releases
+// setting is repo/org-level, so flywheel mirrors that scope. Adopters who
+// opt in see semantic-release create an unpublished draft (instead of
+// publishing) so a separate build can attach release assets before the
+// publish that makes the release immutable. See SPEC §spec:immutable-release-support.
+function parseReleaseAsDraft(value: unknown, errors: string[]): boolean | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "boolean") {
+    errors.push(
+      `flywheel.release_as_draft: must be a boolean (got ${JSON.stringify(value)}).`,
+    );
+    return undefined;
+  }
+  return value;
 }
 
 function parseStreams(value: unknown, errors: string[]): Stream[] | null {

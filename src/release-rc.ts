@@ -19,6 +19,7 @@ export interface ReleaseRc {
 
 const EXEC_PLUGIN = "@semantic-release/exec";
 const GIT_PLUGIN = "@semantic-release/git";
+const GITHUB_PLUGIN = "@semantic-release/github";
 
 const DEFAULT_PLUGINS: unknown[] = [
   "@semantic-release/commit-analyzer",
@@ -52,7 +53,7 @@ const DEFAULT_PLUGINS: unknown[] = [
       message: "chore(release): ${nextRelease.version}\n\n${nextRelease.notes}",
     },
   ],
-  "@semantic-release/github",
+  GITHUB_PLUGIN,
 ];
 
 export function generateReleaseRc(
@@ -65,7 +66,11 @@ export function generateReleaseRc(
   const branches = releasingBranches
     .map((b) => mapBranch(b, releasingBranches.length === 1))
     .filter((b): b is SemanticReleaseBranch => b !== null);
-  const plugins = buildPlugins(config.release_files, buildNumber);
+  const plugins = buildPlugins(
+    config.release_files,
+    buildNumber,
+    config.release_as_draft ?? false,
+  );
   return { tagFormat, branches, plugins };
 }
 
@@ -83,13 +88,25 @@ export function usesBuildPlaceholder(releaseFiles: ReleaseFile[]): boolean {
 function buildPlugins(
   releaseFiles: ReleaseFile[] | undefined,
   buildNumber: number | undefined,
+  releaseAsDraft: boolean,
 ): unknown[] {
+  // Apply the github draft transform first so subsequent release_files
+  // transforms iterate over a single shape. `draftRelease: true` is the one
+  // option flywheel passes to @semantic-release/github; the plugin
+  // otherwise runs with its defaults (release notes, success comments, no
+  // assets uploaded — flywheel never attaches release assets itself).
+  // SPEC §spec:immutable-release-support.
+  const plugins: unknown[] = DEFAULT_PLUGINS.map((entry) =>
+    entry === GITHUB_PLUGIN && releaseAsDraft
+      ? [GITHUB_PLUGIN, { draftRelease: true }]
+      : entry,
+  );
   if (!releaseFiles || releaseFiles.length === 0) {
-    return [...DEFAULT_PLUGINS];
+    return plugins;
   }
   const prepareCmd = buildPrepareCmd(releaseFiles, buildNumber);
   const extraAssets = releaseFiles.map((f) => f.path);
-  return DEFAULT_PLUGINS.map((entry) => {
+  return plugins.map((entry) => {
     if (entry === EXEC_PLUGIN) {
       return [EXEC_PLUGIN, { prepareCmd }];
     }

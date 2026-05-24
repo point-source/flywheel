@@ -446,4 +446,39 @@ flywheel:
       result.errors.some((e) => e.includes("flywheel.merge_strategy: unknown key")),
     ).toBe(true);
   });
+
+  describe("release_as_draft", () => {
+    it("accepts release_as_draft: true and surfaces it on the parsed config", () => {
+      const result = loadConfig(fx("flywheel.release-as-draft.yml"));
+      expect(result.errors).toEqual([]);
+      expect(result.config).not.toBeNull();
+      expect(result.config!.release_as_draft).toBe(true);
+    });
+
+    it("absent → release_as_draft is undefined", () => {
+      const result = loadConfig(fx("flywheel.valid.yml"));
+      expect(result.errors).toEqual([]);
+      expect(result.config!.release_as_draft).toBeUndefined();
+    });
+
+    it("rejects a non-boolean value", () => {
+      const yamlText = `
+flywheel:
+  release_as_draft: "yes"
+  streams:
+    - name: only
+      branches:
+        - name: main
+          release: production
+          auto_merge: []
+`;
+      const result = loadConfig(yamlText);
+      expect(result.config).toBeNull();
+      expect(
+        result.errors.some((e) =>
+          e.includes("flywheel.release_as_draft: must be a boolean"),
+        ),
+      ).toBe(true);
+    });
+  });
 });

@@ -468,6 +468,82 @@ describe("generateReleaseRc", () => {
     const rc = generateReleaseRc(config.streams[0]!, config);
     expect(rc.branches.map((b) => b.name)).toEqual(["third", "first", "second"]);
   });
+
+  describe("release_as_draft", () => {
+    const baseConfig: FlywheelConfig = {
+      streams: [
+        {
+          name: "main-line",
+          branches: [{ name: "main", release: "production", auto_merge: [] }],
+        },
+      ],
+    };
+
+    it("absent → @semantic-release/github is a bare string (unchanged default)", () => {
+      const rc = generateReleaseRc(baseConfig.streams[0]!, baseConfig);
+      expect(rc.plugins).toContain("@semantic-release/github");
+    });
+
+    it("false → @semantic-release/github is a bare string (no draft config)", () => {
+      const rc = generateReleaseRc(baseConfig.streams[0]!, {
+        ...baseConfig,
+        release_as_draft: false,
+      });
+      expect(rc.plugins).toContain("@semantic-release/github");
+      expect(
+        rc.plugins.some(
+          (p) => Array.isArray(p) && p[0] === "@semantic-release/github",
+        ),
+      ).toBe(false);
+    });
+
+    it("true → @semantic-release/github gets { draftRelease: true }", () => {
+      const rc = generateReleaseRc(baseConfig.streams[0]!, {
+        ...baseConfig,
+        release_as_draft: true,
+      });
+      const githubEntry = rc.plugins.find(
+        (p): p is [string, { draftRelease: boolean }] =>
+          Array.isArray(p) && p[0] === "@semantic-release/github",
+      );
+      expect(githubEntry).toBeDefined();
+      expect(githubEntry![1]).toEqual({ draftRelease: true });
+      // Bare-string form must be gone — duplicate entries would confuse
+      // semantic-release.
+      expect(rc.plugins).not.toContain("@semantic-release/github");
+    });
+
+    it("composes with release_files: both github draft and git assets transforms apply", () => {
+      const rc = generateReleaseRc(baseConfig.streams[0]!, {
+        ...baseConfig,
+        release_as_draft: true,
+        release_files: [
+          { path: "package.json", pattern: '"version": ".*"', replacement: '"version": "${version}"' },
+        ],
+      });
+      // github plugin configured for draft.
+      const githubEntry = rc.plugins.find(
+        (p): p is [string, { draftRelease: boolean }] =>
+          Array.isArray(p) && p[0] === "@semantic-release/github",
+      );
+      expect(githubEntry![1]).toEqual({ draftRelease: true });
+      // git plugin still gets the extra asset path merged in.
+      const gitEntry = rc.plugins.find(
+        (p): p is [string, { assets: string[]; message: string }] =>
+          Array.isArray(p) && p[0] === "@semantic-release/git",
+      );
+      expect(gitEntry![1].assets).toEqual(["CHANGELOG.md", "package.json"]);
+    });
+
+    it("plugin order is unchanged when release_as_draft is set (github is last)", () => {
+      const rc = generateReleaseRc(baseConfig.streams[0]!, {
+        ...baseConfig,
+        release_as_draft: true,
+      });
+      const last = rc.plugins[rc.plugins.length - 1];
+      expect(Array.isArray(last) && last[0]).toBe("@semantic-release/github");
+    });
+  });
 });
 
 describe("chooseTagFormat — edge cases", () => {

@@ -268,6 +268,73 @@ jobs:
         run: ./your-publish-script.sh
 ```
 
+### Variant: immutable releases (`release_as_draft`)
+
+When GitHub immutable releases is enabled on your repository, a published release's tag and assets are frozen the moment it publishes and can no longer be added, modified, or deleted. The `build.yml` above attaches its artifact *after* the release publishes — which immutability rejects, breaking the pipeline.
+
+To support immutable releases, opt in by setting `release_as_draft: true` in `.flywheel.yml`:
+
+```yaml
+flywheel:
+  release_as_draft: true
+  streams:
+    - name: main-line
+      branches:
+        - name: develop
+          release: prerelease
+          suffix: dev
+          auto_merge: [feat, fix]
+        - name: main
+          release: production
+          auto_merge: [feat, fix]
+```
+
+Flywheel then asks `semantic-release` to create the GitHub Release as an unpublished **draft**. Your build attaches its artifact while the release is still mutable, then performs the publish itself — and that publish is what makes the release immutable.
+
+A draft-aware `build.yml` triggers on the release tag push (the `release` event does **not** fire for draft releases — GitHub does not run `on: release` workflows until a release is published), attaches its artifact to the still-mutable draft, and publishes the draft as its final step:
+
+```yaml
+name: Build
+on:
+  push:
+    tags:
+      - 'v*'
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Build
+        run: ./your-build-script.sh
+        env:
+          VERSION: ${{ github.ref_name }}
+      - uses: actions/create-github-app-token@v1
+        id: app-token
+        with:
+          app-id: ${{ vars.FLYWHEEL_GH_APP_ID }}
+          private-key: ${{ secrets.FLYWHEEL_GH_APP_PRIVATE_KEY }}
+      - name: Attach artifact to the draft release
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        # The tag is pushed slightly before semantic-release creates the
+        # draft release object — poll briefly so the upload doesn't race
+        # the release creation.
+        run: |
+          for i in 1 2 3 4 5 6 7 8 9 10 11 12; do
+            if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then break; fi
+            sleep 5
+          done
+          gh release upload "$GITHUB_REF_NAME" ./dist/your-artifact
+      - name: Publish the draft (becomes the immutable release)
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: gh release edit "$GITHUB_REF_NAME" --draft=false
+```
+
+The publish step is what makes the release immutable — once it runs, the tag and the uploaded asset are frozen. If your build fails before that step, the release stays as an unpublished draft (visible in your repository's releases list); re-run the workflow once you've fixed the failure to complete the publish.
+
+`release_as_draft` is repository-wide: it mirrors GitHub's own immutable-releases setting, which is itself repository/organization-level. Leaving it unset (or `false`) keeps the immediate-publish behavior described in the `build.yml` and `publish.yml` examples above — adopters who do not opt in see no change.
+
 ## 5. Set up branch protection
 
 Flywheel does not invoke or wait for your quality checks — register them yourself as required status checks.

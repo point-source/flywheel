@@ -21,7 +21,7 @@ VALID_TYPES = {
     "style", "test", "docs", "build", "ci", "revert",
 }
 VALID_AUTO_MERGE_KEYS = VALID_TYPES | {f"{t}!" for t in VALID_TYPES}
-VALID_TOP_LEVEL_KEYS = {"streams", "release_files"}
+VALID_TOP_LEVEL_KEYS = {"streams", "release_files", "release_as_draft"}
 VALID_STREAM_KEYS = {"name", "branches"}
 VALID_BRANCH_KEYS = {"name", "release", "suffix", "auto_merge"}
 VALID_RELEASE_FILE_KEYS = {"path", "pattern", "replacement", "cmd"}
@@ -151,6 +151,11 @@ def main():
 
     if "release_files" in root:
         validate_release_files(root["release_files"])
+
+    if "release_as_draft" in root:
+        value = root["release_as_draft"]
+        if not isinstance(value, bool):
+            emit("FAIL", f"flywheel.release_as_draft: must be a boolean (got {value!r})")
 
     print("BRANCHES " + " ".join(all_branches))
 
