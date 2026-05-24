@@ -34,18 +34,15 @@ adopter's repository and that flywheel never reads — flywheel runs as an
 action and has no visibility into a sibling workflow. The behavior must be
 *declared*, not inferred.
 
-The first release of this feature scoped the opt-in to the whole
-repository. In practice, an adopter's release branches do not all attach
-artifacts: a repo may publish a binary on `main` but attach nothing to its
-`develop` prereleases, or attach a snapshot to `develop` and a different
-artifact (or none) to `main`. A repo-wide opt-in forces every release
-branch into the draft flow, even branches whose releases carry no
-artifacts — and once a release is a draft, GitHub stops firing
-`release: published` for it, so the adopter must add and maintain a
-publish-trigger workflow for branches that would otherwise need none.
-At least one adopter is hitting this today. The scope of the opt-in needs
-to match the scope at which the decision actually varies, which is per
-release branch.
+An adopter's release branches do not all attach artifacts: a repo may
+publish a binary on `main` but attach nothing to its `develop` prereleases,
+or attach a snapshot to `develop` and a different artifact (or none) to
+`main`. A repo-wide opt-in would force every release branch into the draft
+flow, even branches whose releases carry no artifacts — and once a release
+is a draft, GitHub stops firing `release: published` for it, so the adopter
+must add and maintain a publish-trigger workflow for branches that would
+otherwise need none. The scope of the opt-in must match the scope at which
+the decision actually varies, which is per release branch.
 
 Separately, flywheel's own releases on `point-source/flywheel` should be
 publishable as immutable releases, so flywheel dogfoods the supply-chain
@@ -75,9 +72,6 @@ guarantee it expects adopters to depend on.
   flywheel's configuration alongside the branch's other release attributes —
   never inferred from the presence of assets or from whether immutability is
   enabled.
-- An adopter migrating from the previous repo-wide setting receives a clear
-  configuration error or warning that names the per-branch syntax, so the
-  migration is mechanical and the failure mode is loud, not silent.
 
 ## User stories §req:user-stories
 
@@ -106,11 +100,6 @@ guarantee it expects adopters to depend on.
   release to compute the correct version even though earlier releases are
   still unpublished drafts, so a burst of merges never produces duplicate or
   skipped versions.
-- As an adopter who already set the previous repository-wide
-  `release_as_draft`, I want a clear, loud error or warning telling me to
-  move the setting under each affected branch, so the migration is
-  mechanical and I can't accidentally regress to immediate publishing on a
-  branch that was previously drafting.
 - As a flywheel maintainer, I want flywheel's own releases to be immutable,
   so flywheel demonstrates the supply-chain guarantee it offers adopters.
 
@@ -118,10 +107,7 @@ guarantee it expects adopters to depend on.
 
 - **Backward compatibility.** Adopters who do not opt in are entirely
   unaffected — same trigger event, same timing, same published-immediately
-  behavior. Adopters already using the previous repo-wide setting must be
-  told, loudly and mechanically, how to translate it into the per-branch
-  form; a silent default that subtly changes their release shape is not
-  acceptable.
+  behavior.
 - **Minimum-necessary scope.** Opting in a branch into the draft flow
   imposes new build-side responsibilities on that branch (a publish-trigger
   workflow, a publish-as-final-step). Opting in branches that do not need
@@ -153,10 +139,6 @@ guarantee it expects adopters to depend on.
   `release: prerelease` and `release: production` branches — because
   adopters legitimately attach artifacts to prereleases (snapshots,
   nightlies) as well as productions.
-- The previous repo-wide `release_as_draft` is no longer supported. A
-  `.flywheel.yml` that still carries it must produce a clear configuration
-  error that points to the per-branch syntax, so adopters cannot silently
-  regress.
 - flywheel cannot inspect an adopter's build workflow. Whether a build
   attaches an artifact is unknowable to flywheel and must be declared
   explicitly in flywheel's configuration, never detected or inferred.
@@ -182,13 +164,10 @@ Required, in decreasing order of user impact:
 2. No change for branches that have not opted in — neither for adopters who
    have opted in elsewhere in the same repo, nor for adopters who have not
    opted in at all.
-3. A loud, mechanical migration for adopters who already adopted the
-   previous repo-wide setting: clear error, named per-branch replacement, no
-   silent behavior change.
-4. Correct version computation when concurrent unpublished drafts coexist,
+3. Correct version computation when concurrent unpublished drafts coexist,
    including when drafts and immediate-publish releases coexist on the same
    repository.
-5. flywheel publishing its own releases as immutable. flywheel attaches no
+4. flywheel publishing its own releases as immutable. flywheel attaches no
    release assets, so this needs only the immediate-publish path confirmed
    immutable-safe plus the repository setting enabled — far smaller than the
    adopter-facing feature, but it is how flywheel dogfoods the guarantee.

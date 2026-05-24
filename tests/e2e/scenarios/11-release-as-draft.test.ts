@@ -120,19 +120,26 @@ describe.skipIf(!hasSandboxToken)(
         const octokit = sandboxOctokit();
         originalConfig = await getRepoFile(E2E_DEVELOP, ".flywheel.yml");
 
-        // Splice `release_as_draft: true` in as the first key under the
-        // top-level `flywheel:` mapping. The sandbox fixture starts
-        // `flywheel:\n  streams:\n    …` — we keep streams as-is so the
-        // existing branch topology is unchanged.
+        // Splice `release_as_draft: true` in under the e2e-develop branch
+        // only — release_as_draft is per-branch (SPEC
+        // §spec:immutable-release-support). The sandbox fixture lists
+        // e2e-develop as the first branch of main-line; we inject
+        // release_as_draft as a sibling of that branch's `name:` key,
+        // leaving every other branch unchanged so the rest of the
+        // suite continues to observe immediate-publish behavior.
         const draftConfig = originalConfig.replace(
-          /^flywheel:\s*\n/,
-          "flywheel:\n  release_as_draft: true\n",
+          /(- name: e2e-develop\s*\n)/,
+          "$1          release_as_draft: true\n",
         );
         expect(
           draftConfig,
           "patched .flywheel.yml must differ from the original — check the splice regex against the fixture",
         ).not.toBe(originalConfig);
         expect(draftConfig).toContain("release_as_draft: true");
+        // Sanity: the top-level form would now be rejected by loadConfig,
+        // so guard against an accidental top-level placement landing in
+        // a re-recorded fixture.
+        expect(draftConfig).not.toMatch(/^flywheel:\s*\n\s+release_as_draft:/m);
 
         const baseline = await snapshotRunIds([E2E_DEVELOP]);
         let baselinePush = baseline.get(E2E_DEVELOP)!.push;
@@ -235,7 +242,7 @@ describe.skipIf(!hasSandboxToken)(
         // The next version must compute from the git *tag* sequence,
         // not from release-object state. createTestPR is sufficient here
         // because no .flywheel.yml change is needed; release_as_draft is
-        // already on develop.
+        // already set under the e2e-develop branch in the live config.
         const pr2 = await createTestPR({
           branch: uniqueBranch("e2e-draft-r2"),
           base: E2E_DEVELOP,

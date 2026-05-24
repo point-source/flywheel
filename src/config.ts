@@ -12,10 +12,15 @@ import { ALLOWED_AUTO_MERGE_ENTRIES } from "./conventional.js";
 const TOP_LEVEL_KEYS = new Set([
   "streams",
   "release_files",
-  "release_as_draft",
 ]);
 
-const BRANCH_KEYS = new Set(["name", "release", "suffix", "auto_merge"]);
+const BRANCH_KEYS = new Set([
+  "name",
+  "release",
+  "suffix",
+  "auto_merge",
+  "release_as_draft",
+]);
 const STREAM_KEYS = new Set(["name", "branches"]);
 const RELEASE_FILE_KEYS = new Set(["path", "pattern", "replacement", "cmd"]);
 const RELEASE_MODES = new Set<ReleaseMode>(["none", "prerelease", "production"]);
@@ -77,7 +82,6 @@ export function loadConfig(yamlText: string): ConfigLoadResult {
 
   const streams = parseStreams(root.streams, errors);
   const releaseFiles = parseReleaseFiles(root.release_files, errors);
-  const releaseAsDraft = parseReleaseAsDraft(root.release_as_draft, errors);
 
   if (streams && streams.length > 0) {
     validateStreams(streams, errors, notices);
@@ -91,7 +95,6 @@ export function loadConfig(yamlText: string): ConfigLoadResult {
     config: {
       streams: streams!,
       ...(releaseFiles ? { release_files: releaseFiles } : {}),
-      ...(releaseAsDraft !== undefined ? { release_as_draft: releaseAsDraft } : {}),
     },
     errors,
     warnings,
@@ -99,16 +102,22 @@ export function loadConfig(yamlText: string): ConfigLoadResult {
   };
 }
 
-// release_as_draft is repository-wide: GitHub's own immutable-releases
-// setting is repo/org-level, so flywheel mirrors that scope. Adopters who
-// opt in see semantic-release create an unpublished draft (instead of
-// publishing) so a separate build can attach release assets before the
-// publish that makes the release immutable. See SPEC §spec:immutable-release-support.
-function parseReleaseAsDraft(value: unknown, errors: string[]): boolean | undefined {
+function parseBranchReleaseAsDraft(
+  value: unknown,
+  release: ReleaseMode,
+  path: string,
+  errors: string[],
+): boolean | undefined {
   if (value === undefined) return undefined;
   if (typeof value !== "boolean") {
     errors.push(
-      `flywheel.release_as_draft: must be a boolean (got ${JSON.stringify(value)}).`,
+      `${path}.release_as_draft: must be a boolean (got ${JSON.stringify(value)}).`,
+    );
+    return undefined;
+  }
+  if (release === "none") {
+    errors.push(
+      `${path}.release_as_draft: only valid on release: prerelease or release: production branches (got release: "none").`,
     );
     return undefined;
   }
@@ -235,11 +244,19 @@ function parseBranch(value: unknown, path: string, errors: string[]): Branch | n
     autoMerge.push(entry);
   });
 
+  const releaseAsDraft = parseBranchReleaseAsDraft(
+    value.release_as_draft,
+    release,
+    path,
+    errors,
+  );
+
   return {
     name,
     release,
     ...(suffix === undefined ? {} : { suffix }),
     auto_merge: autoMerge,
+    ...(releaseAsDraft === undefined ? {} : { release_as_draft: releaseAsDraft }),
   };
 }
 

@@ -60,17 +60,25 @@ export function generateReleaseRc(
   targetStream: Stream,
   config: FlywheelConfig,
   buildNumber?: number,
+  targetBranchName?: string,
 ): ReleaseRc {
   const tagFormat = chooseTagFormat(targetStream, config.streams);
   const releasingBranches = targetStream.branches.filter((b) => b.release !== "none");
   const branches = releasingBranches
     .map((b) => mapBranch(b, releasingBranches.length === 1))
     .filter((b): b is SemanticReleaseBranch => b !== null);
-  const plugins = buildPlugins(
-    config.release_files,
-    buildNumber,
-    config.release_as_draft ?? false,
-  );
+  // release_as_draft is per-branch (SPEC §spec:immutable-release-support):
+  // semantic-release runs once per push on one specific branch, so the
+  // .releaserc.json this generates is targeted at exactly that branch — we
+  // look up release_as_draft on the named branch only and pass
+  // { draftRelease: true } to @semantic-release/github for that release.
+  // When targetBranchName is unspecified (e.g. existing unit-test callers
+  // that pre-date this signature), no branch is opted in.
+  const targetBranch = targetBranchName
+    ? targetStream.branches.find((b) => b.name === targetBranchName)
+    : undefined;
+  const releaseAsDraft = targetBranch?.release_as_draft ?? false;
+  const plugins = buildPlugins(config.release_files, buildNumber, releaseAsDraft);
   return { tagFormat, branches, plugins };
 }
 
@@ -94,8 +102,9 @@ function buildPlugins(
   // transforms iterate over a single shape. `draftRelease: true` is the one
   // option flywheel passes to @semantic-release/github; the plugin
   // otherwise runs with its defaults (release notes, success comments, no
-  // assets uploaded — flywheel never attaches release assets itself).
-  // SPEC §spec:immutable-release-support.
+  // assets uploaded — flywheel never attaches release assets itself). The
+  // `releaseAsDraft` flag is the per-branch value resolved by the caller;
+  // see generateReleaseRc. SPEC §spec:immutable-release-support.
   const plugins: unknown[] = DEFAULT_PLUGINS.map((entry) =>
     entry === GITHUB_PLUGIN && releaseAsDraft
       ? [GITHUB_PLUGIN, { draftRelease: true }]

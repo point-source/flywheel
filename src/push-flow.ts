@@ -44,7 +44,7 @@ export async function runPushFlow(deps: PushFlowDeps): Promise<PushFlowOutcome> 
   }
 
   const buildNumber = await maybeComputeBuildNumber(deps);
-  const rc = generateReleaseRc(stream, deps.config, buildNumber);
+  const rc = generateReleaseRc(stream, deps.config, buildNumber, branch.name);
   const rcPath = join(deps.workspace, ".releaserc.json");
   const writer = deps.writer ?? defaultWriter;
   await writer(rcPath, JSON.stringify(rc, null, 2));
