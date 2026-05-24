@@ -116,16 +116,13 @@ guarantee it expects adopters to depend on.
 
 ## Priorities §req:priorities
 
-**Must-have** — ordered by user impact:
+Required, in decreasing order of user impact:
 
 1. The explicit repo-wide opt-in and the unpublished-release flow for
    adopters who attach release artifacts. This is the failure that breaks an
    adopter's pipeline the day they enable immutable releases.
 2. No change for adopters who have not opted in.
 3. Correct version computation when concurrent unpublished drafts coexist.
-
-**Lower effort, still required:**
-
 4. flywheel publishing its own releases as immutable. flywheel attaches no
    release assets, so this needs only the immediate-publish path confirmed
    immutable-safe plus the repository setting enabled — far smaller than the

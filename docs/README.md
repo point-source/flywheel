@@ -4,7 +4,7 @@ This directory holds all Flywheel documentation. Top-level files at the repo roo
 
 ## Layout
 
-```
+```text
 docs/
 ├── adopter/      ← what adopters read to use Flywheel in their repo
 ├── maintainer/   ← what Flywheel maintainers read to operate the project
