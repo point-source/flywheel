@@ -1,3 +1,10 @@
+# [1.3.0-dev.1](https://github.com/point-source/flywheel/compare/v1.2.4...v1.3.0-dev.1) (2026-05-24)
+
+
+### Features
+
+* support immutable releases via release_as_draft opt-in ([#193](https://github.com/point-source/flywheel/issues/193)) ([f5dc915](https://github.com/point-source/flywheel/commit/f5dc9156130bc187c221fb39b523eff0b8fb700b))
+
 ## [1.2.4](https://github.com/point-source/flywheel/compare/v1.2.3...v1.2.4) (2026-05-22)
 
 
