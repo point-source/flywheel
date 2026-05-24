@@ -19,6 +19,7 @@ export interface ReleaseRc {
 
 const EXEC_PLUGIN = "@semantic-release/exec";
 const GIT_PLUGIN = "@semantic-release/git";
+const GITHUB_PLUGIN = "@semantic-release/github";
 
 const DEFAULT_PLUGINS: unknown[] = [
   "@semantic-release/commit-analyzer",
@@ -52,20 +53,32 @@ const DEFAULT_PLUGINS: unknown[] = [
       message: "chore(release): ${nextRelease.version}\n\n${nextRelease.notes}",
     },
   ],
-  "@semantic-release/github",
+  GITHUB_PLUGIN,
 ];
 
 export function generateReleaseRc(
   targetStream: Stream,
   config: FlywheelConfig,
   buildNumber?: number,
+  targetBranchName?: string,
 ): ReleaseRc {
   const tagFormat = chooseTagFormat(targetStream, config.streams);
   const releasingBranches = targetStream.branches.filter((b) => b.release !== "none");
   const branches = releasingBranches
     .map((b) => mapBranch(b, releasingBranches.length === 1))
     .filter((b): b is SemanticReleaseBranch => b !== null);
-  const plugins = buildPlugins(config.release_files, buildNumber);
+  // release_as_draft is per-branch (SPEC §spec:immutable-release-support):
+  // semantic-release runs once per push on one specific branch, so the
+  // .releaserc.json this generates is targeted at exactly that branch — we
+  // look up release_as_draft on the named branch only and pass
+  // { draftRelease: true } to @semantic-release/github for that release.
+  // When targetBranchName is unspecified (e.g. existing unit-test callers
+  // that pre-date this signature), no branch is opted in.
+  const targetBranch = targetBranchName
+    ? targetStream.branches.find((b) => b.name === targetBranchName)
+    : undefined;
+  const releaseAsDraft = targetBranch?.release_as_draft ?? false;
+  const plugins = buildPlugins(config.release_files, buildNumber, releaseAsDraft);
   return { tagFormat, branches, plugins };
 }
 
@@ -83,13 +96,26 @@ export function usesBuildPlaceholder(releaseFiles: ReleaseFile[]): boolean {
 function buildPlugins(
   releaseFiles: ReleaseFile[] | undefined,
   buildNumber: number | undefined,
+  releaseAsDraft: boolean,
 ): unknown[] {
+  // Apply the github draft transform first so subsequent release_files
+  // transforms iterate over a single shape. `draftRelease: true` is the one
+  // option flywheel passes to @semantic-release/github; the plugin
+  // otherwise runs with its defaults (release notes, success comments, no
+  // assets uploaded — flywheel never attaches release assets itself). The
+  // `releaseAsDraft` flag is the per-branch value resolved by the caller;
+  // see generateReleaseRc. SPEC §spec:immutable-release-support.
+  const plugins: unknown[] = DEFAULT_PLUGINS.map((entry) =>
+    entry === GITHUB_PLUGIN && releaseAsDraft
+      ? [GITHUB_PLUGIN, { draftRelease: true }]
+      : entry,
+  );
   if (!releaseFiles || releaseFiles.length === 0) {
-    return [...DEFAULT_PLUGINS];
+    return plugins;
   }
   const prepareCmd = buildPrepareCmd(releaseFiles, buildNumber);
   const extraAssets = releaseFiles.map((f) => f.path);
-  return DEFAULT_PLUGINS.map((entry) => {
+  return plugins.map((entry) => {
     if (entry === EXEC_PLUGIN) {
       return [EXEC_PLUGIN, { prepareCmd }];
     }

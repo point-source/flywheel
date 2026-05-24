@@ -14,7 +14,13 @@ const TOP_LEVEL_KEYS = new Set([
   "release_files",
 ]);
 
-const BRANCH_KEYS = new Set(["name", "release", "suffix", "auto_merge"]);
+const BRANCH_KEYS = new Set([
+  "name",
+  "release",
+  "suffix",
+  "auto_merge",
+  "release_as_draft",
+]);
 const STREAM_KEYS = new Set(["name", "branches"]);
 const RELEASE_FILE_KEYS = new Set(["path", "pattern", "replacement", "cmd"]);
 const RELEASE_MODES = new Set<ReleaseMode>(["none", "prerelease", "production"]);
@@ -94,6 +100,28 @@ export function loadConfig(yamlText: string): ConfigLoadResult {
     warnings,
     notices,
   };
+}
+
+function parseBranchReleaseAsDraft(
+  value: unknown,
+  release: ReleaseMode,
+  path: string,
+  errors: string[],
+): boolean | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "boolean") {
+    errors.push(
+      `${path}.release_as_draft: must be a boolean (got ${JSON.stringify(value)}).`,
+    );
+    return undefined;
+  }
+  if (release === "none") {
+    errors.push(
+      `${path}.release_as_draft: only valid on release: prerelease or release: production branches (got release: "none").`,
+    );
+    return undefined;
+  }
+  return value;
 }
 
 function parseStreams(value: unknown, errors: string[]): Stream[] | null {
@@ -216,11 +244,19 @@ function parseBranch(value: unknown, path: string, errors: string[]): Branch | n
     autoMerge.push(entry);
   });
 
+  const releaseAsDraft = parseBranchReleaseAsDraft(
+    value.release_as_draft,
+    release,
+    path,
+    errors,
+  );
+
   return {
     name,
     release,
     ...(suffix === undefined ? {} : { suffix }),
     auto_merge: autoMerge,
+    ...(releaseAsDraft === undefined ? {} : { release_as_draft: releaseAsDraft }),
   };
 }
 

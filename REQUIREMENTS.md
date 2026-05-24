@@ -34,29 +34,44 @@ adopter's repository and that flywheel never reads — flywheel runs as an
 action and has no visibility into a sibling workflow. The behavior must be
 *declared*, not inferred.
 
+An adopter's release branches do not all attach artifacts: a repo may
+publish a binary on `main` but attach nothing to its `develop` prereleases,
+or attach a snapshot to `develop` and a different artifact (or none) to
+`main`. A repo-wide opt-in would force every release branch into the draft
+flow, even branches whose releases carry no artifacts — and once a release
+is a draft, GitHub stops firing `release: published` for it, so the adopter
+must add and maintain a publish-trigger workflow for branches that would
+otherwise need none. The scope of the opt-in must match the scope at which
+the decision actually varies, which is per release branch.
+
 Separately, flywheel's own releases on `point-source/flywheel` should be
 publishable as immutable releases, so flywheel dogfoods the supply-chain
 guarantee it expects adopters to depend on.
 
 ## Success criteria §req:success-criteria
 
-- An adopter with immutable releases enabled, who has opted in, and whose
-  build attaches a release artifact, can complete a release end-to-end: the
-  artifact is attached and the release is published as an immutable release,
-  with no failed upload step.
-- An adopter who has **not** opted in observes no change whatsoever —
-  releases publish immediately, on the same event and timing as before.
+- An adopter with immutable releases enabled, who has opted in *on the
+  branches whose releases attach artifacts*, can complete a release
+  end-to-end on those branches: the artifact is attached and the release is
+  published as an immutable release, with no failed upload step.
+- On the **same repository**, branches that did **not** opt in continue to
+  publish immediately, on the same event and timing as before — the
+  adopter does not need a publish-trigger workflow for those branches.
+- An adopter who has not opted in on any branch observes no change
+  whatsoever — every release publishes immediately, exactly as before.
 - flywheel's own releases on `point-source/flywheel` publish successfully
   with immutable releases enabled on that repository.
 - Multiple releases cut in quick succession, while earlier ones are still
   unpublished drafts, each receive the correct next version — concurrent
-  unpublished drafts never corrupt version computation. (semantic-release
-  derives the next version from git tags, not from release objects; the tag
-  must still be created and pushed on every run even when the release object
-  is left unpublished.)
-- The behavior is selected by a single explicit setting visible in flywheel's
-  configuration — never inferred from the presence of assets or from whether
-  immutability is enabled.
+  unpublished drafts never corrupt version computation. This holds whether
+  the concurrent releases come from one branch or from a mix of draft and
+  immediate-publish branches. (semantic-release derives the next version
+  from git tags, not from release objects; the tag must still be created
+  and pushed on every run even when the release object is left unpublished.)
+- The behavior is selected by an explicit per-branch setting visible in
+  flywheel's configuration alongside the branch's other release attributes —
+  never inferred from the presence of assets or from whether immutability is
+  enabled.
 
 ## User stories §req:user-stories
 
@@ -67,9 +82,17 @@ guarantee it expects adopters to depend on.
 - As an adopter who attaches no artifacts, I want releases to keep publishing
   immediately, so enabling immutability elsewhere never changes or slows my
   release.
-- As an adopter, I want to turn this on with one explicit setting that is
-  visible in my repository's flywheel configuration, so the release behavior
-  is obvious to anyone reading the repo and not hidden behind detection logic.
+- As an adopter whose `main` releases attach an artifact but whose `develop`
+  prereleases do not, I want to opt `main` into the draft flow without
+  pulling `develop` into it, so I only write and maintain a publish-trigger
+  workflow for the branch that actually needs one.
+- As an adopter who attaches a snapshot to `develop` prereleases and a
+  different artifact to `main`, I want both branches independently opted in
+  to the draft flow, so each branch's build can attach its own asset.
+- As an adopter, I want to turn this on per release branch with an explicit
+  setting that sits alongside the branch's other release attributes, so the
+  release behavior is obvious to anyone reading the repo's flywheel
+  configuration and not hidden behind detection logic.
 - As an adopter whose build attaches an artifact, I want a clear handoff —
   flywheel creates the unpublished release, my build attaches the artifact
   and performs the publish — so ownership of each step is unambiguous.
@@ -85,6 +108,12 @@ guarantee it expects adopters to depend on.
 - **Backward compatibility.** Adopters who do not opt in are entirely
   unaffected — same trigger event, same timing, same published-immediately
   behavior.
+- **Minimum-necessary scope.** Opting in a branch into the draft flow
+  imposes new build-side responsibilities on that branch (a publish-trigger
+  workflow, a publish-as-final-step). Opting in branches that do not need
+  this imposes work the adopter does not benefit from. The configuration
+  surface must let an adopter scope the opt-in to exactly the branches that
+  attach artifacts, and no more.
 - **Statelessness preserved.** flywheel does not track or wait on a release
   after creating it unpublished. Creating the unpublished release is the end
   of flywheel's involvement; the adopter's build owns attaching the artifact
@@ -98,9 +127,18 @@ guarantee it expects adopters to depend on.
 
 ## Constraints §req:constraints
 
-- The opt-in is **repo-wide**, mirroring GitHub's immutable-releases setting,
-  which is itself a repository/organization-level setting — not per-stream or
-  per-branch.
+- The opt-in is **per release branch**, set alongside that branch's other
+  release attributes in `.flywheel.yml`. GitHub's immutable-releases setting
+  is a repository/organization-level control over whether a *published*
+  release's tag and assets are frozen; flywheel's opt-in is a separate
+  decision about *who performs the publish step*, and the natural scope at
+  which that decision varies is the release branch. The two settings are
+  orthogonal: any combination of repo-wide immutability and per-branch draft
+  produces a coherent, GitHub-honorable release shape.
+- The opt-in is valid on any branch that produces a release — both
+  `release: prerelease` and `release: production` branches — because
+  adopters legitimately attach artifacts to prereleases (snapshots,
+  nightlies) as well as productions.
 - flywheel cannot inspect an adopter's build workflow. Whether a build
   attaches an artifact is unknowable to flywheel and must be declared
   explicitly in flywheel's configuration, never detected or inferred.
@@ -116,16 +154,19 @@ guarantee it expects adopters to depend on.
 
 ## Priorities §req:priorities
 
-**Must-have** — ordered by user impact:
+Required, in decreasing order of user impact:
 
-1. The explicit repo-wide opt-in and the unpublished-release flow for
+1. The explicit per-branch opt-in and the unpublished-release flow for
    adopters who attach release artifacts. This is the failure that breaks an
-   adopter's pipeline the day they enable immutable releases.
-2. No change for adopters who have not opted in.
-3. Correct version computation when concurrent unpublished drafts coexist.
-
-**Lower effort, still required:**
-
+   adopter's pipeline the day they enable immutable releases, and the
+   per-branch scope is what keeps the fix from forcing a publish-trigger
+   workflow onto branches that don't need one.
+2. No change for branches that have not opted in — neither for adopters who
+   have opted in elsewhere in the same repo, nor for adopters who have not
+   opted in at all.
+3. Correct version computation when concurrent unpublished drafts coexist,
+   including when drafts and immediate-publish releases coexist on the same
+   repository.
 4. flywheel publishing its own releases as immutable. flywheel attaches no
    release assets, so this needs only the immediate-publish path confirmed
    immutable-safe plus the repository setting enabled — far smaller than the

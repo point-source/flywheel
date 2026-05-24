@@ -1,3 +1,17 @@
+# [1.3.0-dev.2](https://github.com/point-source/flywheel/compare/v1.3.0-dev.1...v1.3.0-dev.2) (2026-05-24)
+
+
+### Features
+
+* **release-as-draft:** scope opt-in per release branch ([#197](https://github.com/point-source/flywheel/issues/197)) ([50d375a](https://github.com/point-source/flywheel/commit/50d375a319c8c472bee8a573d3dc16c129c0aa03))
+
+# [1.3.0-dev.1](https://github.com/point-source/flywheel/compare/v1.2.4...v1.3.0-dev.1) (2026-05-24)
+
+
+### Features
+
+* support immutable releases via release_as_draft opt-in ([#193](https://github.com/point-source/flywheel/issues/193)) ([f5dc915](https://github.com/point-source/flywheel/commit/f5dc9156130bc187c221fb39b523eff0b8fb700b))
+
 ## [1.2.4](https://github.com/point-source/flywheel/compare/v1.2.3...v1.2.4) (2026-05-22)
 
 

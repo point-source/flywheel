@@ -1,0 +1,15 @@
+flywheel:
+  streams:
+    - name: main-line
+      branches:
+        - name: develop
+          release: none
+          release_as_draft: true
+          auto_merge:
+            - feat
+            - fix
+        - name: main
+          release: production
+          auto_merge:
+            - feat
+            - fix

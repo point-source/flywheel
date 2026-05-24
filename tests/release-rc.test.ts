@@ -468,6 +468,116 @@ describe("generateReleaseRc", () => {
     const rc = generateReleaseRc(config.streams[0]!, config);
     expect(rc.branches.map((b) => b.name)).toEqual(["third", "first", "second"]);
   });
+
+  describe("release_as_draft (per-branch)", () => {
+    // Mixed-mode topology: develop publishes immediately, main is opted in.
+    // Each release-rc generation targets exactly one branch — semantic-release
+    // runs once per push — so the draft flag we resolve depends on which
+    // branch generateReleaseRc was called for, not on the config as a whole.
+    const mixedConfig: FlywheelConfig = {
+      streams: [
+        {
+          name: "main-line",
+          branches: [
+            { name: "develop", release: "prerelease", suffix: "dev", auto_merge: ["fix"] },
+            { name: "main", release: "production", release_as_draft: true, auto_merge: [] },
+          ],
+        },
+      ],
+    };
+
+    it("targeting an opted-in branch → @semantic-release/github gets { draftRelease: true }", () => {
+      const rc = generateReleaseRc(mixedConfig.streams[0]!, mixedConfig, undefined, "main");
+      const githubEntry = rc.plugins.find(
+        (p): p is [string, { draftRelease: boolean }] =>
+          Array.isArray(p) && p[0] === "@semantic-release/github",
+      );
+      expect(githubEntry).toBeDefined();
+      expect(githubEntry![1]).toEqual({ draftRelease: true });
+      // Bare-string form must be gone — duplicate entries would confuse
+      // semantic-release.
+      expect(rc.plugins).not.toContain("@semantic-release/github");
+    });
+
+    it("targeting an opted-out branch in the same config → @semantic-release/github is a bare string", () => {
+      const rc = generateReleaseRc(mixedConfig.streams[0]!, mixedConfig, undefined, "develop");
+      expect(rc.plugins).toContain("@semantic-release/github");
+      expect(
+        rc.plugins.some(
+          (p) => Array.isArray(p) && p[0] === "@semantic-release/github",
+        ),
+      ).toBe(false);
+    });
+
+    it("targetBranchName omitted → no branch is opted in (back-compat for callers pre-dating the parameter)", () => {
+      const rc = generateReleaseRc(mixedConfig.streams[0]!, mixedConfig);
+      expect(rc.plugins).toContain("@semantic-release/github");
+      expect(
+        rc.plugins.some(
+          (p) => Array.isArray(p) && p[0] === "@semantic-release/github",
+        ),
+      ).toBe(false);
+    });
+
+    it("explicit release_as_draft: false on a branch → @semantic-release/github is a bare string", () => {
+      const cfg: FlywheelConfig = {
+        streams: [
+          {
+            name: "main-line",
+            branches: [{ name: "main", release: "production", release_as_draft: false, auto_merge: [] }],
+          },
+        ],
+      };
+      const rc = generateReleaseRc(cfg.streams[0]!, cfg, undefined, "main");
+      expect(rc.plugins).toContain("@semantic-release/github");
+      expect(
+        rc.plugins.some(
+          (p) => Array.isArray(p) && p[0] === "@semantic-release/github",
+        ),
+      ).toBe(false);
+    });
+
+    it("composes with release_files: both github draft and git assets transforms apply", () => {
+      const cfg: FlywheelConfig = {
+        ...mixedConfig,
+        release_files: [
+          { path: "package.json", pattern: '"version": ".*"', replacement: '"version": "${version}"' },
+        ],
+      };
+      const rc = generateReleaseRc(cfg.streams[0]!, cfg, undefined, "main");
+      // github plugin configured for draft.
+      const githubEntry = rc.plugins.find(
+        (p): p is [string, { draftRelease: boolean }] =>
+          Array.isArray(p) && p[0] === "@semantic-release/github",
+      );
+      expect(githubEntry![1]).toEqual({ draftRelease: true });
+      // git plugin still gets the extra asset path merged in.
+      const gitEntry = rc.plugins.find(
+        (p): p is [string, { assets: string[]; message: string }] =>
+          Array.isArray(p) && p[0] === "@semantic-release/git",
+      );
+      expect(gitEntry![1].assets).toEqual(["CHANGELOG.md", "package.json"]);
+    });
+
+    it("plugin order is unchanged when release_as_draft is set (github is last)", () => {
+      const rc = generateReleaseRc(mixedConfig.streams[0]!, mixedConfig, undefined, "main");
+      const last = rc.plugins[rc.plugins.length - 1];
+      expect(Array.isArray(last) && last[0]).toBe("@semantic-release/github");
+    });
+
+    it("opt-in is scoped to the named branch only — other branches in the same stream observe no change", () => {
+      // Same stream, two branches, only one opted in. Generating release-rc
+      // for the opted-out branch must leave the github plugin untouched
+      // (regression guard for SPEC §spec:immutable-release-support: "an
+      // adopter who has not opted in on a branch observes no change on
+      // that branch whatsoever, even when other branches in the same
+      // repository are opted in").
+      const rcForDevelop = generateReleaseRc(mixedConfig.streams[0]!, mixedConfig, undefined, "develop");
+      const rcForMain = generateReleaseRc(mixedConfig.streams[0]!, mixedConfig, undefined, "main");
+      expect(rcForDevelop.plugins).toContain("@semantic-release/github");
+      expect(rcForMain.plugins).not.toContain("@semantic-release/github");
+    });
+  });
 });
 
 describe("chooseTagFormat — edge cases", () => {

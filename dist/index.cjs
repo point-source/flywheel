@@ -27793,7 +27793,13 @@ var TOP_LEVEL_KEYS = /* @__PURE__ */ new Set([
   "streams",
   "release_files"
 ]);
-var BRANCH_KEYS = /* @__PURE__ */ new Set(["name", "release", "suffix", "auto_merge"]);
+var BRANCH_KEYS = /* @__PURE__ */ new Set([
+  "name",
+  "release",
+  "suffix",
+  "auto_merge",
+  "release_as_draft"
+]);
 var STREAM_KEYS = /* @__PURE__ */ new Set(["name", "branches"]);
 var RELEASE_FILE_KEYS = /* @__PURE__ */ new Set(["path", "pattern", "replacement", "cmd"]);
 var RELEASE_MODES = /* @__PURE__ */ new Set(["none", "prerelease", "production"]);
@@ -27850,6 +27856,22 @@ function loadConfig(yamlText) {
     warnings,
     notices
   };
+}
+function parseBranchReleaseAsDraft(value, release, path, errors) {
+  if (value === void 0) return void 0;
+  if (typeof value !== "boolean") {
+    errors.push(
+      `${path}.release_as_draft: must be a boolean (got ${JSON.stringify(value)}).`
+    );
+    return void 0;
+  }
+  if (release === "none") {
+    errors.push(
+      `${path}.release_as_draft: only valid on release: prerelease or release: production branches (got release: "none").`
+    );
+    return void 0;
+  }
+  return value;
 }
 function parseStreams(value, errors) {
   if (value === void 0) {
@@ -27957,11 +27979,18 @@ function parseBranch(value, path, errors) {
     }
     autoMerge.push(entry);
   });
+  const releaseAsDraft = parseBranchReleaseAsDraft(
+    value.release_as_draft,
+    release,
+    path,
+    errors
+  );
   return {
     name,
     release,
     ...suffix === void 0 ? {} : { suffix },
-    auto_merge: autoMerge
+    auto_merge: autoMerge,
+    ...releaseAsDraft === void 0 ? {} : { release_as_draft: releaseAsDraft }
   };
 }
 function parseReleaseMode(value, path, errors) {
@@ -28899,6 +28928,7 @@ var import_node_util = require("node:util");
 // src/release-rc.ts
 var EXEC_PLUGIN = "@semantic-release/exec";
 var GIT_PLUGIN = "@semantic-release/git";
+var GITHUB_PLUGIN = "@semantic-release/github";
 var DEFAULT_PLUGINS = [
   "@semantic-release/commit-analyzer",
   "@semantic-release/release-notes-generator",
@@ -28931,13 +28961,15 @@ var DEFAULT_PLUGINS = [
       message: "chore(release): ${nextRelease.version}\n\n${nextRelease.notes}"
     }
   ],
-  "@semantic-release/github"
+  GITHUB_PLUGIN
 ];
-function generateReleaseRc(targetStream, config, buildNumber) {
+function generateReleaseRc(targetStream, config, buildNumber, targetBranchName) {
   const tagFormat = chooseTagFormat(targetStream, config.streams);
   const releasingBranches = targetStream.branches.filter((b) => b.release !== "none");
   const branches = releasingBranches.map((b) => mapBranch(b, releasingBranches.length === 1)).filter((b) => b !== null);
-  const plugins = buildPlugins(config.release_files, buildNumber);
+  const targetBranch = targetBranchName ? targetStream.branches.find((b) => b.name === targetBranchName) : void 0;
+  const releaseAsDraft = targetBranch?.release_as_draft ?? false;
+  const plugins = buildPlugins(config.release_files, buildNumber, releaseAsDraft);
   return { tagFormat, branches, plugins };
 }
 function usesBuildPlaceholder(releaseFiles) {
@@ -28945,13 +28977,16 @@ function usesBuildPlaceholder(releaseFiles) {
     (entry) => "cmd" in entry ? entry.cmd.includes("${build}") : entry.replacement.includes("${build}")
   );
 }
-function buildPlugins(releaseFiles, buildNumber) {
+function buildPlugins(releaseFiles, buildNumber, releaseAsDraft) {
+  const plugins = DEFAULT_PLUGINS.map(
+    (entry) => entry === GITHUB_PLUGIN && releaseAsDraft ? [GITHUB_PLUGIN, { draftRelease: true }] : entry
+  );
   if (!releaseFiles || releaseFiles.length === 0) {
-    return [...DEFAULT_PLUGINS];
+    return plugins;
   }
   const prepareCmd = buildPrepareCmd(releaseFiles, buildNumber);
   const extraAssets = releaseFiles.map((f) => f.path);
-  return DEFAULT_PLUGINS.map((entry) => {
+  return plugins.map((entry) => {
     if (entry === EXEC_PLUGIN) {
       return [EXEC_PLUGIN, { prepareCmd }];
     }
@@ -29041,7 +29076,7 @@ async function runPushFlow(deps) {
     return { kind: "promote-only", stream };
   }
   const buildNumber = await maybeComputeBuildNumber(deps);
-  const rc = generateReleaseRc(stream, deps.config, buildNumber);
+  const rc = generateReleaseRc(stream, deps.config, buildNumber, branch.name);
   const rcPath = (0, import_node_path.join)(deps.workspace, ".releaserc.json");
   const writer = deps.writer ?? defaultWriter;
   await writer(rcPath, JSON.stringify(rc, null, 2));

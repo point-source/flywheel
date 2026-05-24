@@ -23,7 +23,7 @@ VALID_TYPES = {
 VALID_AUTO_MERGE_KEYS = VALID_TYPES | {f"{t}!" for t in VALID_TYPES}
 VALID_TOP_LEVEL_KEYS = {"streams", "release_files"}
 VALID_STREAM_KEYS = {"name", "branches"}
-VALID_BRANCH_KEYS = {"name", "release", "suffix", "auto_merge"}
+VALID_BRANCH_KEYS = {"name", "release", "suffix", "auto_merge", "release_as_draft"}
 VALID_RELEASE_FILE_KEYS = {"path", "pattern", "replacement", "cmd"}
 VALID_RELEASE_MODES = {"none", "prerelease", "production"}
 
@@ -52,6 +52,7 @@ def main():
         return
 
     root = data["flywheel"]
+
     for k in root:
         if k not in VALID_TOP_LEVEL_KEYS:
             emit("FAIL", f"flywheel.{k}: unknown key — allowed: {', '.join(sorted(VALID_TOP_LEVEL_KEYS))}")
@@ -116,6 +117,15 @@ def main():
                 for entry in am:
                     if entry not in VALID_AUTO_MERGE_KEYS:
                         emit("FAIL", f"branch {bname!r} auto_merge contains unrecognized type {entry!r}")
+            if "release_as_draft" in b:
+                rad = b["release_as_draft"]
+                if not isinstance(rad, bool):
+                    emit("FAIL", f"branch {bname!r} release_as_draft: must be a boolean (got {rad!r})")
+                elif release == "none":
+                    emit(
+                        "FAIL",
+                        f"branch {bname!r} release_as_draft: only valid on release: prerelease or release: production branches (got release: 'none')",
+                    )
             if b_idx == len(sbranches) - 1 and len(sbranches) > 1:
                 emit("NOTE", f"branch {bname!r} is the terminal branch of stream {sname!r} (releases on push, no auto-promotion)")
         if len(production_in_stream) > 1:

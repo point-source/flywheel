@@ -446,4 +446,79 @@ flywheel:
       result.errors.some((e) => e.includes("flywheel.merge_strategy: unknown key")),
     ).toBe(true);
   });
+
+  describe("release_as_draft (per-branch)", () => {
+    it("accepts release_as_draft: true under a release branch and surfaces it on the Branch", () => {
+      const result = loadConfig(fx("flywheel.release-as-draft.yml"));
+      expect(result.errors).toEqual([]);
+      expect(result.config).not.toBeNull();
+      const mainLine = result.config!.streams[0]!;
+      const develop = mainLine.branches.find((b) => b.name === "develop")!;
+      const main = mainLine.branches.find((b) => b.name === "main")!;
+      expect(develop.release_as_draft).toBeUndefined();
+      expect(main.release_as_draft).toBe(true);
+    });
+
+    it("absent → release_as_draft is undefined on every branch", () => {
+      const result = loadConfig(fx("flywheel.valid.yml"));
+      expect(result.errors).toEqual([]);
+      for (const stream of result.config!.streams) {
+        for (const branch of stream.branches) {
+          expect(branch.release_as_draft).toBeUndefined();
+        }
+      }
+    });
+
+    it("rejects a non-boolean value at the branch level", () => {
+      const yamlText = `
+flywheel:
+  streams:
+    - name: only
+      branches:
+        - name: main
+          release: production
+          release_as_draft: "yes"
+          auto_merge: []
+`;
+      const result = loadConfig(yamlText);
+      expect(result.config).toBeNull();
+      expect(
+        result.errors.some((e) =>
+          e.includes("release_as_draft: must be a boolean"),
+        ),
+      ).toBe(true);
+    });
+
+    it("rejects release_as_draft on a release: none branch", () => {
+      const result = loadConfig(fx("flywheel.release-as-draft-on-release-none.yml"));
+      expect(result.config).toBeNull();
+      expect(
+        result.errors.some((e) =>
+          e.includes(
+            "release_as_draft: only valid on release: prerelease or release: production branches",
+          ),
+        ),
+      ).toBe(true);
+    });
+
+    it("rejects release_as_draft at the top level via the standard unknown-key error", () => {
+      const yamlText = `
+flywheel:
+  release_as_draft: true
+  streams:
+    - name: only
+      branches:
+        - name: main
+          release: production
+          auto_merge: []
+`;
+      const result = loadConfig(yamlText);
+      expect(result.config).toBeNull();
+      expect(
+        result.errors.some((e) =>
+          e.includes("flywheel.release_as_draft: unknown key"),
+        ),
+      ).toBe(true);
+    });
+  });
 });
