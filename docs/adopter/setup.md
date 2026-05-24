@@ -272,11 +272,12 @@ jobs:
 
 When GitHub immutable releases is enabled on your repository, a published release's tag and assets are frozen the moment it publishes and can no longer be added, modified, or deleted. The `build.yml` above attaches its artifact *after* the release publishes — which immutability rejects, breaking the pipeline.
 
-To support immutable releases, opt in by setting `release_as_draft: true` in `.flywheel.yml`:
+To support immutable releases, opt in by setting `release_as_draft: true` **under the specific release branch** whose build attaches an artifact. `release_as_draft` is per-branch: it's valid on any `release: prerelease` or `release: production` branch, and only the branches you opt in are affected. Branches that leave it unset (or set it to `false`) keep the immediate-publish behavior of the `build.yml` and `publish.yml` examples above.
+
+A single-branch opt-in — only `main` produces release assets, `develop` publishes dev tags immediately:
 
 ```yaml
 flywheel:
-  release_as_draft: true
   streams:
     - name: main-line
       branches:
@@ -286,10 +287,33 @@ flywheel:
           auto_merge: [feat, fix]
         - name: main
           release: production
+          release_as_draft: true
           auto_merge: [feat, fix]
 ```
 
-Flywheel then asks `semantic-release` to create the GitHub Release as an unpublished **draft**. Your build attaches its artifact while the release is still mutable, then performs the publish itself — and that publish is what makes the release immutable.
+A mixed-mode example — both `develop` (dev channel) and `main` ship artifacts, while a `staging` rc branch publishes immediately because no asset is attached to its releases:
+
+```yaml
+flywheel:
+  streams:
+    - name: main-line
+      branches:
+        - name: develop
+          release: prerelease
+          suffix: dev
+          release_as_draft: true
+          auto_merge: [feat, fix]
+        - name: staging
+          release: prerelease
+          suffix: rc
+          auto_merge: [fix]
+        - name: main
+          release: production
+          release_as_draft: true
+          auto_merge: [feat, fix]
+```
+
+For each opted-in branch, Flywheel asks `semantic-release` to create the GitHub Release as an unpublished **draft**. Your build attaches its artifact while the release is still mutable, then performs the publish itself — and that publish is what makes the release immutable.
 
 A draft-aware `build.yml` triggers on the release tag push (the `release` event does **not** fire for draft releases — GitHub does not run `on: release` workflows until a release is published), attaches its artifact to the still-mutable draft, and publishes the draft as its final step:
 
@@ -333,7 +357,9 @@ jobs:
 
 The publish step is what makes the release immutable — once it runs, the tag and the uploaded asset are frozen. If your build fails before that step, the release stays as an unpublished draft (visible in your repository's releases list); re-run the workflow once you've fixed the failure to complete the publish.
 
-`release_as_draft` is repository-wide: it mirrors GitHub's own immutable-releases setting, which is itself repository/organization-level. Leaving it unset (or `false`) keeps the immediate-publish behavior described in the `build.yml` and `publish.yml` examples above — adopters who do not opt in see no change.
+**Mixed-mode repositories.** In the mixed-mode example above, the opted-in branches' tags (`v*-dev.N` and `v*`) flow into the tag-push-triggered `build.yml`; the `staging` branch's `v*-rc.N` tags need either the immediate-publish `build.yml` from the previous section (triggered by `on: release: types: [published]`) or — more commonly — no asset attachment at all. Two build workflows can co-exist in one repository, each with a tag filter that selects only its branch's tags.
+
+> **Migration from a previous top-level `release_as_draft`.** Earlier Flywheel versions accepted `release_as_draft` as a top-level key under `flywheel:`. That form is no longer recognized: on the next run, Flywheel halts with a configuration error naming the per-branch replacement and listing every release branch in the file. Move the key under each release branch whose build attaches an artifact and leave it off the rest. There is no silent migration — distributing the old repo-wide setting onto every branch would force every branch's build onto the draft path, which is exactly the friction per-branch scope exists to remove.
 
 ## 5. Set up branch protection
 
