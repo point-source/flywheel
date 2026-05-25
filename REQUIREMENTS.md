@@ -2,6 +2,12 @@
 
 <!-- Problem-space document. Each ## section carries a §req:slug suffix. -->
 <!-- Run /symphonize:discover to populate through a structured interview. -->
+<!-- This document covers two independent problem areas: -->
+<!--   - Immutable-release support (§req:problem-statement and the standard -->
+<!--     section slugs below) -->
+<!--   - Sandbox CI sustainability and release safety -->
+<!--     (§req:sandbox-ci-budget, §req:release-safety-gate, and the §req:ci-* -->
+<!--     and §req:*-criteria slugs that follow) -->
 
 ## Problem statement §req:problem-statement
 
@@ -177,3 +183,132 @@ Required, in decreasing order of user impact:
 - Updated adopter documentation and scaffolded templates showing the
   release-creation trigger and the publish-as-final-step pattern for builds
   that attach artifacts.
+
+## Sandbox CI budget §req:sandbox-ci-budget
+
+flywheel's CI exercises the real GitHub API against a single sandbox
+repository (`point-source/flywheel-sandbox`). The integration suite (every
+PR, every push to `develop` and `main`) and the e2e suite (every push to
+`develop`) both mint installation tokens from one GitHub App
+(`flywheel-build-e2e`) on one installation, so they share a single
+~5000-requests/hour primary-rate-limit bucket on that installation.
+
+The e2e suite is polling-heavy — by current estimate 300–500 API calls
+per run versus ~40 for integration. On a `develop` merge both suites run
+inside the same rate-limit window. Several times a week this exhausts
+the bucket and one or both suites fail with primary rate-limit errors
+that have nothing to do with the code under test.
+
+The pain falls on flywheel maintainers, not adopters. The visible failure
+modes are three: a maintainer learns to treat red CI as flake-not-signal
+and merges anyway; a maintainer cannot promote `develop` because the same
+suites gate the promotion; or a cancelled run leaves the sandbox in a
+partial state that the existing presweep only partially cleans up.
+
+## Release safety gate §req:release-safety-gate
+
+flywheel is a runtime action: a broken release tagged at `@v1` is
+consumed by every adopter pinned to that major on their next CI run.
+There is no rollback for adopters pinned to a moving major; the only
+recovery is to publish a corrective patch as fast as possible. A broken
+release reaching `main` is the worst failure flywheel can produce.
+
+Today the protection against that failure is incidental. e2e runs on
+every push to `develop`, and `develop` is the source of releases — so
+most release SHAs have happened to be e2e-tested. But nothing in the
+release pipeline *verifies* that. The release fires on the next valid
+`develop → main` promotion regardless of e2e's color on the SHA being
+released.
+
+The implicit gate fails whenever §req:sandbox-ci-budget bites: a
+maintainer who merges to `develop` with red e2e (treating it as flake)
+has produced a release-eligible SHA that was never confirmed green. The
+two problems are independent failure modes that the same per-push e2e
+cadence has so far masked from each other.
+
+## Sandbox CI budget success criteria §req:sandbox-ci-budget-criteria
+
+- A typical week of development on `point-source/flywheel` produces zero
+  rate-limit-induced failures on the sandbox installation.
+- Documentation-only PRs (no `src/` or workflow changes) consume zero
+  API requests against the sandbox installation while still reporting
+  every required check as a successful result.
+- A failing or rate-limited e2e run does not block an unrelated PR's
+  integration check from running during the same rate-limit window.
+- Per-scenario polling cost is bounded and configurable in one place, so
+  a maintainer can reason about per-run API cost from a single file.
+
+## Release safety gate success criteria §req:release-safety-gate-criteria
+
+- No release publishes to `main` and no `@vN` tag advances without a
+  green e2e run against the exact SHA being released.
+- If e2e is red on a candidate, the release is blocked. The candidate is
+  either superseded by a subsequent green push or remediated explicitly
+  by the maintainer — flywheel does not retry, auto-publish, or paper
+  over a failure.
+- The gate is observable: a maintainer reading the repository can
+  identify the candidate, the check that must pass, and the publish step
+  that a green result unlocks.
+- Adopters pinned to `@v1` observe no behavior change for green releases
+  (same trigger, same timing) and no new opt-in is required to consume
+  flywheel after the gate ships.
+
+## CI user stories §req:ci-user-stories
+
+- As a flywheel maintainer making multiple PRs per week, I want CI to
+  never fail for non-code reasons, so I do not learn to treat red CI as
+  flake and lose the signal it gives me.
+- As a flywheel maintainer cutting a release, I want a structural
+  guarantee that the SHA being released passed e2e against a real
+  GitHub repository, so I cannot accidentally ship a broken `@v1` to
+  every adopter.
+- As an adopter pinned to `@v1`, I want flywheel's release cadence and
+  timing unchanged for green builds, so improvements to flywheel's
+  internal verification never become my problem.
+
+## CI quality attributes §req:ci-quality-attributes
+
+- **Stateless gate.** Whatever holds a release back until e2e is green
+  must not require flywheel to hold state between runs. The repository's
+  branches, tags, check runs, and release objects are the state machine,
+  mirroring the principle applied to `release_as_draft`
+  (§req:quality-attributes).
+- **Adopter invisibility.** Adopters consuming `@v1` get no new opt-in,
+  no new workflow template, and no change in release timing for green
+  builds.
+- **Single sandbox.** Provisioning additional sandbox repositories is
+  out of scope. The rate-limit budget on the existing installation is
+  fixed; mitigations must work within it.
+- **Parallel-agent safe.** This repository is routinely worked on by
+  multiple agents in parallel. CI mitigations must not introduce a
+  single-writer bottleneck that serializes that work.
+
+## CI constraints §req:ci-constraints
+
+- The integration and e2e suites currently share one App installation on
+  the sandbox. Splitting the installation is mechanically possible (the
+  App can be installed twice, or a parallel App with identical scopes
+  installed alongside) but expands the maintenance surface of the
+  sandbox setup.
+- Required-check rules on the repository expect specific named checks to
+  report a result. Workflows that skip on doc-only changes must continue
+  to report the check name as a successful no-op, not omit it.
+- semantic-release derives versions from git tags, not from check runs.
+  Whatever gates a release on e2e must not interrupt the
+  tag-create-and-push step that version computation depends on.
+
+## CI priorities §req:ci-priorities
+
+Required, in decreasing order of user impact:
+
+1. The release safety gate (§req:release-safety-gate). A broken `@v1`
+   release is the worst failure flywheel can produce, and the implicit
+   gate is no longer reliable while the budget problem persists.
+2. Cheap, reversible mitigations to the budget problem
+   (§req:sandbox-ci-budget) — polling tuning, path-gating doc-only PRs —
+   that reduce per-run API cost without changing release semantics.
+3. Structural separation of the integration and e2e installations on
+   the same sandbox, if 1 and 2 prove insufficient.
+
+**Nice-to-have:** Per-run API-call counter visible in CI logs so drift
+in per-scenario cost surfaces before it exhausts the bucket.

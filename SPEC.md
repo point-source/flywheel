@@ -253,3 +253,272 @@ releases it has handed off, which this design specifically avoids.
 - A draft release whose build never publishes it lingers indefinitely.
   Adopter's responsibility (see *Stuck-draft failure mode*) rather
   than expanding flywheel into a stateful release monitor.
+
+## Sandbox test budget §spec:sandbox-test-budget
+
+*Status: not started*
+
+flywheel's test infrastructure exercises the real GitHub API against
+`point-source/flywheel-sandbox` — one repository, one App installation,
+one ~5000-requests/hour primary rate-limit bucket shared between the
+integration suite (every PR, every push to `develop` and `main`) and
+the e2e suite. A run that exhausts the bucket fails not for any code
+reason but because the budget is gone, and a maintainer who sees that
+repeatedly learns to treat red CI as flake-not-signal. This section
+defines the rules that keep per-run API consumption inside the budget
+headroom of the shared installation. §req:sandbox-ci-budget
+
+**Polling discipline.** The default per-poll interval for sandbox-driven
+assertions is centralized in `tests/e2e/helpers/poll-until.ts` and set
+high enough that no scenario exceeds its share of the per-run API
+budget. Individual assertions that need faster feedback override the
+default at the call site — the default is the floor, not the ceiling.
+The total per-assertion timeout is unchanged: a higher default trades
+a few seconds of latency on fast-resolving assertions for proportionally
+fewer API calls on slow-resolving ones.
+§req:sandbox-ci-budget-criteria
+
+**Workflow path filtering.** Workflows that consume sandbox API calls
+(`integration.yml`) and the bundle verifier (`verify-dist.yml`) execute
+their expensive steps only when the change can affect their outcome. A
+documentation-only change — files under `docs/`, `*.md` at the
+repository root, and `.github/ISSUE_TEMPLATE/` — bypasses the steps
+that talk to the sandbox or rebuild the bundle, and the workflow
+reports its check name as a successful no-op so the required-check
+rules on the repository remain satisfied. Filtering happens inside the
+job rather than via top-level `paths-ignore`, because top-level
+filtering would cause GitHub to never report the check, which would
+block any PR whose required-check rule expects that name. Unit tests
+(`npm test`) continue to run on doc-only PRs at zero sandbox cost and
+catch doc-parser regressions like the YAML-snippet validation in
+`tests/docs-examples.test.ts`.
+§req:sandbox-ci-budget-criteria §req:ci-constraints
+
+**Installation separation (contingent).** If polling discipline and
+path filtering together do not reach zero rate-limit-induced failures
+across a typical development week, the integration and e2e suites move
+to independent installations on the same sandbox — each suite mints
+tokens from its own installation and draws from its own primary
+rate-limit bucket. The mechanism is open: a second installation of
+`flywheel-build-e2e` on the sandbox if GitHub permits, or a parallel
+App with identical scopes installed alongside. Either way the suites
+no longer share a budget. Maintenance cost is one additional credential
+pair to rotate, documented alongside `flywheel-build-e2e` in
+`docs/maintainer/sandbox-setup.md`. §req:ci-priorities
+
+**Alternatives rejected.**
+
+- *ETag / conditional-request middleware on the sandbox Octokit
+  client.* 304 responses don't count against the primary limit, so
+  caching reads cheapens polling. Useful only for repeated reads of
+  the same resource (which polling largely is), but adds a maintained
+  middleware layer and helps primary rate-limits only — secondary
+  (burst / concurrent) limits charge for every request regardless of
+  status. Polling discipline and path filtering address the same axis
+  with a fraction of the moving parts; revisit only if both prove
+  insufficient and installation separation is also rejected.
+
+- *Time-based debouncing of e2e* — skip a run if one ran in the last
+  hour against the same sandbox. Requires flywheel to hold state
+  about prior runs, which violates the statelessness principle.
+  §req:ci-quality-attributes
+
+**Tradeoffs accepted.**
+
+- A higher default poll interval means tests that *could* see a
+  fast-resolving condition wait longer before observing it. Wall
+  time of the e2e suite grows by roughly the increase in interval
+  times the number of polling assertions per scenario; tests whose
+  conditions resolve quickly pay the most. Accepted: the existing
+  per-call override mechanism lets specific assertions opt back into
+  faster polling where latency cost matters.
+
+- A documentation-only PR no longer surfaces a regression unique to
+  documentation processing in integration or verify-dist. Accepted:
+  unit tests still run on every PR at zero sandbox cost and catch
+  the doc-parser regressions covered by `tests/docs-examples.test.ts`;
+  integration and verify-dist do not read documentation and have
+  nothing to catch on a doc-only change.
+
+**Observability (nice-to-have).** Per-run API-call counts surface in
+CI logs so drift in per-scenario cost is detectable before it
+exhausts the bucket. Mechanism is open — one option is logging the
+Octokit response headers' `x-ratelimit-remaining` at suite teardown.
+§req:ci-priorities
+
+## Release gate §spec:release-gate
+
+*Status: not started*
+
+flywheel is a runtime action: a broken release tagged at `@v1` is
+consumed by every adopter pinned to that major on their next CI run.
+The per-push e2e cadence that incidentally covered release SHAs is no
+longer a reliable gate — the same rate-limit budget pressure that
+motivates §spec:sandbox-test-budget teaches maintainers to merge
+through red CI, and an unchecked red SHA on `develop` becomes the
+release SHA on the next promotion. This section specifies a release
+pipeline in which no production release on `main` publishes, and no
+floating `@vN` major tag advances, without a green e2e run against
+the exact SHA being released. §req:release-safety-gate
+
+**Mechanism.** flywheel's own `.flywheel.yml` sets
+`release_as_draft: true` on the `main` branch and leaves `develop` on
+the default immediate-publish path. On a `develop → main` promotion,
+`semantic-release` runs as it does today, but
+`@semantic-release/github` creates the production release as an
+unpublished draft and pushes the version tag. The release object
+exists, the tag is in place, and `@v1` has not moved yet because the
+floating-major workflow fires only on `release: published` — which
+GitHub does not raise for drafts.
+§req:release-safety-gate-criteria
+
+A new workflow, `.github/workflows/release-gate.yml`, triggers on
+the production version tag's push (`v[0-9]+.[0-9]+.[0-9]+` without a
+prerelease suffix). It checks out the SHA the tag points to, runs
+the full e2e suite against `point-source/flywheel-sandbox`, and on
+a green result calls GitHub's Update Release API with `draft: false`
+to publish the draft. The publish fires `release: published`, which
+triggers the existing `release-major-tag.yml` to advance the floating
+`@vN` tag. On a red result the workflow exits non-zero; the draft
+stays unpublished, `@vN` stays at the prior release, and adopters
+pinned to the major continue to consume the previous green release.
+§req:release-safety-gate-criteria
+
+This reuses the per-branch `release_as_draft` mechanism described in
+§spec:immutable-release-support for an internal CI-gating purpose
+rather than an artifact-attachment purpose. flywheel attaches no
+release assets; the draft window exists only so the release-gate
+workflow has an unpublished release object to either publish (green)
+or leave alone (red). The behavior of the broader `release_as_draft`
+feature — declared per branch, no inference, immediate publish on
+opt-out branches — is unchanged.
+
+**Develop-push cadence.** With the release gate in place the e2e
+suite no longer runs on every push to `develop`. `e2e.yml` removes
+its auto-trigger on `push:` and retains `workflow_dispatch` for
+manual investigation runs. Integration tests still run on every PR
+and every push, unit tests still run on every PR, and verify-dist
+still runs on every PR — the develop tip still has signal for
+everything that does not require the live GitHub API. The e2e signal
+exists only at release time, which is where adopters consume it.
+§req:ci-priorities
+
+**Red-candidate behavior.** A red release-gate run leaves the
+release as an unpublished draft, visible in the repository's
+releases list. flywheel does not retry, auto-publish, or auto-clean.
+Recovery is the maintainer's:
+
+1. *Supersede.* Merge the fix to `develop`, let the next promotion
+   run, and the new release supersedes the stuck draft. The stuck
+   draft may be deleted manually but does not block the new release
+   — semantic-release derives the next version from git tags, and
+   the stuck draft's tag is already present.
+
+2. *Re-run.* If the red was a transient flake unrelated to the
+   release SHA, re-running `release-gate.yml` on the same tag is
+   safe. The workflow is idempotent: on green it publishes the
+   draft, on red it leaves the draft alone, and after a successful
+   publish it is a no-op (the draft is no longer a draft to
+   publish).
+
+§req:release-safety-gate-criteria
+
+**Authentication.** `release-gate.yml` mints two installation
+tokens. The `flywheel-build-e2e` App scoped to the sandbox runs the
+e2e suite, identical to how `e2e.yml` mints today. The main
+`FLYWHEEL_GH_APP_ID` scoped to `point-source/flywheel` makes the
+publish-release API call, identical to how `flywheel-push.yml`
+mints today. No new secrets, no new permissions, no broader scope.
+§req:ci-quality-attributes
+
+**Concurrency.** `release-gate.yml` serializes per tag with
+`cancel-in-progress: false` — a partially completed publish must
+not be cancelled. Cross-tag concurrency is unconstrained; tags
+serialize via the git push that creates them, and overlapping
+release-gate runs against different tags are independent.
+
+**Statelessness.** flywheel holds no state between the
+draft-creation step (inside `semantic-release`) and the publish
+step (inside `release-gate.yml`). The repository's tags, release
+objects, and check runs are the state machine; the workflow reads
+them and acts. §req:ci-quality-attributes
+
+**Adopter invisibility.** `release_as_draft: true` is set only in
+flywheel's own `.flywheel.yml`. Scaffolded `.flywheel.yml` files
+for new adopters leave every branch at the immediate-publish
+default, and `release-gate.yml` is not scaffolded into adopter
+repositories by `scripts/init.sh`. An adopter consuming `@v1` sees
+the same release object structure, the same trigger event, and the
+same timing as before — flywheel's internal verification is
+invisible from the outside.
+§req:release-safety-gate-criteria
+
+**Cross-reference upkeep.** The *flywheel's own releases* paragraph
+in §spec:immutable-release-support currently states that no
+flywheel branch sets `release_as_draft`. The release-gate work
+updates that paragraph as part of its delivery: flywheel's `main`
+branch sets `release_as_draft: true` for the CI-gating reason
+described here, and the immutable-release section references back
+to this one.
+
+**Alternatives rejected.**
+
+- *Staging branch* (`develop → staging → main`). Adds a third tier
+  to the branch topology and pulls staging semantics into
+  `.flywheel.yml`, which adopters configure. The back-merge logic
+  currently mapping `main → develop` would need to learn about
+  staging. Equivalent gating outcome to the release gate with
+  substantially more disruption, and a real risk of confusing
+  adopters who would wonder whether to mirror the topology.
+
+- *Inline e2e in `flywheel-push.yml`* — run e2e as a job inside the
+  release-cut workflow, gating `semantic-release` on its result.
+  Mechanically simpler but loses the observable-artifact property:
+  there is no draft to point at as the candidate that is gated.
+  The release-gate-on-tag-push design leaves a visible artifact
+  (the unpublished draft) for the maintainer to inspect.
+
+- *On-demand-only e2e* — drop the auto-trigger, run manually before
+  releases. Depends entirely on maintainer discipline; not a
+  structural gate. If the maintainer forgets, a broken release
+  still ships.
+
+- *Promotion-PR gate* — open a `develop → main` PR and gate merge
+  on e2e via branch protection. Requires shifting the promotion
+  mechanism from the existing push-driven flow to a PR-driven flow,
+  a larger change with no advantage over the tag-push-triggered
+  gate.
+
+- *Gate the floating major tag instead of publication.* Replace the
+  body of `release-major-tag.yml` to run e2e and advance `@vN` only
+  on green, with no `release_as_draft` involvement. Simpler but
+  strictly weaker: a published-but-not-floated release stays in
+  the releases UI as a real release, and adopters pinned to an
+  exact version (`@v1.3.0`) still see the broken code. The
+  release-gate design protects every adopter regardless of pin
+  shape.
+
+**Tradeoffs accepted.**
+
+- Develop pushes no longer carry e2e signal. A regression that only
+  e2e would catch can sit on `develop` for up to a release cycle
+  (~one business day) before the release gate surfaces it.
+  Accepted: the cost — slightly later detection of a
+  release-blocking bug — is paid only by maintainers, while the
+  gain (rate-limit headroom, faster develop CI) accrues every
+  push. The gate ensures no broken SHA reaches adopters regardless
+  of when the regression landed on `develop`.
+
+- A stuck-draft production release sits in the repository's
+  releases UI until manually addressed. Accepted: this is the
+  visible failure mode the gate is supposed to produce. The
+  pattern mirrors the stuck-draft model already documented for
+  adopters in §spec:immutable-release-support.
+
+**Security.** `release-gate.yml` runs on the SHA the production
+tag points to — a commit that flywheel's own release pipeline
+just created. No untrusted input modifies what gets executed; the
+workflow trusts the tag pointer the same release pipeline pushed.
+The publish step calls a single authenticated GitHub API endpoint
+with a token already scoped to `point-source/flywheel`. No new
+attack surface beyond what `flywheel-push.yml` already exposes.
