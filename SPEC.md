@@ -256,7 +256,7 @@ releases it has handed off, which this design specifically avoids.
 
 ## Sandbox test budget §spec:sandbox-test-budget
 
-*Status: not started*
+*Status: in progress*
 
 flywheel's test infrastructure exercises the real GitHub API against
 `point-source/flywheel-sandbox` — one repository, one App installation,
