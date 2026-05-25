@@ -8,6 +8,33 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+
+      # Doc-only changes (docs/, root *.md, .github/ISSUE_TEMPLATE/) cannot
+      # affect the dist/ bundle, so the rebuild step is skipped on those
+      # PRs. Unit tests still run — tests/docs-examples.test.ts validates
+      # YAML snippets in docs and catches regressions a doc-only change
+      # might introduce. Filtering happens in-job so the check still
+      # reports the required-check name as success; workflow-level
+      # paths-ignore would omit the check entirely. See
+      # §spec:sandbox-test-budget.
+      #
+      # non_docs is true iff at least one changed file is NOT a doc path.
+      # predicate-quantifier: 'every' requires a file to match every
+      # pattern (with negations) before counting — so non_docs == 'true'
+      # precisely when a non-doc file changed. A PR mixing doc and
+      # non-doc changes runs the rebuild as normal.
+      - name: Detect non-doc changes
+        id: filter
+        uses: dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d # v4.0.1
+        with:
+          predicate-quantifier: 'every'
+          filters: |
+            non_docs:
+              - '**'
+              - '!docs/**'
+              - '!*.md'
+              - '!.github/ISSUE_TEMPLATE/**'
+
       - uses: actions/setup-node@v4
         with:
           node-version: "24"
@@ -21,6 +48,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Rebuild bundle and check for drift
+        if: steps.filter.outputs.non_docs == 'true'
         run: |
           npm run build
           if ! git diff --exit-code -- dist/; then

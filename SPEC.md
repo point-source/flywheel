@@ -256,95 +256,76 @@ releases it has handed off, which this design specifically avoids.
 
 ## Sandbox test budget §spec:sandbox-test-budget
 
-*Status: in progress*
+*Status: complete*
 
-flywheel's test infrastructure exercises the real GitHub API against
-`point-source/flywheel-sandbox` — one repository, one App installation,
-one ~5000-requests/hour primary rate-limit bucket shared between the
-integration suite (every PR, every push to `develop` and `main`) and
-the e2e suite. A run that exhausts the bucket fails not for any code
-reason but because the budget is gone, and a maintainer who sees that
-repeatedly learns to treat red CI as flake-not-signal. This section
-defines the rules that keep per-run API consumption inside the budget
-headroom of the shared installation. §req:sandbox-ci-budget
+flywheel's integration and e2e suites both exercise the real GitHub
+API against `point-source/flywheel-sandbox` through a single App
+installation, so they share one ~5000-requests/hour primary
+rate-limit bucket. A run that exhausts the bucket fails not for any
+code reason but because the budget is gone, and a maintainer who
+sees that repeatedly learns to treat red CI as flake-not-signal.
+This section defines the rules that keep per-run API consumption
+inside the shared installation's headroom.
+§req:sandbox-ci-budget
 
-**Polling discipline.** The default per-poll interval for sandbox-driven
-assertions is centralized in `tests/e2e/helpers/poll-until.ts` and set
-high enough that no scenario exceeds its share of the per-run API
-budget. Individual assertions that need faster feedback override the
-default at the call site — the default is the floor, not the ceiling.
-The total per-assertion timeout is unchanged: a higher default trades
-a few seconds of latency on fast-resolving assertions for proportionally
-fewer API calls on slow-resolving ones.
+**Polling discipline.** The default per-poll interval for
+sandbox-driven assertions lives in one place, set high enough that
+no scenario exceeds its share of the per-run API budget. Individual
+assertions override the default at the call site — the default is
+the floor, not the ceiling — so a single file gates per-run cost
+and per-assertion latency stays tunable.
 §req:sandbox-ci-budget-criteria
 
-**Workflow path filtering.** Workflows that consume sandbox API calls
-(`integration.yml`) and the bundle verifier (`verify-dist.yml`) execute
-their expensive steps only when the change can affect their outcome. A
-documentation-only change — files under `docs/`, `*.md` at the
-repository root, and `.github/ISSUE_TEMPLATE/` — bypasses the steps
-that talk to the sandbox or rebuild the bundle, and the workflow
-reports its check name as a successful no-op so the required-check
-rules on the repository remain satisfied. Filtering happens inside the
-job rather than via top-level `paths-ignore`, because top-level
-filtering would cause GitHub to never report the check, which would
-block any PR whose required-check rule expects that name. Unit tests
-(`npm test`) continue to run on doc-only PRs at zero sandbox cost and
-catch doc-parser regressions like the YAML-snippet validation in
-`tests/docs-examples.test.ts`.
+**Workflow path filtering.** A documentation-only change — files
+under `docs/`, `*.md` at the repository root, and
+`.github/ISSUE_TEMPLATE/` — bypasses the sandbox-driven steps of
+`integration.yml` and the bundle rebuild of `verify-dist.yml`, and
+each workflow reports its check name as a successful no-op.
+Filtering happens inside the job rather than via top-level
+`paths-ignore`: top-level filtering causes GitHub to never report
+the check, which would block any PR whose required-check rule
+expects that name. Unit tests (`npm test`) continue to run on
+doc-only PRs at zero sandbox cost and catch doc-parser regressions
+covered by `tests/docs-examples.test.ts` — the only doc-touching
+verification verify-dist performs.
 §req:sandbox-ci-budget-criteria §req:ci-constraints
 
 **Installation separation (contingent).** If polling discipline and
-path filtering together do not reach zero rate-limit-induced failures
-across a typical development week, the integration and e2e suites move
-to independent installations on the same sandbox — each suite mints
-tokens from its own installation and draws from its own primary
-rate-limit bucket. The mechanism is open: a second installation of
-`flywheel-build-e2e` on the sandbox if GitHub permits, or a parallel
-App with identical scopes installed alongside. Either way the suites
-no longer share a budget. Maintenance cost is one additional credential
-pair to rotate, documented alongside `flywheel-build-e2e` in
-`docs/maintainer/sandbox-setup.md`. §req:ci-priorities
+path filtering together fail to reach zero rate-limit-induced
+failures across a typical development week, the integration and
+e2e suites move to independent installations on the same sandbox so
+each draws from its own primary rate-limit bucket. Not done
+preemptively: it adds a credential pair to rotate, and the two
+shipped mitigations are expected to suffice. §req:ci-priorities
 
 **Alternatives rejected.**
 
 - *ETag / conditional-request middleware on the sandbox Octokit
-  client.* 304 responses don't count against the primary limit, so
-  caching reads cheapens polling. Useful only for repeated reads of
-  the same resource (which polling largely is), but adds a maintained
-  middleware layer and helps primary rate-limits only — secondary
-  (burst / concurrent) limits charge for every request regardless of
-  status. Polling discipline and path filtering address the same axis
-  with a fraction of the moving parts; revisit only if both prove
-  insufficient and installation separation is also rejected.
+  client.* 304 responses don't count against the primary limit but
+  add a maintained middleware layer, and they don't help against
+  secondary (burst / concurrent) limits. Polling discipline and
+  path filtering address the same axis with fewer moving parts.
 
 - *Time-based debouncing of e2e* — skip a run if one ran in the last
   hour against the same sandbox. Requires flywheel to hold state
-  about prior runs, which violates the statelessness principle.
+  about prior runs, violating statelessness.
   §req:ci-quality-attributes
 
 **Tradeoffs accepted.**
 
-- A higher default poll interval means tests that *could* see a
-  fast-resolving condition wait longer before observing it. Wall
-  time of the e2e suite grows by roughly the increase in interval
-  times the number of polling assertions per scenario; tests whose
-  conditions resolve quickly pay the most. Accepted: the existing
-  per-call override mechanism lets specific assertions opt back into
-  faster polling where latency cost matters.
+- A higher default poll interval lengthens fast-resolving e2e
+  assertions. The per-call override mechanism lets specific
+  assertions opt back into faster polling where latency matters.
 
-- A documentation-only PR no longer surfaces a regression unique to
-  documentation processing in integration or verify-dist. Accepted:
-  unit tests still run on every PR at zero sandbox cost and catch
-  the doc-parser regressions covered by `tests/docs-examples.test.ts`;
-  integration and verify-dist do not read documentation and have
-  nothing to catch on a doc-only change.
+- Doc-only PRs no longer surface a doc-processing regression in
+  integration or verify-dist. Those suites do not read docs;
+  `tests/docs-examples.test.ts` (run under `npm test` on every PR)
+  is the surface that would catch such a regression, and it still
+  runs.
 
-**Observability (nice-to-have).** Per-run API-call counts surface in
-CI logs so drift in per-scenario cost is detectable before it
-exhausts the bucket. Mechanism is open — one option is logging the
-Octokit response headers' `x-ratelimit-remaining` at suite teardown.
-§req:ci-priorities
+**Observability (nice-to-have).** Per-run API-call counts surfaced
+in CI logs would let drift in per-scenario cost be caught before it
+exhausts the bucket. Not yet implemented. §req:ci-priorities
 
 ## Release gate §spec:release-gate
 

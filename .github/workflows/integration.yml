@@ -22,11 +22,40 @@ jobs:
     # and the suite would skip every test anyway. Save the CI minutes.
     if: ${{ github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository }}
     steps:
+      # Checkout first so dorny/paths-filter can use local git on push events
+      # (on pull_request it uses the GitHub API and would not require this).
       - uses: actions/checkout@v6
+
+      # Doc-only changes (docs/, root *.md, .github/ISSUE_TEMPLATE/) cannot
+      # affect integration outcomes. Detect them in-job so the check still
+      # reports a successful result — workflow-level paths-ignore would
+      # cause GitHub to never report the check, blocking required-check
+      # rules that expect this name. See §spec:sandbox-test-budget.
+      #
+      # The filter named non_docs is true iff at least one changed file is
+      # NOT a doc path. predicate-quantifier: 'every' requires a file to
+      # match every pattern in the filter (with negations) before counting
+      # as a hit — so non_docs == 'true' precisely when a non-doc file
+      # changed. Skipping when non_docs != 'true' means a PR mixing doc
+      # and non-doc changes still runs the full suite.
+      - name: Detect non-doc changes
+        id: filter
+        uses: dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d # v4.0.1
+        with:
+          predicate-quantifier: 'every'
+          filters: |
+            non_docs:
+              - '**'
+              - '!docs/**'
+              - '!*.md'
+              - '!.github/ISSUE_TEMPLATE/**'
+
       - uses: actions/setup-node@v4
+        if: steps.filter.outputs.non_docs == 'true'
         with:
           node-version: "24"
       - run: npm ci
+        if: steps.filter.outputs.non_docs == 'true'
 
       # Mint a short-lived installation token from the flywheel-build-e2e
       # GitHub App, scoped to point-source/flywheel-sandbox only.
@@ -35,6 +64,7 @@ jobs:
       #   FLYWHEEL_E2E_APP_PRIVATE_KEY — flywheel-build-e2e App private key (Secret, PEM)
       - name: Mint sandbox installation token
         id: app-token
+        if: steps.filter.outputs.non_docs == 'true'
         uses: actions/create-github-app-token@v1
         with:
           app-id: ${{ vars.FLYWHEEL_E2E_APP_ID }}
@@ -43,6 +73,7 @@ jobs:
           repositories: flywheel-sandbox
 
       - name: Run integration tests
+        if: steps.filter.outputs.non_docs == 'true'
         env:
           SANDBOX_GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: npm run test:integration
