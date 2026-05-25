@@ -25,6 +25,12 @@ flywheel:
             - build
         - name: main
           release: production
+          # Production releases publish only after release-gate.yml runs the
+          # full e2e suite against the tagged SHA and calls the Update Release
+          # API with draft: false. Holds the floating @vN tag (which fires on
+          # release: published) behind a green e2e signal. See
+          # §spec:release-gate.
+          release_as_draft: true
           auto_merge:
             - feat
             - fix

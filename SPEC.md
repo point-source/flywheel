@@ -199,13 +199,16 @@ artifact, and publishes the draft as its final step.
 immediate-publish shape, side by side; a single mixed-mode repository
 runs both, one per branch.
 
-**flywheel's own releases.** No flywheel branch sets `release_as_draft`:
-flywheel ships no release assets (it's distributed as an action pinned
-by git ref, with `dist/` committed), every release takes the default
-immediate-publish path, and that path is immutable-safe. Immutability
-freezes only the tag and the assets; flywheel attaches none and the tag
-is created once and never moved. flywheel dogfoods the guarantee it
-offers adopters with no code change. §req:priorities
+**flywheel's own releases.** flywheel ships no release assets — it's
+distributed as an action pinned by git ref, with `dist/` committed —
+so the default immediate-publish path is immutable-safe regardless.
+The `develop` branch takes that default path. The `main` branch sets
+`release_as_draft: true` for an internal CI-gating reason unrelated to
+immutability: see §spec:release-gate, which uses the draft window to
+hold a production release until the full e2e suite runs against the
+tagged SHA. The behavior of `release_as_draft` from the adopter's
+perspective is unchanged; flywheel is one consumer of the per-branch
+mechanism it offers. §req:priorities §spec:release-gate
 
 **Stuck-draft failure mode.** If an opt-in branch's build fails before
 it publishes the draft, the release remains an unpublished draft
@@ -329,7 +332,7 @@ exhausts the bucket. Not yet implemented. §req:ci-priorities
 
 ## Release gate §spec:release-gate
 
-*Status: not started*
+*Status: complete*
 
 flywheel is a runtime action: a broken release tagged at `@v1` is
 consumed by every adopter pinned to that major on their next CI run.
@@ -342,105 +345,73 @@ pipeline in which no production release on `main` publishes, and no
 floating `@vN` major tag advances, without a green e2e run against
 the exact SHA being released. §req:release-safety-gate
 
-**Mechanism.** flywheel's own `.flywheel.yml` sets
-`release_as_draft: true` on the `main` branch and leaves `develop` on
-the default immediate-publish path. On a `develop → main` promotion,
-`semantic-release` runs as it does today, but
-`@semantic-release/github` creates the production release as an
-unpublished draft and pushes the version tag. The release object
-exists, the tag is in place, and `@v1` has not moved yet because the
-floating-major workflow fires only on `release: published` — which
-GitHub does not raise for drafts.
+**Mechanism.** flywheel's `.flywheel.yml` sets `release_as_draft:
+true` on `main` and leaves `develop` on the default immediate-publish
+path. On a `develop → main` promotion, `@semantic-release/github`
+creates the production release as an unpublished draft and pushes the
+version tag. The release object exists and the tag is in place, but
+`@vN` has not moved yet — `release-major-tag.yml` fires on
+`release: published`, which GitHub does not raise for drafts.
+`.github/workflows/release-gate.yml` triggers on the production
+version tag's push, runs the full e2e suite against the tagged SHA,
+and on green calls GitHub's Update Release API with `draft: false`.
+The publish fires `release: published`, which triggers
+`release-major-tag.yml` to advance `@vN`. On red, the workflow exits
+non-zero; the draft stays unpublished, `@vN` stays at the prior
+release, and adopters pinned to the major continue to consume the
+previous green release.
 §req:release-safety-gate-criteria
 
-A new workflow, `.github/workflows/release-gate.yml`, triggers on
-the production version tag's push (`v[0-9]+.[0-9]+.[0-9]+` without a
-prerelease suffix). It checks out the SHA the tag points to, runs
-the full e2e suite against `point-source/flywheel-sandbox`, and on
-a green result calls GitHub's Update Release API with `draft: false`
-to publish the draft. The publish fires `release: published`, which
-triggers the existing `release-major-tag.yml` to advance the floating
-`@vN` tag. On a red result the workflow exits non-zero; the draft
-stays unpublished, `@vN` stays at the prior release, and adopters
-pinned to the major continue to consume the previous green release.
-§req:release-safety-gate-criteria
-
-This reuses the per-branch `release_as_draft` mechanism described in
+This reuses the per-branch `release_as_draft` mechanism from
 §spec:immutable-release-support for an internal CI-gating purpose
-rather than an artifact-attachment purpose. flywheel attaches no
-release assets; the draft window exists only so the release-gate
-workflow has an unpublished release object to either publish (green)
-or leave alone (red). The behavior of the broader `release_as_draft`
-feature — declared per branch, no inference, immediate publish on
-opt-out branches — is unchanged.
+rather than artifact attachment. flywheel attaches no release assets;
+the draft window exists only so the gate has an unpublished release
+to publish (green) or leave alone (red). The behavior of the broader
+`release_as_draft` feature is unchanged.
 
-**Develop-push cadence.** With the release gate in place the e2e
-suite no longer runs on every push to `develop`. `e2e.yml` removes
-its auto-trigger on `push:` and retains `workflow_dispatch` for
-manual investigation runs. Integration tests still run on every PR
-and every push, unit tests still run on every PR, and verify-dist
-still runs on every PR — the develop tip still has signal for
-everything that does not require the live GitHub API. The e2e signal
-exists only at release time, which is where adopters consume it.
-§req:ci-priorities
+**Develop-push cadence.** With the gate in place, `e2e.yml` no longer
+auto-triggers on `push:` to `develop` — only `workflow_dispatch` for
+manual investigation. Integration tests, unit tests, and verify-dist
+still run on every PR; the e2e signal exists only at release time,
+which is where adopters consume it. §req:ci-priorities
 
-**Red-candidate behavior.** A red release-gate run leaves the
-release as an unpublished draft, visible in the repository's
-releases list. flywheel does not retry, auto-publish, or auto-clean.
-Recovery is the maintainer's:
+**Red-candidate behavior.** A red gate run leaves the release as an
+unpublished draft in the releases UI. flywheel does not retry,
+auto-publish, or auto-clean. Recovery paths:
 
 1. *Supersede.* Merge the fix to `develop`, let the next promotion
-   run, and the new release supersedes the stuck draft. The stuck
-   draft may be deleted manually but does not block the new release
-   — semantic-release derives the next version from git tags, and
-   the stuck draft's tag is already present.
+   run. semantic-release derives version from git tags, and the
+   stuck draft's tag is already pushed, so the new release does not
+   collide. The stuck draft may be deleted manually but does not
+   block.
 
-2. *Re-run.* If the red was a transient flake unrelated to the
-   release SHA, re-running `release-gate.yml` on the same tag is
-   safe. The workflow is idempotent: on green it publishes the
+2. *Re-run.* The workflow is idempotent: on green it publishes the
    draft, on red it leaves the draft alone, and after a successful
-   publish it is a no-op (the draft is no longer a draft to
-   publish).
-
+   publish it is a no-op.
 §req:release-safety-gate-criteria
 
-**Authentication.** `release-gate.yml` mints two installation
-tokens. The `flywheel-build-e2e` App scoped to the sandbox runs the
-e2e suite, identical to how `e2e.yml` mints today. The main
-`FLYWHEEL_GH_APP_ID` scoped to `point-source/flywheel` makes the
-publish-release API call, identical to how `flywheel-push.yml`
-mints today. No new secrets, no new permissions, no broader scope.
-§req:ci-quality-attributes
+**Authentication.** Two installation tokens: `FLYWHEEL_E2E_APP_ID`
+(scoped to the sandbox, identical to `e2e.yml`) for the e2e step,
+and `FLYWHEEL_GH_APP_ID` (scoped to `point-source/flywheel`,
+identical to `flywheel-push.yml`) for the publish API call. No new
+secrets. §req:ci-quality-attributes
 
-**Concurrency.** `release-gate.yml` serializes per tag with
-`cancel-in-progress: false` — a partially completed publish must
-not be cancelled. Cross-tag concurrency is unconstrained; tags
-serialize via the git push that creates them, and overlapping
-release-gate runs against different tags are independent.
+**Concurrency.** Serializes per tag with `cancel-in-progress: false`
+— a partial publish must not be cancelled. Cross-tag concurrency is
+unconstrained.
 
-**Statelessness.** flywheel holds no state between the
-draft-creation step (inside `semantic-release`) and the publish
-step (inside `release-gate.yml`). The repository's tags, release
-objects, and check runs are the state machine; the workflow reads
-them and acts. §req:ci-quality-attributes
+**Statelessness.** flywheel holds no state between draft-creation
+(in `semantic-release`) and publish (in `release-gate.yml`). The
+repository's tags, release objects, and check runs are the state
+machine. §req:ci-quality-attributes
 
 **Adopter invisibility.** `release_as_draft: true` is set only in
 flywheel's own `.flywheel.yml`. Scaffolded `.flywheel.yml` files
-for new adopters leave every branch at the immediate-publish
-default, and `release-gate.yml` is not scaffolded into adopter
-repositories by `scripts/init.sh`. An adopter consuming `@v1` sees
-the same release object structure, the same trigger event, and the
-same timing as before — flywheel's internal verification is
-invisible from the outside.
-§req:release-safety-gate-criteria
-
-**Cross-reference upkeep.** The *flywheel's own releases* paragraph
-in §spec:immutable-release-support currently states that no
-flywheel branch sets `release_as_draft`. The release-gate work
-updates that paragraph as part of its delivery: flywheel's `main`
-branch sets `release_as_draft: true` for the CI-gating reason
-described here, and the immutable-release section references back
-to this one.
+leave every branch on immediate-publish, and `release-gate.yml` is
+not scaffolded into adopter repos by `scripts/init.sh`. An adopter
+consuming `@v1` sees the same release object structure, trigger
+event, and timing as before — flywheel's internal verification is
+invisible from the outside. §req:release-safety-gate-criteria
 
 **Alternatives rejected.**
 
