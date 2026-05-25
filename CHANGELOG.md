@@ -1,3 +1,10 @@
+# [1.4.0-dev.1](https://github.com/point-source/flywheel/compare/v1.3.0...v1.4.0-dev.1) (2026-05-25)
+
+
+### Features
+
+* **ci:** gate production release publication on sandbox e2e ([#201](https://github.com/point-source/flywheel/issues/201)) ([8cbe4b4](https://github.com/point-source/flywheel/commit/8cbe4b40cb23eaafad8a8388d8180ac96fa328a3))
+
 # [1.3.0](https://github.com/point-source/flywheel/compare/v1.2.4...v1.3.0) (2026-05-24)
 
 
