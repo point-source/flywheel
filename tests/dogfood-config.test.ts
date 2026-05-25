@@ -37,4 +37,24 @@ describe("the repo's actual .flywheel.yml (dogfood config)", () => {
     expect(main.auto_merge).toContain("feat");
     expect(main.auto_merge).toContain("fix!");
   });
+
+  it("sets release_as_draft: true on main (release gate; develop stays default)", () => {
+    // The release gate (§spec:release-gate) holds production releases as
+    // unpublished drafts until release-gate.yml runs the full e2e suite
+    // against the tagged SHA and calls the Update Release API. The flag
+    // here is what makes that handoff possible — semantic-release sees
+    // draftRelease: true on main and creates the release object without
+    // publishing it. Drift on this line silently disables the gate:
+    // every promotion would immediately publish, and the floating @vN
+    // tag would advance without an e2e check. develop must stay on the
+    // default immediate-publish path so dev releases continue to fire
+    // release: published events normally.
+    const text = readFileSync(join(repoRoot, ".flywheel.yml"), "utf8");
+    const result = loadConfig(text);
+    const branches = result.config!.streams[0]!.branches;
+    const develop = branches.find((b) => b.name === "develop")!;
+    const main = branches.find((b) => b.name === "main")!;
+    expect(main.release_as_draft).toBe(true);
+    expect(develop.release_as_draft).toBeUndefined();
+  });
 });

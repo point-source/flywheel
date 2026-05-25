@@ -1,0 +1,139 @@
+name: Release gate
+# Production releases on main land as unpublished drafts because
+# .flywheel.yml sets release_as_draft: true on main. This workflow runs
+# the full e2e suite against the SHA the production version tag points
+# at, and on green calls the Update Release API to publish the draft.
+# Publishing fires release: published, which triggers
+# release-major-tag.yml to advance the floating @vN tag.
+#
+# On red, the draft stays unpublished and @vN does not move — adopters
+# pinned to the major continue to consume the previous green release.
+# See §spec:release-gate.
+on:
+  push:
+    # Production version tags only — semantic-release pushes v1.2.3 on
+    # main and v1.2.3-dev.N on develop. Glob excludes -dev / -rc / etc.
+    # by anchoring on three numeric segments and nothing else.
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Production tag to gate (e.g. v1.3.0)"
+        required: true
+
+# Serialize per tag so a re-run cannot race a partial publish. Different
+# tags are independent — semantic-release pushes them sequentially, and
+# the gate runs are isolated by ref. cancel-in-progress: false because a
+# publish API call mid-flight must not be cancelled.
+concurrency:
+  group: release-gate-${{ github.event.inputs.tag || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # Skip on forks: the e2e App and the publish App credentials are not
+    # exposed to fork pushes, and a fork pushing a release tag is not a
+    # release event we should gate anyway.
+    if: ${{ github.event.repository.fork == false }}
+    steps:
+      # Resolve the tag name once. On push events the ref looks like
+      # refs/tags/v1.3.0; on workflow_dispatch the user supplies the tag
+      # via input. Subsequent steps read $TAG.
+      - name: Resolve tag
+        id: tag
+        shell: bash
+        env:
+          GH_REF: ${{ github.ref }}
+          INPUT_TAG: ${{ github.event.inputs.tag }}
+        run: |
+          if [[ -n "$INPUT_TAG" ]]; then
+            tag="$INPUT_TAG"
+          else
+            tag="${GH_REF#refs/tags/}"
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "Gating release tag: $tag"
+
+      - uses: actions/checkout@v6
+        with:
+          # Check out the SHA the tag points at — for push events that's
+          # github.sha already, but for workflow_dispatch the default
+          # ref would be the branch the workflow was dispatched from.
+          # Use the tag explicitly so both triggers land on the same SHA.
+          ref: ${{ steps.tag.outputs.tag }}
+
+      # Record the SHA we are running e2e against. EXPECTED_SHA flows
+      # into the publish step so an out-of-band retarget of the release
+      # object between e2e and publish surfaces as a refusal rather
+      # than a silent publish of an unverified SHA.
+      - name: Record gated SHA
+        id: sha
+        shell: bash
+        run: |
+          sha="$(git rev-parse HEAD)"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "Gating SHA: $sha"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - run: npm ci
+
+      # Mint the e2e installation token from the flywheel-build-e2e App
+      # scoped to point-source/flywheel-sandbox — identical to e2e.yml.
+      - name: Mint sandbox installation token
+        id: sandbox-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ vars.FLYWHEEL_E2E_APP_ID }}
+          private-key: ${{ secrets.FLYWHEEL_E2E_APP_PRIVATE_KEY }}
+          owner: point-source
+          repositories: flywheel-sandbox
+
+      # Same presweep / sync / preflight as e2e.yml — the gate runs the
+      # *same* e2e suite, just against the release SHA rather than
+      # develop tip. Drift between this set of steps and e2e.yml would
+      # be a real defect: a release that passes here must pass under
+      # the same harness any maintainer can re-run manually.
+      - name: Sandbox presweep
+        env:
+          SANDBOX_GH_TOKEN: ${{ steps.sandbox-token.outputs.token }}
+        run: node scripts/sandbox-presweep.mjs
+
+      - name: Sync sandbox fixtures
+        env:
+          SANDBOX_GH_TOKEN: ${{ steps.sandbox-token.outputs.token }}
+          FLYWHEEL_ACTION_REF: ${{ steps.sha.outputs.sha }}
+        run: node scripts/sync-e2e-fixtures.mjs
+
+      - name: Pre-flight (doctor.sh against sandbox)
+        env:
+          GH_TOKEN: ${{ steps.sandbox-token.outputs.token }}
+        run: ./scripts/doctor.sh --skip-credentials point-source/flywheel-sandbox
+
+      - name: Run e2e suite
+        env:
+          SANDBOX_GH_TOKEN: ${{ steps.sandbox-token.outputs.token }}
+        run: npm run test:e2e
+
+      # Green e2e — mint the publish token from the main FLYWHEEL_GH_APP_ID
+      # (identical scope to flywheel-push.yml) and call the Update Release
+      # API via scripts/publish-draft-release.sh.
+      - name: Mint publish installation token
+        id: publish-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ vars.FLYWHEEL_GH_APP_ID }}
+          private-key: ${{ secrets.FLYWHEEL_GH_APP_PRIVATE_KEY }}
+
+      - name: Publish draft release
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ steps.publish-token.outputs.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          TAG_NAME: ${{ steps.tag.outputs.tag }}
+          EXPECTED_SHA: ${{ steps.sha.outputs.sha }}
+        run: bash scripts/publish-draft-release.sh

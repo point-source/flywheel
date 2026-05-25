@@ -32,38 +32,3 @@ merge a PR from a non-default branch — flywheel runs on `pull_request` and
 Re-scaffold pinned at an exact `@vX.Y.Z` and confirm every flywheel file runs
 at that version.
 
-## Release gate
-
-### §road:release-gate
-
-Set `release_as_draft: true` on the `main` branch in `.flywheel.yml` and
-add `.github/workflows/release-gate.yml`, which triggers on production
-version tag pushes (`v[0-9]+.[0-9]+.[0-9]+` without a prerelease suffix),
-checks out the tagged SHA, runs the existing `npm run test:e2e` suite
-against `point-source/flywheel-sandbox` using the `flywheel-build-e2e` App
-credentials, and on a green result calls GitHub's Update Release API with
-`draft: false` using the main `FLYWHEEL_GH_APP_ID` credentials — also
-removing the `push: branches: ["develop"]` auto-trigger from
-`.github/workflows/e2e.yml` (retaining only `workflow_dispatch`) and
-updating the *flywheel's own releases* paragraph in
-§spec:immutable-release-support to reference this section. Implements
-§spec:release-gate.
-
-**Verify:** Cut a `develop → main` promotion. `flywheel-push.yml` runs
-`semantic-release`, which creates the production release as an unpublished
-draft visible in the repository's releases list and pushes the version
-tag. `release-gate.yml` fires on that tag push, runs the e2e suite, and
-on green calls the Update Release API to publish the draft — at which
-point `release-major-tag.yml` fires on the resulting `release: published`
-event and advances `@v1` to the new version. Force a red gate by running
-`release-gate.yml` via `workflow_dispatch` against a tag whose SHA fails
-e2e (or temporarily breaking the sandbox credential for one run); confirm
-the draft stays unpublished, `@v1` stays at the prior release, and
-adopters pinned to `@v1` continue to consume the previous green release.
-Re-run the gate against the same tag once the underlying issue is
-resolved and confirm the publish step succeeds idempotently; running it
-again after publish is a no-op. Push a commit to `develop` and confirm
-`e2e.yml` no longer auto-triggers (only `integration.yml` and
-`verify-dist.yml` run on develop pushes), but `workflow_dispatch` on
-`e2e.yml` still runs the suite for manual investigation.
-
