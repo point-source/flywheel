@@ -34,16 +34,6 @@ at that version.
 
 ## Sandbox test budget
 
-### §road:e2e-polling-discipline
-
-Raise the default `intervalMs` in `tests/e2e/helpers/poll-until.ts` to a
-value high enough that no scenario exceeds its share of the shared
-sandbox installation's per-run API budget, and audit existing call sites
-in `tests/e2e/scenarios/` and `tests/e2e/helpers/` for any assertion whose
-correctness depends on a fast default — those receive an explicit
-`intervalMs` override at the call site rather than relying on the default.
-Implements §spec:sandbox-test-budget.
-
 ### §road:doc-only-path-filter
 
 Add an in-job `dorny/paths-filter` early-exit to
@@ -60,13 +50,12 @@ success, and neither workflow's logs show a sandbox installation token
 mint or a bundle rebuild step running to completion. Open a separate PR
 that modifies `src/`, `scripts/`, or a non-documentation workflow file;
 both checks run their full pipelines unchanged. Trigger
-`workflow_dispatch` on `e2e.yml` against `develop` after
-§road:e2e-polling-discipline merges; the suite still passes against
-`point-source/flywheel-sandbox`, and the run consumes materially fewer
-API requests than a baseline `git show <pre-change>:tests/e2e/helpers/poll-until.ts`
-default would have permitted. Installation separation remains a contingent
-follow-up — only opened if a subsequent typical development week still
-produces rate-limit-induced failures on the sandbox.
+`workflow_dispatch` on `e2e.yml` against `develop`; the suite still
+passes against `point-source/flywheel-sandbox`, and the run consumes
+materially fewer API requests than the pre-`poll-until.ts`-default-bump
+baseline would have permitted. Installation separation remains a
+contingent follow-up — only opened if a subsequent typical development
+week still produces rate-limit-induced failures on the sandbox.
 
 ## Release gate
 
@@ -83,9 +72,10 @@ removing the `push: branches: ["develop"]` auto-trigger from
 `.github/workflows/e2e.yml` (retaining only `workflow_dispatch`) and
 updating the *flywheel's own releases* paragraph in
 §spec:immutable-release-support to reference this section.
-Depends on §road:e2e-polling-discipline and §road:doc-only-path-filter
-being in place so the structural change ships into a sandbox with budget
-headroom. Implements §spec:release-gate.
+Depends on §road:doc-only-path-filter being in place so the structural
+change ships into a sandbox with budget headroom (the polling-discipline
+half of §spec:sandbox-test-budget has already shipped). Implements
+§spec:release-gate.
 
 **Verify:** Cut a `develop → main` promotion. `flywheel-push.yml` runs
 `semantic-release`, which creates the production release as an unpublished
