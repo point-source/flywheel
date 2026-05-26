@@ -1,0 +1,30 @@
+name: Flywheel (core)
+description: |
+  Internal JavaScript dispatcher for the Flywheel composite action. Adopters
+  must not reference this action directly — invoke point-source/flywheel
+  (the root composite) instead. The root composite invokes this nested
+  action via `uses: ./core`, which under composite-action semantics
+  resolves against flywheel's own checkout at the ref the adopter pinned,
+  keeping the dispatcher in lockstep with the release scripts and
+  semantic-release configuration. See SPEC §spec:action-version-lockstep.
+author: point-source
+inputs:
+  event:
+    description: "Event to handle: 'pull_request' or 'push'."
+    required: true
+  app-id:
+    description: "GitHub App ID (numeric). Forwarded from the root composite action."
+    required: true
+  app-private-key:
+    description: "GitHub App private key in PEM format. Forwarded from the root composite action. Empty on fork PRs — the dispatcher exits cleanly with a notice."
+    required: false
+outputs:
+  token:
+    description: "Minted installation token (masked). Passed back to the root composite so the semantic-release step can authenticate."
+  managed_branch:
+    description: "'true' when the pushed branch should run semantic-release; 'false' otherwise."
+  back_merge_targets:
+    description: "Comma-separated list of upstream branches in the same stream that should receive a back-merge after this branch releases."
+runs:
+  using: node24
+  main: dist/index.cjs

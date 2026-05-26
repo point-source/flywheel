@@ -4,6 +4,12 @@ author: point-source
 branding:
   icon: rotate-cw
   color: blue
+# Composite action. The single `uses: point-source/flywheel@<ref>` in an
+# adopter's workflow checks this action's repository out at <ref>, and
+# every step below runs from that ref — the nested `./core` dispatcher,
+# the bundled `scripts/`, and the semantic-release invocation alike.
+# There is no second version surface for an adopter to keep in sync. See
+# SPEC §spec:action-version-lockstep.
 inputs:
   event:
     description: "Event to handle: 'pull_request' or 'push'."
@@ -17,12 +23,136 @@ inputs:
 outputs:
   token:
     description: "Minted installation token (masked). Pass to downstream steps that need it (e.g. semantic-release)."
+    value: ${{ steps.core.outputs.token }}
   managed_branch:
     description: "'true' when the pushed branch should run semantic-release; 'false' otherwise (branch not in a stream, or branch has release: none)."
+    value: ${{ steps.core.outputs.managed_branch }}
   back_merge_targets:
     description: "Comma-separated list of upstream branches in the same stream that should receive a back-merge after this branch releases. Empty when there are no upstream branches (single-branch stream, or this is the head of its stream)."
-  scripts_dir:
-    description: "Absolute path to the flywheel action's scripts/ directory on the runner. The reusable push workflow uses this to invoke sanitize-release-mentions.sh and back-merge.sh without relying on the caller's checkout containing them. Only set on push events. See #134."
+    value: ${{ steps.core.outputs.back_merge_targets }}
 runs:
-  using: node24
-  main: dist/index.cjs
+  using: composite
+  steps:
+    # Check the adopter's repository out into the runner's working
+    # directory. `fetch-depth: 0` is required for semantic-release on
+    # push events (it walks tag history), and is harmless on
+    # pull_request events. `persist-credentials: false` prevents the
+    # workflow's default GITHUB_TOKEN from being persisted as a git
+    # extraheader — that header would shadow the App installation token
+    # that semantic-release embeds in its push URL, and the default token
+    # has read-only scope here anyway.
+    - name: Checkout adopter repository
+      uses: actions/checkout@v6
+      with:
+        fetch-depth: 0
+        persist-credentials: false
+
+    # Dispatch by event type. Inside a composite action `./core`
+    # resolves against this action's own checkout at the ref the adopter
+    # pinned, so the dispatcher always matches the scripts/ and
+    # semantic-release plugin set below — no second version surface.
+    # See SPEC §spec:action-version-lockstep.
+    - name: Run Flywheel dispatcher
+      id: core
+      uses: ./core
+      with:
+        event: ${{ inputs.event }}
+        app-id: ${{ inputs.app-id }}
+        app-private-key: ${{ inputs.app-private-key }}
+
+    - name: Run semantic-release
+      # Plugins must be co-installed; npx will not resolve them from the
+      # generated .releaserc.json on its own.
+      if: inputs.event == 'push' && steps.core.outputs.managed_branch == 'true'
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ steps.core.outputs.token }}
+      run: |
+        npx --yes \
+          -p semantic-release@24 \
+          -p @semantic-release/commit-analyzer@13 \
+          -p @semantic-release/release-notes-generator@14 \
+          -p @semantic-release/changelog@6 \
+          -p @semantic-release/exec@7 \
+          -p @semantic-release/git@10 \
+          -p @semantic-release/github@11 \
+          semantic-release
+
+    - name: Sanitize @-mentions in release body
+      # Squash-commit messages often contain @-prefixed identifiers
+      # (@semantic-release/exec, @v1 floating tag, @octokit/auth-app, …)
+      # that GitHub's release-page renderer parses as user mentions and
+      # surfaces in the release's "Contributors" sidebar — adding bogus
+      # entries like a "v1" contributor. Wrap any @-mention left in the
+      # body with backticks so GitHub leaves it as code text. See #70.
+      #
+      # Logic lives in scripts/sanitize-release-mentions.sh so it's
+      # lintable (shellcheck in CI) and integration-testable
+      # (tests/sanitize-release-mentions.test.ts). The inline form
+      # halted the 1.1.1 release on a transient 404 race between
+      # `git push --tags` and the release-by-tag lookup; the script
+      # adds retry-with-backoff to close that window. See #130.
+      #
+      # `${{ github.action_path }}` is GitHub Actions' built-in absolute
+      # path to this composite action's own checkout on the runner; it
+      # locates the bundled scripts/ without an action output. See SPEC
+      # §spec:action-version-lockstep.
+      if: inputs.event == 'push' && steps.core.outputs.managed_branch == 'true'
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ steps.core.outputs.token }}
+      run: bash "${{ github.action_path }}/scripts/sanitize-release-mentions.sh"
+
+    - name: Register Flywheel merge drivers
+      # Registers the flywheel-changelog and flywheel-release-file git
+      # merge drivers and writes .git/info/attributes so release
+      # back-merges of derived artifacts (CHANGELOG.md, release_files
+      # paths) auto-resolve instead of hitting the #112 conflict.
+      #
+      # Logic lives in scripts/register-merge-drivers.sh so it's
+      # lintable (shellcheck in CI) and unit-tested
+      # (tests/register-merge-drivers.test.ts). The driver string was
+      # silently broken once (#119); a typo here disables the driver
+      # and every back-merge conflicts — extracted from inline YAML in
+      # #133 to close that hole.
+      if: inputs.event == 'push' && steps.core.outputs.managed_branch == 'true'
+      shell: bash
+      run: bash "${{ github.action_path }}/scripts/register-merge-drivers.sh"
+
+    - name: Back-merge release into upstream branches
+      # Only runs when this push triggered a release (a tag was created at
+      # HEAD by semantic-release) and the stream has upstream branches.
+      # Replays main's chore(release) commit + tag into each upstream via a
+      # true `git merge` so ancestry is preserved and the next prerelease
+      # cycle computes from a synced state. We deliberately do *not* mark
+      # the back-merge commit `[skip ci]`: that token is a workflow-level
+      # filter, which would leave required status checks `Pending` on any
+      # promotion PR tracking the upstream branch. Adopters who want to
+      # skip CI work on back-merge commits should use a job-level `if:` in
+      # their quality workflows (which reports `success` and clears the
+      # gate).
+      #
+      # On unexpected conflict (the merge drivers should make CHANGELOG
+      # and release_files conflict-free, so a failure here means a real
+      # source divergence) we don't push the conflicted state to the
+      # protected upstream branch. We commit the markers on a throwaway
+      # branch and open a flywheel:needs-review PR instead — the previous
+      # behavior was to exit non-zero and stall silently until the next
+      # promotion surfaced the divergence (#112).
+      #
+      # Logic lives in scripts/back-merge.sh so it's lintable (shellcheck
+      # in CI) and integration-testable (tests/back-merge.test.ts) end-to-
+      # end with stubbed gh + a real local git remote. Three of four
+      # production-halting back-merge bugs (#112, #119, #128) lived in
+      # the inline shell that this step used to be — extracted in #128
+      # to close that hole.
+      if: |
+        inputs.event == 'push' &&
+        steps.core.outputs.managed_branch == 'true' &&
+        steps.core.outputs.back_merge_targets != ''
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ steps.core.outputs.token }}
+        BACK_MERGE_TARGETS: ${{ steps.core.outputs.back_merge_targets }}
+        RELEASED_BRANCH: ${{ github.ref_name }}
+      run: bash "${{ github.action_path }}/scripts/back-merge.sh"

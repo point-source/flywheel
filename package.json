@@ -12,7 +12,7 @@
     "test:watch": "vitest",
     "test:integration": "vitest run --config vitest.integration.config.ts --passWithNoTests",
     "test:e2e": "vitest run --config vitest.e2e.config.ts --passWithNoTests",
-    "verify-dist": "node scripts/build.mjs && git diff --exit-code -- dist/",
+    "verify-dist": "node scripts/build.mjs && git diff --exit-code -- core/dist/",
     "sandbox:reset": "node scripts/sandbox-reset.mjs"
   },
   "dependencies": {

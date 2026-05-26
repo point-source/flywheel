@@ -194,7 +194,11 @@ describe("reusable push workflow script invocation", () => {
   //
   // Guard against the bare-relative form coming back. Match `.sh`
   // invocations and require each to be interpolated through the
-  // action's output.
+  // action's output. These checks apply to the legacy v1 reusable
+  // workflows and the dogfood workflows that still mirror them; the
+  // v2 composite action invokes its scripts via `github.action_path`
+  // directly (see "composite action shape" below) and is exercised
+  // by the action-shape assertions.
   for (const file of [".github/workflows/push.yml", ".github/workflows/flywheel-push.yml"]) {
     it(`${file} invokes every flywheel script through steps.flywheel.outputs.scripts_dir`, () => {
       const content = readFile(file);
@@ -212,10 +216,74 @@ describe("reusable push workflow script invocation", () => {
       }
     });
   }
+});
 
-  it("action.yml declares scripts_dir as an output so the workflow can consume it", () => {
+describe("composite action shape (§spec:action-version-lockstep)", () => {
+  // The root action.yml is a v2 composite action that checks the
+  // adopter's repository out, invokes the dispatcher as a nested JS
+  // action (`uses: ./core`), and — on push events — runs
+  // semantic-release and the bundled release scripts. The composite
+  // exists so the adopter's `@<ref>` pin governs every flywheel file
+  // that runs (dispatcher, scripts/, semantic-release plugin set);
+  // dropping `scripts_dir` is the visible signal of that lockstep
+  // because the scripts are no longer addressed through a runtime
+  // output but through `github.action_path`. See SPEC
+  // §spec:action-version-lockstep.
+
+  it("root action.yml is a composite action with no scripts_dir output", () => {
     const content = readFile("action.yml");
-    // The output block is YAML key `scripts_dir:` under `outputs:`.
-    expect(content).toMatch(/outputs:[\s\S]*?\n\s{2}scripts_dir:\s*\n\s{4}description:/);
+    expect(content).toMatch(/runs:\s*\n\s*using:\s*composite/);
+    // scripts_dir was the workaround for the reusable-workflow layer
+    // not being able to name its own ref. The composite addresses
+    // scripts via github.action_path, so the output is gone.
+    expect(content).not.toMatch(/^\s{2}scripts_dir:/m);
+    expect(content).not.toMatch(/scripts_dir/);
+  });
+
+  it("root action.yml invokes the nested dispatcher via ./core and forwards its outputs", () => {
+    const content = readFile("action.yml");
+    // The dispatcher step must be addressed as `./core` (resolved
+    // against this action's own checkout at the pinned ref) and
+    // carry an `id:` so the composite can forward its outputs.
+    expect(content).toMatch(/uses:\s*\.\/core/);
+    expect(content).toMatch(/id:\s*core/);
+    // Every output the legacy node24 action exposed must be forwarded
+    // from the nested core action so callers see no surface change.
+    for (const name of ["token", "managed_branch", "back_merge_targets"]) {
+      expect(content).toMatch(
+        new RegExp(`\\n\\s{2}${name}:[\\s\\S]*?value:\\s*\\$\\{\\{\\s*steps\\.core\\.outputs\\.${name}\\s*\\}\\}`),
+      );
+    }
+  });
+
+  it("root action.yml invokes every release script through github.action_path", () => {
+    const content = readFile("action.yml");
+    // Find every `run:` line that ends in a .sh invocation. Each must
+    // resolve the script through github.action_path so it runs out of
+    // this action's own checkout — not the adopter's working tree,
+    // which doesn't contain scripts/.
+    const runShLines = content
+      .split("\n")
+      .filter((line) => /^\s*run:\s*.*\.sh\b/.test(line));
+    expect(runShLines.length).toBeGreaterThan(0);
+    for (const line of runShLines) {
+      expect(line).toContain("github.action_path");
+      expect(line).not.toContain("scripts_dir");
+      expect(line).not.toMatch(/run:\s*bash\s+scripts\//);
+    }
+  });
+
+  it("core/action.yml is the JS dispatcher (node24, dist/index.cjs) and declares the dispatcher outputs", () => {
+    const content = readFile("core/action.yml");
+    expect(content).toMatch(/runs:\s*\n\s*using:\s*node24/);
+    expect(content).toMatch(/main:\s*dist\/index\.cjs/);
+    // The dispatcher emits these for the root composite to forward.
+    for (const name of ["token", "managed_branch", "back_merge_targets"]) {
+      expect(content).toMatch(new RegExp(`\\n\\s{2}${name}:\\s*\\n\\s{4}description:`));
+    }
+    // scripts_dir was dropped at the same time the composite landed —
+    // the dispatcher no longer needs to point release steps at an
+    // absolute path because the composite uses github.action_path.
+    expect(content).not.toMatch(/scripts_dir/);
   });
 });

@@ -2,15 +2,6 @@
 
 ## Composite-action distribution
 
-### §road:composite-action-core
-
-Restructure the root `action.yml` into a composite action that checks out
-the adopter repository, runs the dispatch logic as a nested `core/`
-JavaScript action, and on push events runs `semantic-release` and the
-`github.action_path`-located release scripts — dropping the `scripts_dir`
-output — across `action.yml`, `core/`, the esbuild/`verify-dist` build
-pipeline, and the affected unit tests. Implements §spec:action-version-lockstep.
-
 ### §road:composite-action-adoption
 
 Migrate the adopter surface to the composite action — rewriting

@@ -2,7 +2,7 @@ import * as core from "@actions/core";
 import * as github from "@actions/github";
 import { readFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { join } from "node:path";
 
 import { mintInstallationToken } from "./auth.js";
 import { loadConfig } from "./config.js";
@@ -109,25 +109,6 @@ async function run(): Promise<void> {
 
   if (event === "push") {
     const branchRef = github.context.ref.replace(/^refs\/heads\//, "");
-
-    // Reusable workflow push.yml invokes scripts/sanitize-release-mentions.sh
-    // and scripts/back-merge.sh after this step. Adopters call that workflow
-    // from a thin caller, so `actions/checkout` populates the working
-    // directory with the *adopter's* repo — not flywheel's — and a bare
-    // `bash scripts/<name>.sh` exits 127. Export an absolute path back to
-    // the action's own scripts/ directory so the workflow can call them
-    // without relying on the caller's checkout. See #134.
-    //
-    // `process.argv[1]` is the absolute path the runner invoked the bundle
-    // with (`/home/runner/work/_actions/.../dist/index.cjs` on hosted
-    // runners). We can't use `import.meta.url` here because esbuild bundles
-    // to CJS and leaves `import.meta` empty in that format; `__dirname`
-    // would work in the CJS bundle but isn't available in the TS source
-    // (NodeNext + `type: module`). `argv[1]` sidesteps both constraints.
-    const bundlePath = process.argv[1];
-    if (bundlePath) {
-      core.setOutput("scripts_dir", resolve(dirname(bundlePath), "..", "scripts"));
-    }
 
     // Sync rulesets when .flywheel.yml changed on a stream branch — keeps
     // the managed-branches ruleset's include array aligned with the config
