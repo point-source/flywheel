@@ -37,14 +37,14 @@ if (!actionRef) throw new Error("FLYWHEEL_ACTION_REF is not set");
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 
 // Source the dogfood inline workflows, not scripts/templates/. The
-// templates are now thin callers of point-source/flywheel/.github/workflows/
-// {pr,push}.yml@<ref>, and the reusable workflow file at <ref> hardcodes
-// `point-source/flywheel@v1` — meaning sandbox e2e of an arbitrary SHA
-// would test the action at v1 (released), not the SHA under test. The
-// dogfood files use `uses: ./`, so we rewrite that to
-// `point-source/flywheel@<sha>` to pin the action at the SHA under test.
-// The dogfood inline shell is kept in lockstep with the reusable
-// workflow body by tests/workflow-template-parity.test.ts.
+// templates pin `point-source/flywheel@__FLYWHEEL_VERSION__`, which
+// init.sh stamps to the latest released major — meaning sandbox e2e of
+// an arbitrary SHA would test the action at that major (released), not
+// the SHA under test. The dogfood files use `uses: ./`, so we rewrite
+// that to `point-source/flywheel@<sha>` to pin the action at the SHA
+// under test. The dogfood (with `./`) and the adopter template (with
+// `@__FLYWHEEL_VERSION__`) intentionally diverge on this one line; the
+// adopter-template shape is asserted by tests/action-shape.test.ts.
 const pinAction = (yaml) =>
   yaml.replace(/uses:\s*\.\//g, `uses: point-source/flywheel@${actionRef}`);
 const pushTpl = pinAction(

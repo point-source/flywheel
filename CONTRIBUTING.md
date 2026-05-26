@@ -144,11 +144,11 @@ When your change could meaningfully break adopters (schema changes, validation s
            - name: main
              auto_merge: [fix, chore, docs]
    ```
-3. Copy `flywheel-pr.yml` / `flywheel-push.yml` from [`docs/adopter/setup.md`](./docs/adopter/setup.md), but flip the reusable workflow ref to your fork's branch:
+3. Copy `flywheel-pr.yml` / `flywheel-push.yml` from [`docs/adopter/setup.md`](./docs/adopter/setup.md), but flip the composite action ref to your fork's branch:
    ```yaml
-   uses: <your-handle>/flywheel/.github/workflows/pr.yml@<your-branch>
+   uses: <your-handle>/flywheel@<your-branch>
    ```
-   The reusable workflow at that ref hardcodes its action ref to `point-source/flywheel@v1`, so to test your fork's action code as well you also need to either (a) edit `pr.yml` / `push.yml` on your fork's branch to reference `<your-handle>/flywheel@<your-branch>`, or (b) inline the workflow shell instead of calling the reusable workflow. Push your branch (with a freshly built `dist/index.cjs`) so GitHub Actions can resolve the refs.
+   That single pin governs every flywheel file the sandbox will exercise — your fork's `action.yml`, `core/dist/index.cjs`, and `scripts/`. Push your branch (with a freshly built `core/dist/index.cjs`) so GitHub Actions can resolve the ref.
 4. Configure App credentials (`FLYWHEEL_GH_APP_ID` repo Variable + `FLYWHEEL_GH_APP_PRIVATE_KEY` repo Secret) using either `scripts/init.sh` from your sandbox repo or the manual steps in [`docs/adopter/setup.md`](./docs/adopter/setup.md#1-create-a-github-app).
 5. Open a PR with title `chore: smoke test` and confirm the rewrite + label + auto-merge behaviour.
 6. Merge it. Confirm the push triggers `semantic-release` and produces a tag + GitHub Release.

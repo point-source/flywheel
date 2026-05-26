@@ -24,7 +24,7 @@ You should not need to touch this. It runs automatically. The only manual case i
 
 The first release of Flywheel cannot use the marketplace listing because the listing doesn't exist yet. The bootstrap order is:
 
-1. **Land the dogfood commit** with workflows still on `uses: ./` (local action ref).
+1. **Land the dogfood commit** with workflows on `uses: ./` (local action ref). The dogfood workflows under `.github/workflows/flywheel-{pr,push}.yml` keep this pin permanently so PRs exercise the composite action source under review on every event; the *adopter* templates under `scripts/templates/flywheel-{pr,push}.yml` pin `uses: point-source/flywheel@__FLYWHEEL_VERSION__` and `init.sh` stamps the placeholder.
 2. **Open and merge a PR `rewrite/flywheel → main`.** semantic-release runs on the push to `main`, cuts `v1.0.0`, creates the GitHub Release.
 3. **Manually create the floating `v1` tag** pointing at `v1.0.0`:
 
@@ -34,7 +34,8 @@ The first release of Flywheel cannot use the marketplace listing because the lis
    ```
 
 4. **Submit to the marketplace** via the GitHub UI on the v1.0.0 release page. Required: `action.yml` with `name`, `description`, `branding` (already present).
-5. **Open a follow-up PR** flipping `flywheel-pr.yml` and `flywheel-push.yml` from `uses: ./` to `uses: point-source/flywheel@v1`. From here on, flywheel consumes itself from the marketplace, and the `release-major-tag.yml` workflow keeps the floating major tag updated automatically.
+
+From here on, adopter `init.sh` runs stamp the floating major (currently `v2`) into the adopter caller templates, and `release-major-tag.yml` advances the floating major tag automatically on every release.
 
 ## Versioning across streams
 
