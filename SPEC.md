@@ -58,7 +58,7 @@ the reusable push workflow needed (#134) is therefore unnecessary.
 ref it was pinned at: GitHub resolves `github.workflow_ref` from the
 workflow that *triggered the run*, never from a reusable workflow it calls,
 and exposes no other context for a reusable workflow's own pin. Any design
-that keeps a reusable-workflow layer must therefore derive that ref
+that keeps a reusable-workflow layer shall therefore derive that ref
 (impossible to do correctly) or carry the version a second time. A
 composite action invoked directly by the adopter has no such layer — GitHub
 performs the version resolution as part of `uses:`. Removing the reusable
@@ -82,7 +82,7 @@ the entire failure class.
   optional input carrying the action ref. This resolves the checkout
   failure, but leaves two version surfaces on the caller (the workflow pin
   and the input) that can drift, and a hardcoded major literal in each
-  reusable workflow that a maintainer must bump per major release. It is
+  reusable workflow that a maintainer shall bump per major release. It is
   sound as an interim measure (see *Interim delivery*) but is rejected as
   the end state: it does not remove the reusable-workflow layer that causes
   the problem.
@@ -189,7 +189,7 @@ release immutable, and the build is the only actor that knows the
 artifact is attached. flywheel does not track, wait on, or publish the
 draft itself — it stays stateless. §req:quality-attributes
 
-A build that must attach an asset *before* publication cannot be
+A build that shall attach an asset *before* publication cannot be
 triggered by the `release` event: GitHub does not fire `release` events
 for draft releases. The reliable pre-publication signal is the release
 tag push. An opt-in branch's build therefore triggers on `push:` of
@@ -240,7 +240,7 @@ releases it has handed off, which this design specifically avoids.
 
 - *Top-level default with per-branch override.* Two configuration
   surfaces invite drift, and the effective behavior of a branch can no
-  longer be read from that branch's own block — a reader must look up
+  longer be read from that branch's own block — a reader shall look up
   the top-level default and combine the two. Per-branch-only keeps every
   branch's draft behavior local to its declaration.
 
@@ -397,7 +397,7 @@ identical to `flywheel-push.yml`) for the publish API call. No new
 secrets. §req:ci-quality-attributes
 
 **Concurrency.** Serializes per tag with `cancel-in-progress: false`
-— a partial publish must not be cancelled. Cross-tag concurrency is
+— a partial publish shall not be cancelled. Cross-tag concurrency is
 unconstrained.
 
 **Statelessness.** flywheel holds no state between draft-creation
