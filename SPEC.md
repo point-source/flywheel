@@ -375,6 +375,21 @@ manual investigation. Integration tests, unit tests, and verify-dist
 still run on every PR; the e2e signal exists only at release time,
 which is where adopters consume it. §req:ci-priorities
 
+**Promotion cadence.** The budget savings above hold only if a
+`develop → main` promotion fires at the maintainer's chosen cadence,
+not on every bumping push to `develop`. Each bumping promotion
+triggers semantic-release on `main`, which fires `release-gate.yml`
+and consumes one e2e run against the shared sandbox installation —
+auto-merging every bumping promotion makes that cadence equal to the
+develop-push cadence, undoing the savings. flywheel's `.flywheel.yml`
+therefore lists only non-bumping types (`chore`, `refactor`, `style`,
+`test`, `docs`, `ci`, `build`) in `main`'s `auto_merge`; bumping types
+(`feat`, `fix`, `fix!`, `perf`) require manual review so a maintainer
+decides when a batch of develop activity is worth a release. Non-bumping
+promotions still flow automatically because semantic-release computes
+no version bump for them and no release fires — they cost nothing.
+§req:ci-priorities
+
 **Red-candidate behavior.** A red gate run leaves the release as an
 unpublished draft in the releases UI. flywheel does not retry,
 auto-publish, or auto-clean. Recovery paths:
