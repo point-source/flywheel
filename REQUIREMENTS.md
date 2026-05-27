@@ -1,13 +1,13 @@
 # flywheel — Requirements
 
-<!-- Problem-space document. Each ## section carries a §req:slug suffix. -->
+<!-- Problem-space document. Each ## section carries a `§req:` slug suffix. -->
 <!-- Run /symphonize:discover to populate through a structured interview. -->
 <!-- This document covers two independent problem areas: -->
 <!--   - Immutable-release support (§req:problem-statement and the standard -->
 <!--     section slugs below) -->
 <!--   - Sandbox CI sustainability and release safety -->
-<!--     (§req:sandbox-ci-budget, §req:release-safety-gate, and the §req:ci-* -->
-<!--     and §req:*-criteria slugs that follow) -->
+<!--     (§req:sandbox-ci-budget, §req:release-safety-gate, and the `§req:ci-*` -->
+<!--     and `§req:*-criteria` slugs that follow) -->
 
 ## Problem statement §req:problem-statement
 

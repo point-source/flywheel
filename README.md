@@ -64,6 +64,10 @@ See **[docs/adopter/setup.md](./docs/adopter/setup.md)** for the full setup walk
 
 > **Contributing to a repo that already uses Flywheel?** You don't need to read any of the above. Start with [docs/adopter/contributing-to-a-flywheel-repo.md](./docs/adopter/contributing-to-a-flywheel-repo.md) — a one-page, config-independent TLDR aimed at contributors, not adopters.
 
+## Usage
+
+After adoption Flywheel runs implicitly on every `pull_request` and `push` against a managed branch — there are no commands to invoke. See [How it works](#how-it-works) for the event-by-event flow, and [docs/adopter/contributing-to-a-flywheel-repo.md](./docs/adopter/contributing-to-a-flywheel-repo.md) for a one-page contributor primer.
+
 ## How it works
 
 ```text
