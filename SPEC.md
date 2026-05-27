@@ -489,3 +489,220 @@ workflow trusts the tag pointer the same release pipeline pushed.
 The publish step calls a single authenticated GitHub API endpoint
 with a token already scoped to `point-source/flywheel`. No new
 attack surface beyond what `flywheel-push.yml` already exposes.
+
+## Release CI budget §spec:release-ci-budget
+
+*Status: not started*
+
+Every flywheel release produces three pushes on managed branches in
+rapid succession — the human merge that initiates the release, the
+`chore(release): X.Y.Z` commit semantic-release pushes onto the
+release branch, and the `chore: back-merge vX.Y.Z from <release>
+into <upstream>` merge commit pushed into each upstream branch.
+The merge push is the one quality workflows exist to verify; its
+result decides whether the release commit gets created at all. The
+release commit and back-merge commits are derived artifacts —
+semantic-release produces them from a SHA the merge push already
+certified green, they touch only `CHANGELOG.md`, version stamps,
+and the equivalents replayed onto upstream branches, and re-running
+the same quality workflows against them cannot produce a different
+verdict. This section gives adopters a primitive to short-circuit
+quality workflows on those derived pushes while preserving every
+required check's reported result. §req:release-ci-budget
+
+**Mechanism.** Flywheel ships a lightweight composite action at
+`point-source/flywheel/classify@v1` that any workflow can `uses:`
+as a step. It runs no checkout, mints no token, and consumes no API
+budget — it reads `github.event` and emits two boolean step outputs:
+
+- `derived_release_commit` — `'true'` when the head commit is a
+  flywheel-produced release commit or back-merge merge commit;
+  `'false'` otherwise.
+- `promotion_pr` — `'true'` when the workflow is running for the
+  long-lived develop→main promotion PR; `'false'` otherwise.
+
+The two outputs are independent. Adopters who want to skip work on
+release/back-merge commits but still run quality checks on the
+promotion PR (the common case, since the promotion PR carries the
+batch of work the maintainer is releasing) gate on
+`derived_release_commit` alone. Adopters who additionally want to
+skip the promotion PR opt into that separately. The split exists
+because adopters polarize on the second decision in a way they do
+not on the first. §req:release-ci-budget-criteria
+
+**Identification rule.** A commit is a "derived release commit"
+iff its author identity is `github-actions[bot]` *and* its message
+begins with one of two prefixes: `chore(release): ` (semantic-
+release version commit) or `chore: back-merge ` (flywheel's
+back-merge merge commit, format `chore: back-merge vX.Y.Z from
+<branch> into <branch>`). The promotion PR is identified by its
+title containing `: promote ` — the format flywheel itself emits
+when opening the long-lived promotion PR. These three patterns are
+declared as part of flywheel's stable public surface in this
+section; flywheel's release and back-merge code paths shall not
+change them without a corresponding major-version bump. The rule
+lives on flywheel's side of the interface — adopters consume the
+boolean and do not need to know the patterns to use it correctly.
+§req:ci-constraints
+
+**Trigger-payload coverage.** The composite reads the head commit
+from whichever payload field the current trigger populates:
+`github.event.head_commit` on `push`, `github.event.merge_group
+.head_commit` on `merge_group`, and falls back to checking
+`github.event.pull_request.title` for the promotion-PR signal on
+`pull_request` triggers (`pull_request` payloads carry no commit
+message). The correct payload field is implementation detail the
+composite handles; adopters specify only which workflow triggers
+they wire up. A workflow that runs on all three triggers gets
+correct classification on each without conditional logic in the
+adopter's `if:` clause. §req:release-ci-budget-criteria
+
+**Observable behavior.** An adopter who adds the composite as a
+first step and gates downstream jobs (or steps) on its outputs
+observes one CI fan-out per release cycle on each gated workflow —
+the fan-out from the human merge that initiated the release. The
+subsequent `chore(release):` push and `chore: back-merge` push
+trigger the workflow run, run the composite (which costs
+sub-second), report each downstream job as a successful no-op via
+the `if:` skip, and complete. An adopter who has not added the
+composite observes today's behavior unchanged on every workflow.
+§req:release-ci-budget-criteria
+
+**Required-check preservation.** Skipping happens at job-level
+`if:` (or step-level `if:` within a job), not at workflow-level
+`paths-ignore` or `[skip ci]`. GitHub reports the job's result as
+`success` when its `if:` evaluates false (per its required-status-
+check semantics), so any branch-protection rule expecting that
+check name continues to clear. Workflow-level filtering would
+cause GitHub to never report the check and would stall any
+tracking PR's required-check rule on `Pending` — the same
+constraint that already governs the doc-only filtering in
+§spec:sandbox-test-budget. §req:ci-constraints
+
+**Dogfood — flywheel's own quality workflows.** The three quality
+workflows in this repository that fire on `push` — `integration
+.yml`, `verify-dist.yml`, and `governance-lint.yml` — gate their
+work on the `derived_release_commit` output of this composite.
+`integration.yml` and `verify-dist.yml` add the composite as a
+step alongside their existing `dorny/paths-filter` step and AND
+the two filter outputs into each gated step's `if:` clause.
+`governance-lint.yml` is a one-job workflow that delegates to a
+reusable workflow via `jobs.<id>.uses:`, which forbids steps in
+the same job; it gains a tiny preceding `classify` job that runs
+the composite and exposes the boolean as a job output, and the
+lint job adds `needs: classify` plus `if: needs.classify.outputs
+.derived_release_commit != 'true'`. A subsequent vX.Y.Z release on
+`point-source/flywheel` produces one fan-out per workflow rather
+than two or three. §req:release-ci-budget-criteria
+
+The promotion PR's `: promote ` signal is not used by these
+workflows — they trigger on `push`, not on the promotion PR — so
+`integration.yml` / `verify-dist.yml` / `governance-lint.yml` gate
+on `derived_release_commit` only. The `promotion_pr` output is
+still exposed for adopters whose quality workflows trigger on
+`pull_request` and want the option.
+
+**Scaffolded template update.** `scripts/templates/quality.yml`
+currently inlines the message-prefix and PR-title patterns into
+its job-level `if:` clause. The template is updated to invoke
+`point-source/flywheel/classify@v1` as a first step and gate the
+job on its outputs, with the same effective behavior. The inline
+form is preserved in a comment as a documented fallback for
+adopters who prefer not to add an action invocation. New adopters
+who run `scripts/init.sh` (or copy the template manually) receive
+the composite-based pattern by default. §req:release-ci-budget-criteria
+
+**Adopter scope of opt-in.** The composite is added per workflow
+and per job: an adopter can gate `integration` on the boolean
+while keeping `typecheck` running on every push, or apply it to
+every job in a workflow file uniformly. The granularity matches
+where the `if:` clause is placed; flywheel imposes no top-level
+opt-in surface. Adopters who want strict CI on every push remain
+in that mode by adding nothing. §req:release-ci-budget-criteria
+
+**Versioning surface.** The composite action ships at
+`point-source/flywheel/classify@v1` and floats its major tag in
+lockstep with the main `point-source/flywheel@v1` action. Adopters
+typically pin both to the same `@v1`. The identification rule and
+the boolean output names are part of the major's stable surface;
+changes that would alter what the boolean returns for a given
+commit shape (e.g., changing the back-merge message prefix)
+require a major bump on both actions.
+§spec:action-version-lockstep
+
+**Alternatives rejected.**
+
+- *Add the output to the main flywheel action only.* The main
+  action mints an App installation token and runs the dispatch
+  logic; carrying that overhead into every quality workflow that
+  wants to gate on a sub-second classification is wasteful and
+  pulls the App credentials into workflows that have no other
+  reason to hold them. A separate composite costs nothing to add
+  to a workflow that already runs `npm test`.
+
+- *Document the message-prefix patterns and have adopters write
+  the `if:` themselves.* This is today's state (the
+  `scripts/templates/quality.yml` inline pattern). It works but
+  violates the requirement that adopters not mirror flywheel's
+  internal authorship and message conventions in their own
+  workflows — an adopter pinned to `@v1` who never reads
+  flywheel's source has no way to know the back-merge prefix is
+  `chore: back-merge` and not, say, `chore: backmerge`. The
+  composite moves the rule to flywheel's side of the interface.
+  §req:ci-constraints
+
+- *Fold release/back-merge and promotion-PR into one
+  `skip_check` output.* Adopters polarize on the promotion-PR
+  decision in a way they do not on the release/back-merge
+  decision — some want every promotion PR fully exercised because
+  it carries the batch of work being released, others want it
+  skipped because they already exercised every constituent PR.
+  Folding the two into one output forces a single choice on every
+  adopter.
+
+- *Per-step micro-granularity via additional outputs.* The two
+  booleans plus job-level / step-level `if:` placement cover the
+  observed need. Adopters who want to gate individual steps add
+  the same `if:` to each step; the composite outputs the booleans
+  once per job. Adding more granular outputs (e.g.,
+  `is_chore_release` and `is_back_merge` separately) would expose
+  internal distinctions adopters have no documented reason to
+  branch on.
+
+- *Auto-injecting the gate into adopter quality workflows from
+  `init`.* `scripts/init.sh` scaffolds `flywheel-pr.yml` and
+  `flywheel-push.yml` but not adopters' quality workflows — the
+  quality workflow is the adopter's. Updating `quality.yml`-the-
+  template ensures new copies carry the pattern; mass-rewriting
+  workflows the adopter authored crosses a scope line `init`
+  doesn't otherwise cross.
+
+**Tradeoffs accepted.**
+
+- A new versioned action surface (`point-source/flywheel/classify`)
+  exists alongside the main action. The major tag floats with the
+  main action's, and the identification rule lives in a single
+  small file; the maintenance surface is bounded. Accepted to
+  keep adopter overhead near zero per workflow.
+
+- The back-merge merge-commit message format (`chore: back-merge
+  vX.Y.Z from <branch> into <branch>`) and the release-commit
+  prefix (`chore(release): `) become part of flywheel's stable
+  public surface, formally locking them to the major version.
+  Changing either becomes a breaking change. Accepted: both
+  formats have been stable since the relevant features shipped,
+  and the composite encapsulates them so adopters never see them.
+
+- The bot identity check (`github-actions[bot]`) means a
+  hand-authored commit with a `chore(release):` or `chore:
+  back-merge` message — vanishingly rare in practice, and
+  conventionally avoided by the same maintainers who would invoke
+  flywheel — is correctly classified as non-derived. Adopters who
+  want to also skip such commits add their own broader `if:`
+  alongside the composite's output; the composite stays narrow
+  and unambiguous.
+
+**Security.** The composite reads `github.event` (workflow-
+provided, not adopter-controlled) and emits string outputs. It
+mints no token, makes no API call, and reads no secrets. No new
+attack surface.
