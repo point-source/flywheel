@@ -1,7 +1,12 @@
 name: E2E tests
+# Manual-only since the release gate landed (see §spec:release-gate).
+# Production releases route their e2e signal through release-gate.yml,
+# which runs the full suite against the tagged SHA before publishing
+# the draft release. Develop pushes no longer auto-trigger e2e here;
+# the rate-limit budget that bought (see §spec:sandbox-test-budget) is
+# what makes a per-release gate viable. workflow_dispatch is retained
+# for manual investigation runs.
 on:
-  push:
-    branches: ["develop"]
   workflow_dispatch:
 
 concurrency:

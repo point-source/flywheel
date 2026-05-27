@@ -143,7 +143,15 @@ export async function waitForRunAfter(
     },
     (run): run is WorkflowRunSummary => run !== null && run.status === "completed",
     {
-      intervalMs: options.intervalMs ?? 5000,
+      // Pass `intervalMs` through only when the caller supplied one — otherwise
+      // inherit `pollUntil`'s centralized default. Keeping a local fallback
+      // here would create a second source of truth for per-poll cost and
+      // defeat the single-file budget rule in §spec:sandbox-test-budget.
+      // `waitForRunAfter`'s correctness does not depend on a particular
+      // polling frequency: it observes a workflow run reaching a terminal
+      // state, and the 120 s default timeout absorbs the slower default
+      // cadence (≤ 12 polls vs. the previous ≤ 24).
+      intervalMs: options.intervalMs,
       timeoutMs: options.timeoutMs ?? 120_000,
       description:
         `${workflow} run on ${branch} after id ${sinceId} to complete with conclusion in ` +

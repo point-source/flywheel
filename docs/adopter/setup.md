@@ -416,6 +416,60 @@ The first two clauses resolve only on the `merge_group` trigger — `pull_reques
 
 If your test suite specifically validates a release artifact (e.g. you build and smoke-test the published package), delete the `if:` clause for `chore(release):` so those commits run the full check. The other two clauses are safe to leave on for almost any adopter.
 
+#### Skipping required checks on doc-only (or other path-scoped) changes
+
+A PR that only touches `docs/`, `README.md`, or `.github/ISSUE_TEMPLATE/` cannot affect the result of a unit-test or integration-test suite. Running the suite anyway burns CI minutes — and in repos where the suite spends a rate-limit-bucketed resource (a sandbox GitHub App installation, a shared CI account, an external service quota), every doc-only run also draws down a budget that the next real change might need. The natural reflex is GitHub Actions' workflow-level `paths-ignore`, but it does not compose with required status checks.
+
+**Why workflow-level `paths-ignore` breaks required checks.** When a workflow's `on.pull_request.paths-ignore` filters a PR out, the workflow does not run, so the check never reports. Branch protection then waits forever on a required check that will never arrive, and the PR is unmergeable until you push a non-ignored change or manually waive the rule. The same trap applies to `paths:`. Skipping has to happen *inside* the job, where the check still reports its name with a successful conclusion.
+
+The pattern: run a path-filter step early in the job, then gate the expensive steps on its output. The job still runs and still reports its check name as `success`, so required-check rules stay satisfied.
+
+```yaml
+name: quality
+on:
+  pull_request:
+  merge_group:
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      # `non_docs` is true iff at least one changed file is NOT a doc path.
+      # predicate-quantifier: 'every' requires a file to match every pattern
+      # in the filter (with negations) before counting as a hit — so
+      # non_docs == 'true' precisely when a non-doc file changed. A PR
+      # mixing doc and non-doc changes runs the full suite.
+      - name: Detect non-doc changes
+        id: filter
+        uses: dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d # v4.0.1
+        with:
+          predicate-quantifier: 'every'
+          filters: |
+            non_docs:
+              - '**'
+              - '!docs/**'
+              - '!*.md'
+              - '!.github/ISSUE_TEMPLATE/**'
+
+      - uses: actions/setup-node@v4
+        if: steps.filter.outputs.non_docs == 'true'
+        with:
+          node-version: "24"
+      - run: npm ci
+        if: steps.filter.outputs.non_docs == 'true'
+      - run: npm test
+        if: steps.filter.outputs.non_docs == 'true'
+```
+
+Three things to call out about this shape:
+
+- **Mixed PRs run the full suite.** `predicate-quantifier: 'every'` combined with negation patterns means `non_docs` is `true` whenever *any* changed file falls outside the ignore list. A PR that edits both `src/foo.ts` and `README.md` runs the suite unchanged — the safe default. Removing `predicate-quantifier: 'every'` inverts this: the filter then matches any file passing any pattern, and a mixed PR would skip the suite. Keep `every` unless you have a specific reason.
+- **It composes with the bot-commit `if:` from the previous section.** The job-level `if:` (skip on `chore(release):` / `chore: back-merge` / `: promote ` PRs) and the step-level `if:` (skip expensive steps on doc-only PRs) are independent — either one short-circuits, both report `success`, the required-check rule stays green.
+- **Worked examples live in this repo.** Flywheel's own [`integration.yml`](https://github.com/point-source/flywheel/blob/develop/.github/workflows/integration.yml) and [`verify-dist.yml`](https://github.com/point-source/flywheel/blob/develop/.github/workflows/verify-dist.yml) use exactly this pattern (#200). Copy the step verbatim and adjust the filter list to whatever paths your suite genuinely doesn't care about — typically docs, but the same shape works for any subpath whose changes can't move your check's outcome (`examples/`, `assets/`, `LICENSE`, etc.).
+
+When *not* to bother: if the gated steps total a few seconds, the path-filter step itself costs about the same — the filter is amortizing real cost (a multi-minute test suite, a rate-limited external call, a long build), not shaving milliseconds. For a 3-second lint, just run it.
+
 > **Existing project?** If managed branches already have protection rules or rulesets, you have two options: (a) re-run `apply-rulesets.sh` (below), which replaces them with Flywheel-compatible rulesets that include the App as bypass actor; or (b) edit existing rules in place via the GitHub UI and add the Flywheel App to the bypass list with `bypass_mode: always`. See [§0.3](#03-confirm-bot-identity-can-push-to-protected-branches) for the full list of rules that need bypass.
 
 ### Recommended rulesets
