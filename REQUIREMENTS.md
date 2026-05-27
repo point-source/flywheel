@@ -37,7 +37,7 @@ publish. flywheel's single-step publish leaves no window for that.
 flywheel also cannot solve this by detection. Whether an adopter's build
 attaches an artifact is decided in a build workflow that lives in the
 adopter's repository and that flywheel never reads — flywheel runs as an
-action and has no visibility into a sibling workflow. The behavior must be
+action and has no visibility into a sibling workflow. The behavior shall be
 *declared*, not inferred.
 
 An adopter's release branches do not all attach artifacts: a repo may
@@ -46,8 +46,8 @@ or attach a snapshot to `develop` and a different artifact (or none) to
 `main`. A repo-wide opt-in would force every release branch into the draft
 flow, even branches whose releases carry no artifacts — and once a release
 is a draft, GitHub stops firing `release: published` for it, so the adopter
-must add and maintain a publish-trigger workflow for branches that would
-otherwise need none. The scope of the opt-in must match the scope at which
+shall add and maintain a publish-trigger workflow for branches that would
+otherwise need none. The scope of the opt-in shall match the scope at which
 the decision actually varies, which is per release branch.
 
 Separately, flywheel's own releases on `point-source/flywheel` should be
@@ -72,7 +72,7 @@ guarantee it expects adopters to depend on.
   unpublished drafts never corrupt version computation. This holds whether
   the concurrent releases come from one branch or from a mix of draft and
   immediate-publish branches. (semantic-release derives the next version
-  from git tags, not from release objects; the tag must still be created
+  from git tags, not from release objects; the tag shall still be created
   and pushed on every run even when the release object is left unpublished.)
 - The behavior is selected by an explicit per-branch setting visible in
   flywheel's configuration alongside the branch's other release attributes —
@@ -118,7 +118,7 @@ guarantee it expects adopters to depend on.
   imposes new build-side responsibilities on that branch (a publish-trigger
   workflow, a publish-as-final-step). Opting in branches that do not need
   this imposes work the adopter does not benefit from. The configuration
-  surface must let an adopter scope the opt-in to exactly the branches that
+  surface shall let an adopter scope the opt-in to exactly the branches that
   attach artifacts, and no more.
 - **Statelessness preserved.** flywheel does not track or wait on a release
   after creating it unpublished. Creating the unpublished release is the end
@@ -126,8 +126,8 @@ guarantee it expects adopters to depend on.
   and performing the publish.
 - **Correctness under concurrency.** Version computation depends only on git
   tags, so overlapping unpublished draft releases are safe.
-- **Supply-chain integrity.** A published immutable release must still carry
-  the attestation GitHub generates; flywheel must do nothing that prevents it.
+- **Supply-chain integrity.** A published immutable release shall still carry
+  the attestation GitHub generates; flywheel shall do nothing that prevents it.
 - **No new privilege.** Supporting this requires no additional GitHub App
   scopes or permissions beyond what flywheel already holds.
 
@@ -146,16 +146,16 @@ guarantee it expects adopters to depend on.
   adopters legitimately attach artifacts to prereleases (snapshots,
   nightlies) as well as productions.
 - flywheel cannot inspect an adopter's build workflow. Whether a build
-  attaches an artifact is unknowable to flywheel and must be declared
+  attaches an artifact is unknowable to flywheel and shall be declared
   explicitly in flywheel's configuration, never detected or inferred.
 - GitHub immutable releases freeze a release's tag and assets at publish
-  time; any artifact must be attached while the release is still an
+  time; any artifact shall be attached while the release is still an
   unpublished draft.
 - The `release: published` event does not fire for unpublished releases. An
-  adopter's build that must attach an artifact triggers on release creation
+  adopter's build that shall attach an artifact triggers on release creation
   instead, and performs the publish itself as its final step.
 - flywheel's release path runs on `semantic-release`; whatever delivers the
-  unpublished-release behavior must work within that pipeline and must not
+  unpublished-release behavior shall work within that pipeline and shall not
   disturb tag creation, on which version computation depends.
 
 ## Priorities §req:priorities
@@ -247,7 +247,7 @@ cadence has so far masked from each other.
   by the maintainer — flywheel does not retry, auto-publish, or paper
   over a failure.
 - The gate is observable: a maintainer reading the repository can
-  identify the candidate, the check that must pass, and the publish step
+  identify the candidate, the check that shall pass, and the publish step
   that a green result unlocks.
 - Adopters pinned to `@v1` observe no behavior change for green releases
   (same trigger, same timing) and no new opt-in is required to consume
@@ -269,7 +269,7 @@ cadence has so far masked from each other.
 ## CI quality attributes §req:ci-quality-attributes
 
 - **Stateless gate.** Whatever holds a release back until e2e is green
-  must not require flywheel to hold state between runs. The repository's
+  shall not require flywheel to hold state between runs. The repository's
   branches, tags, check runs, and release objects are the state machine,
   mirroring the principle applied to `release_as_draft`
   (§req:quality-attributes).
@@ -278,9 +278,9 @@ cadence has so far masked from each other.
   builds.
 - **Single sandbox.** Provisioning additional sandbox repositories is
   out of scope. The rate-limit budget on the existing installation is
-  fixed; mitigations must work within it.
+  fixed; mitigations shall work within it.
 - **Parallel-agent safe.** This repository is routinely worked on by
-  multiple agents in parallel. CI mitigations must not introduce a
+  multiple agents in parallel. CI mitigations shall not introduce a
   single-writer bottleneck that serializes that work.
 
 ## CI constraints §req:ci-constraints
@@ -291,10 +291,10 @@ cadence has so far masked from each other.
   installed alongside) but expands the maintenance surface of the
   sandbox setup.
 - Required-check rules on the repository expect specific named checks to
-  report a result. Workflows that skip on doc-only changes must continue
+  report a result. Workflows that skip on doc-only changes shall continue
   to report the check name as a successful no-op, not omit it.
 - semantic-release derives versions from git tags, not from check runs.
-  Whatever gates a release on e2e must not interrupt the
+  Whatever gates a release on e2e shall not interrupt the
   tag-create-and-push step that version computation depends on.
 
 ## CI priorities §req:ci-priorities
