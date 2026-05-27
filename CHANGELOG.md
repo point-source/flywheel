@@ -1,3 +1,10 @@
+# [1.4.0-dev.2](https://github.com/point-source/flywheel/compare/v1.4.0-dev.1...v1.4.0-dev.2) (2026-05-27)
+
+
+### Bug Fixes
+
+* **ci:** pin governance-lint reusable workflow to [@v0](https://github.com/v0) ([#206](https://github.com/point-source/flywheel/issues/206)) ([997d301](https://github.com/point-source/flywheel/commit/997d301c4ccc1083e7e0ece0a512972b680d4b06)), closes [#185](https://github.com/point-source/flywheel/issues/185)
+
 # [1.4.0-dev.1](https://github.com/point-source/flywheel/compare/v1.3.0...v1.4.0-dev.1) (2026-05-25)
 
 
