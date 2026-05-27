@@ -29,13 +29,26 @@ describe("the repo's actual .flywheel.yml (dogfood config)", () => {
     expect(result.config!.streams[0]!.branches[1]!.release).toBe("production");
   });
 
-  it("does not allow feat! in main's auto_merge (major bumps require human review)", () => {
+  it("excludes all bumping types from main's auto_merge (release-gate budget)", () => {
+    // Every bumping promotion to main triggers semantic-release, which fires
+    // release-gate.yml and consumes one ~300–500-call e2e run against the
+    // shared sandbox installation. Auto-merging bumping promotions makes
+    // that cadence equal to develop-push cadence and undoes the budget
+    // savings §spec:sandbox-test-budget was designed to capture. Non-bumping
+    // promotions cost nothing because semantic-release computes no version
+    // bump for them and no release fires — they stay listed. See
+    // §spec:release-gate, "Promotion cadence".
     const text = readFileSync(join(repoRoot, ".flywheel.yml"), "utf8");
     const result = loadConfig(text);
     const main = result.config!.streams[0]!.branches.find((b) => b.name === "main")!;
-    expect(main.auto_merge).not.toContain("feat!");
-    expect(main.auto_merge).toContain("feat");
-    expect(main.auto_merge).toContain("fix!");
+    const bumping = ["feat", "feat!", "fix", "fix!", "perf"];
+    for (const type of bumping) {
+      expect(main.auto_merge).not.toContain(type);
+    }
+    const nonBumping = ["chore", "refactor", "style", "test", "docs", "ci", "build"];
+    for (const type of nonBumping) {
+      expect(main.auto_merge).toContain(type);
+    }
   });
 
   it("sets release_as_draft: true on main (release gate; develop stays default)", () => {

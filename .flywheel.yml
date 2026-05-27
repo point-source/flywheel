@@ -31,13 +31,18 @@ flywheel:
           # release: published) behind a green e2e signal. See
           # §spec:release-gate.
           release_as_draft: true
+          # Bumping types (feat/fix/fix!/perf) are intentionally absent: a
+          # bumping promotion triggers semantic-release on main, which fires
+          # release-gate.yml and consumes one ~300–500-call e2e run against
+          # the shared sandbox installation. Auto-merging every bumping push
+          # makes e2e cadence ≈ develop-push cadence, defeating the budget
+          # savings §spec:sandbox-test-budget exists to capture. Non-bumping
+          # types stay listed because semantic-release computes no version
+          # bump for them and no release fires — they cost nothing to
+          # auto-promote. See §spec:release-gate.
           auto_merge:
-            - feat
-            - fix
-            - fix!
             - chore
             - refactor
-            - perf
             - style
             - test
             - docs
