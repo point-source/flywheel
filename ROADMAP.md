@@ -31,3 +31,47 @@ merge a PR from a non-default branch — flywheel runs on `pull_request` and
 `.github/workflows/pr.yml`/`push.yml` are absent from `point-source/flywheel`.
 Re-scaffold pinned at an exact `@vX.Y.Z` and confirm every flywheel file runs
 at that version.
+
+## Release CI budget
+
+### §road:classify-composite
+
+Add the `point-source/flywheel/classify` composite action — a new
+`classify/action.yml` plus its identification logic and unit tests — that
+reads the head commit from the `push`, `merge_group`, and `pull_request`
+event payloads and emits the `derived_release_commit` and `promotion_pr`
+boolean outputs per the documented identification rule (`github-actions[bot]`
+author with a `chore(release): ` or `chore: back-merge ` message prefix, and
+the `: promote ` PR-title signal). Independent of §road:composite-action-core
+— it is a standalone composite that shares no dispatch code with the main
+action and works against the current action structure. Implements
+§spec:release-ci-budget.
+
+### §road:classify-dogfood
+
+Gate flywheel's own `push`-triggered quality workflows on
+`derived_release_commit` — adding the composite step to
+`.github/workflows/integration.yml` and `verify-dist.yml` alongside their
+existing `dorny/paths-filter` step, and a preceding `classify` job feeding
+`governance-lint.yml` via `needs:` — switch `scripts/templates/quality.yml`
+to invoke the composite while preserving the inline `startsWith` form as a
+documented fallback comment, and document the stable public-surface guarantee
+for the commit-message prefixes and `: promote ` PR title in `CONTRIBUTING.md`.
+Depends on §road:classify-composite. Coordinate with
+§road:composite-action-adoption, which also rewrites these workflow files and
+`quality.yml` — sequence after it or rebase to avoid conflicts. Implements
+§spec:release-ci-budget.
+
+**Verify:** On a scratch branch, add `uses: point-source/flywheel/classify@<ref>`
+as a step in a throwaway workflow and push two commits: one ordinary, one
+authored as `github-actions[bot]` with a `chore(release): 9.9.9` message.
+Confirm the step's `derived_release_commit` output is `'false'` then `'true'`,
+and `promotion_pr` is `'false'` on both. Then on `point-source/flywheel`,
+push a synthetic `github-actions[bot]` commit whose message begins
+`chore: back-merge ` and confirm `integration.yml`, `verify-dist.yml`, and
+`governance-lint.yml` each report their required-check name as a successful
+no-op (heavy steps skipped), while an ordinary push still runs the full
+suite. The end-to-end real-world confirmation is the next vX.Y.Z release:
+the `chore(release):` and `chore: back-merge` pushes it generates produce one
+green fan-out per workflow without running the heavy steps, versus the prior
+two-to-three.
