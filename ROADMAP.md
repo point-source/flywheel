@@ -34,30 +34,17 @@ at that version.
 
 ## Release CI budget
 
-### §road:classify-composite
-
-Add the `point-source/flywheel/classify` composite action — a new
-`classify/action.yml` plus its identification logic and unit tests — that
-reads the head commit from the `push`, `merge_group`, and `pull_request`
-event payloads and emits the `derived_release_commit` and `promotion_pr`
-boolean outputs per the documented identification rule (`github-actions[bot]`
-author with a `chore(release): ` or `chore: back-merge ` message prefix, and
-the `: promote ` PR-title signal). Independent of §road:composite-action-core
-— it is a standalone composite that shares no dispatch code with the main
-action and works against the current action structure. Implements
-§spec:release-ci-budget.
-
 ### §road:classify-dogfood
 
 Gate flywheel's own `push`-triggered quality workflows on
-`derived_release_commit` — adding the composite step to
-`.github/workflows/integration.yml` and `verify-dist.yml` alongside their
-existing `dorny/paths-filter` step, and a preceding `classify` job feeding
-`governance-lint.yml` via `needs:` — switch `scripts/templates/quality.yml`
-to invoke the composite while preserving the inline `startsWith` form as a
-documented fallback comment, and document the stable public-surface guarantee
-for the commit-message prefixes and `: promote ` PR title in `CONTRIBUTING.md`.
-Depends on §road:classify-composite. Coordinate with
+`derived_release_commit` — adding the `point-source/flywheel/classify`
+composite step to `.github/workflows/integration.yml` and `verify-dist.yml`
+alongside their existing `dorny/paths-filter` step, and a preceding
+`classify` job feeding `governance-lint.yml` via `needs:` — switch
+`scripts/templates/quality.yml` to invoke the composite while preserving the
+inline `startsWith` form as a documented fallback comment, and document the
+stable public-surface guarantee for the commit-message prefixes and
+`: promote ` PR title in `CONTRIBUTING.md`. Coordinate with
 §road:composite-action-adoption, which also rewrites these workflow files and
 `quality.yml` — sequence after it or rebase to avoid conflicts. Implements
 §spec:release-ci-budget.

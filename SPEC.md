@@ -492,23 +492,28 @@ attack surface beyond what `flywheel-push.yml` already exposes.
 
 ## Release CI budget §spec:release-ci-budget
 
-*Status: not started*
+*Status: in progress*
 
-Every flywheel release produces three pushes on managed branches in
-rapid succession — the human merge that initiates the release, the
-`chore(release): X.Y.Z` commit semantic-release pushes onto the
-release branch, and the `chore: back-merge vX.Y.Z from <release>
-into <upstream>` merge commit pushed into each upstream branch.
-The merge push is the one quality workflows exist to verify; its
-result decides whether the release commit gets created at all. The
-release commit and back-merge commits are derived artifacts —
-semantic-release produces them from a SHA the merge push already
-certified green, they touch only `CHANGELOG.md`, version stamps,
-and the equivalents replayed onto upstream branches, and re-running
-the same quality workflows against them cannot produce a different
-verdict. This section gives adopters a primitive to short-circuit
-quality workflows on those derived pushes while preserving every
-required check's reported result. §req:release-ci-budget
+Every flywheel release produces up to three pushes on managed
+branches in rapid succession — the human merge that initiates the
+release, the `chore(release): X.Y.Z` commit semantic-release pushes
+onto the release branch, and the back-merge of that release into
+each upstream branch. The back-merge fast-forwards when the upstream
+has no commits the release branch lacks, in which case the upstream's
+new tip *is* the `chore(release):` commit; otherwise it is a true
+merge commit (`chore: back-merge vX.Y.Z from <release> into
+<upstream>`). Either way the upstream push carries no new source —
+just the version bump and changelog replay. The merge push is the
+one quality workflows exist to verify; its result decides whether
+the release commit gets created at all. The release commit and
+back-merge commits are derived artifacts — semantic-release produces
+them from a SHA the merge push already certified green, they touch
+only `CHANGELOG.md`, version stamps, and the equivalents replayed
+onto upstream branches, and re-running the same quality workflows
+against them cannot produce a different verdict. This section gives
+adopters a primitive to short-circuit quality workflows on those
+derived pushes while preserving every required check's reported
+result. §req:release-ci-budget
 
 **Mechanism.** Flywheel ships a lightweight composite action at
 `point-source/flywheel/classify@v1` that any workflow can `uses:`
@@ -531,19 +536,37 @@ because adopters polarize on the second decision in a way they do
 not on the first. §req:release-ci-budget-criteria
 
 **Identification rule.** A commit is a "derived release commit"
-iff its author identity is `github-actions[bot]` *and* its message
-begins with one of two prefixes: `chore(release): ` (semantic-
-release version commit) or `chore: back-merge ` (flywheel's
-back-merge merge commit, format `chore: back-merge vX.Y.Z from
-<branch> into <branch>`). The promotion PR is identified by its
-title containing `: promote ` — the format flywheel itself emits
-when opening the long-lived promotion PR. These three patterns are
-declared as part of flywheel's stable public surface in this
-section; flywheel's release and back-merge code paths shall not
-change them without a corresponding major-version bump. The rule
-lives on flywheel's side of the interface — adopters consume the
-boolean and do not need to know the patterns to use it correctly.
-§req:ci-constraints
+iff it carries a flywheel release-pipeline message prefix *and* was
+authored by the bot that emits that prefix. Two prefixes, two
+authoring identities, because flywheel's release pipeline uses two
+distinct bots:
+
+- `chore(release): ` — the version commit, authored by
+  `semantic-release-bot` (`semantic-release-bot@martynus.net`), the
+  default committer of `@semantic-release/git` when the workflow
+  configures no git identity of its own. This commit appears on the
+  release branch push, and again on an upstream branch when the
+  back-merge fast-forwards onto it.
+- `chore: back-merge ` — the back-merge merge commit (format
+  `chore: back-merge vX.Y.Z from <branch> into <branch>`), authored
+  by `github-actions[bot]`
+  (`41898282+github-actions[bot]@users.noreply.github.com`), the
+  identity `scripts/back-merge.sh` sets before merging.
+
+Requiring a known bot author guards against a human-authored commit
+that happens to use one of these prefixes being skipped. The check
+is fail-safe in the direction that matters: an unrecognized author
+classifies the commit as *non*-derived and the quality workflow
+runs — flywheel never skips CI on a commit it is unsure about. The
+promotion PR is a separate signal, identified by its title
+containing `: promote ` — the format flywheel emits when opening
+the long-lived promotion PR. These prefixes, the two bot
+identities, and the promotion-PR title pattern are declared as part
+of flywheel's stable public surface in this section; flywheel's
+release and back-merge code paths shall not change them without a
+corresponding major-version bump. The rule lives on flywheel's side
+of the interface — adopters consume the boolean and do not need to
+know any of these patterns to use it correctly. §req:ci-constraints
 
 **Trigger-payload coverage.** The composite reads the head commit
 from whichever payload field the current trigger populates:
@@ -561,11 +584,13 @@ adopter's `if:` clause. §req:release-ci-budget-criteria
 first step and gates downstream jobs (or steps) on its outputs
 observes one CI fan-out per release cycle on each gated workflow —
 the fan-out from the human merge that initiated the release. The
-subsequent `chore(release):` push and `chore: back-merge` push
-trigger the workflow run, run the composite (which costs
-sub-second), report each downstream job as a successful no-op via
-the `if:` skip, and complete. An adopter who has not added the
-composite observes today's behavior unchanged on every workflow.
+subsequent release-commit and back-merge pushes (whether the
+back-merge fast-forwards the `chore(release):` commit onto the
+upstream or lands as a `chore: back-merge` merge commit) trigger
+the workflow run, run the composite (which costs sub-second), report
+each downstream job as a successful no-op via the `if:` skip, and
+complete. An adopter who has not added the composite observes
+today's behavior unchanged on every workflow.
 §req:release-ci-budget-criteria
 
 **Required-check preservation.** Skipping happens at job-level
@@ -686,21 +711,27 @@ require a major bump on both actions.
   keep adopter overhead near zero per workflow.
 
 - The back-merge merge-commit message format (`chore: back-merge
-  vX.Y.Z from <branch> into <branch>`) and the release-commit
-  prefix (`chore(release): `) become part of flywheel's stable
-  public surface, formally locking them to the major version.
-  Changing either becomes a breaking change. Accepted: both
-  formats have been stable since the relevant features shipped,
-  and the composite encapsulates them so adopters never see them.
+  vX.Y.Z from <branch> into <branch>`), the release-commit prefix
+  (`chore(release): `), and the two authoring bot identities
+  (`semantic-release-bot`, `github-actions[bot]`) become part of
+  flywheel's stable public surface, formally locking them to the
+  major version. Changing any of them becomes a breaking change.
+  Accepted: all have been stable since the relevant features
+  shipped, and the composite encapsulates them so adopters never
+  see them. The dependency on `semantic-release-bot` in particular
+  is a dependency on the `@semantic-release/git` default committer;
+  if flywheel ever configures an explicit release-commit identity,
+  this list is the single place that records the coupling.
 
-- The bot identity check (`github-actions[bot]`) means a
-  hand-authored commit with a `chore(release):` or `chore:
-  back-merge` message — vanishingly rare in practice, and
-  conventionally avoided by the same maintainers who would invoke
-  flywheel — is correctly classified as non-derived. Adopters who
-  want to also skip such commits add their own broader `if:`
-  alongside the composite's output; the composite stays narrow
-  and unambiguous.
+- Requiring a recognized bot author means a hand-authored commit
+  that happens to use a `chore(release):` or `chore: back-merge`
+  message — vanishingly rare, and conventionally avoided by the
+  same maintainers who would invoke flywheel — is classified as
+  non-derived and its CI runs. This is the safe failure direction:
+  flywheel never skips a commit it cannot positively attribute to
+  its own pipeline. Adopters who want to also skip such commits add
+  their own broader `if:` alongside the composite's output; the
+  composite stays narrow and unambiguous.
 
 **Security.** The composite reads `github.event` (workflow-
 provided, not adopter-controlled) and emits string outputs. It

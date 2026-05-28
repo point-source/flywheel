@@ -1,0 +1,36 @@
+name: Flywheel Classify
+description: >-
+  Classify the triggering commit/PR as a flywheel-produced release or
+  back-merge commit, or the develop→main promotion PR, so a quality workflow
+  can skip the redundant re-run. Reads only github.event — no checkout, no
+  token, no API calls. Add it as a step and gate jobs on its outputs.
+author: point-source
+branding:
+  icon: filter
+  color: blue
+outputs:
+  derived_release_commit:
+    description: >-
+      'true' when the head commit is a flywheel release-pipeline commit that
+      carries no new source — the `chore(release):` version commit (from
+      semantic-release-bot) or the `chore: back-merge` merge commit (from
+      github-actions[bot]). Gate quality jobs on `!= 'true'` to skip the
+      redundant run; reports the check as a successful no-op. 'false'
+      otherwise.
+    value: ${{ steps.classify.outputs.derived_release_commit }}
+  promotion_pr:
+    description: >-
+      'true' when the run is for the long-lived develop→main promotion PR
+      (PR title contains ': promote '). 'false' otherwise. Independent of
+      derived_release_commit — gate on it only if you also want to skip the
+      promotion PR.
+    value: ${{ steps.classify.outputs.promotion_pr }}
+runs:
+  using: composite
+  steps:
+    # Invoked via github.action_path so the script resolves against
+    # flywheel's own checkout at the pinned ref, not the adopter's. The
+    # action lives at classify/, so the shared scripts/ dir is one level up.
+    - id: classify
+      shell: bash
+      run: bash "${{ github.action_path }}/../scripts/classify-commit.sh"
