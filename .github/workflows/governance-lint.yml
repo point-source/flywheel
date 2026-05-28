@@ -5,7 +5,26 @@ on:
   pull_request:
 
 jobs:
+  # A chore(release) commit on main (and on push events generally) carries no
+  # SPEC/ROADMAP/README change, so the lint below cannot reach a different
+  # verdict on it. The lint job delegates to a reusable workflow via
+  # `uses:`, which forbids steps in the same job — so the classify composite
+  # runs in this tiny preceding job and the lint job gates on its output.
+  # See §spec:release-ci-budget.
+  classify:
+    runs-on: ubuntu-latest
+    outputs:
+      derived_release_commit: ${{ steps.classify.outputs.derived_release_commit }}
+    steps:
+      - uses: actions/checkout@v6
+      - id: classify
+        uses: ./classify
   lint:
+    needs: classify
+    # Skipped when classify flags a flywheel release/back-merge commit; a
+    # skipped job reports success to required-check rules, so the gate stays
+    # honest on every other push.
+    if: needs.classify.outputs.derived_release_commit != 'true'
     # @v0 not @v1: symphonize is pre-1.0 (latest tag v0.1.x) and their
     # update-major-tag.yml only publishes a floating tag matching the
     # current major. The `v1` ref their README documents does not exist

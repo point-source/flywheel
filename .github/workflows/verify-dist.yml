@@ -9,6 +9,15 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      # Flywheel's own chore(release) and back-merge commits change only the
+      # version stamp and changelog — never src/ — so typecheck, unit tests,
+      # and the bundle rebuild cannot reach a different verdict on them.
+      # Classify them so the work steps below skip while the job still
+      # reports a successful no-op. See §spec:release-ci-budget.
+      - name: Classify commit
+        id: classify
+        uses: ./classify
+
       # Doc-only changes (docs/, root *.md, .github/ISSUE_TEMPLATE/) cannot
       # affect the dist/ bundle, so the rebuild step is skipped on those
       # PRs. Unit tests still run — tests/docs-examples.test.ts validates
@@ -35,12 +44,21 @@ jobs:
               - '!*.md'
               - '!.github/ISSUE_TEMPLATE/**'
 
+      # All work steps below skip on a flywheel-produced release/back-merge
+      # commit (derived_release_commit). Unit tests still run on doc-only PRs
+      # — those are human commits, not derived — so tests/docs-examples.test.ts
+      # keeps catching doc-YAML regressions; only flywheel's own release
+      # commits short-circuit the suite.
       - uses: actions/setup-node@v4
+        if: steps.classify.outputs.derived_release_commit != 'true'
         with:
           node-version: "24"
       - run: npm ci
+        if: steps.classify.outputs.derived_release_commit != 'true'
       - run: npm run typecheck
+        if: steps.classify.outputs.derived_release_commit != 'true'
       - run: npm test
+        if: steps.classify.outputs.derived_release_commit != 'true'
         # tests/init.test.ts skips when `gh auth status` fails; pass the
         # workflow's default token so it runs in CI. Default GITHUB_TOKEN
         # has contents:read only, so init.sh's `gh api PATCH delete_branch_on_merge`
@@ -48,7 +66,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Rebuild bundle and check for drift
-        if: steps.filter.outputs.non_docs == 'true'
+        if: steps.filter.outputs.non_docs == 'true' && steps.classify.outputs.derived_release_commit != 'true'
         run: |
           npm run build
           if ! git diff --exit-code -- dist/; then

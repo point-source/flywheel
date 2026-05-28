@@ -492,7 +492,7 @@ attack surface beyond what `flywheel-push.yml` already exposes.
 
 ## Release CI budget §spec:release-ci-budget
 
-*Status: in progress*
+*Status: complete*
 
 Every flywheel release produces up to three pushes on managed
 branches in rapid succession — the human merge that initiates the
@@ -568,17 +568,13 @@ corresponding major-version bump. The rule lives on flywheel's side
 of the interface — adopters consume the boolean and do not need to
 know any of these patterns to use it correctly. §req:ci-constraints
 
-**Trigger-payload coverage.** The composite reads the head commit
-from whichever payload field the current trigger populates:
-`github.event.head_commit` on `push`, `github.event.merge_group
-.head_commit` on `merge_group`, and falls back to checking
-`github.event.pull_request.title` for the promotion-PR signal on
-`pull_request` triggers (`pull_request` payloads carry no commit
-message). The correct payload field is implementation detail the
-composite handles; adopters specify only which workflow triggers
-they wire up. A workflow that runs on all three triggers gets
-correct classification on each without conditional logic in the
-adopter's `if:` clause. §req:release-ci-budget-criteria
+**Trigger-payload coverage.** The composite classifies correctly on
+`push`, `merge_group`, and `pull_request` triggers, reading the head
+commit where each populates it (a `pull_request` payload carries no
+commit, so only the promotion-PR title signal applies there). Which
+payload field to read is implementation detail the composite owns;
+adopters wire up triggers and never branch on the event shape in
+their own `if:`. §req:release-ci-budget-criteria
 
 **Observable behavior.** An adopter who adds the composite as a
 first step and gates downstream jobs (or steps) on its outputs
