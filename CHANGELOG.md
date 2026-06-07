@@ -1,3 +1,10 @@
+# [1.5.0](https://github.com/point-source/flywheel/compare/v1.4.0...v1.5.0) (2026-06-07)
+
+
+### Features
+
+* skip redundant CI on flywheel release and back-merge commits ([#213](https://github.com/point-source/flywheel/issues/213)) ([101320b](https://github.com/point-source/flywheel/commit/101320bf5b8f77221f03c232b2c16195a2e462d9))
+
 # [1.5.0-dev.1](https://github.com/point-source/flywheel/compare/v1.4.0...v1.5.0-dev.1) (2026-05-28)
 
 
