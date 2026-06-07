@@ -112,7 +112,13 @@ if [[ -n "${EXPECTED_SHA:-}" ]]; then
 fi
 
 echo "Publishing release id=${release_id} for tag '$TAG_NAME' (target ${release_sha})…"
-gh api --method PATCH "/repos/${GITHUB_REPOSITORY}/releases/${release_id}" \
+# A publish failure is loud, like the lookup failures above: surface an
+# ::error:: line so a maintainer reading CI can tell the green release did
+# not reach adopters, rather than relying on set -e's bare non-zero exit.
+if ! gh api --method PATCH "/repos/${GITHUB_REPOSITORY}/releases/${release_id}" \
   -F draft=false \
-  >/dev/null
+  >/dev/null; then
+  echo "::error::Failed to publish release id=${release_id} for tag '$TAG_NAME' — the PATCH (draft=false) call returned non-zero."
+  exit 1
+fi
 echo "Published."

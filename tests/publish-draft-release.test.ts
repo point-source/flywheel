@@ -65,18 +65,22 @@ interface GhStub {
  * draft-visible LIST endpoint: `releases-response.json` (the JSON ARRAY
  * of release objects returned for `gh api /repos/.../releases`) and
  * `releases-response.status` (the gh exit code for that list lookup,
- * used to simulate an API error). The PATCH call always succeeds — the
- * script doesn't read its output. */
+ * used to simulate an API error). The PATCH call defaults to success and
+ * no output; `patchExit` overrides its exit code to simulate a publish
+ * API error. The script doesn't read the PATCH output. */
 function setupGhStub(opts: {
   releasesResponseJson?: string;
   listLookupExit?: number;
+  patchExit?: number;
 }): GhStub {
   const binDir = mkdtempSync(join(tmpdir(), "flywheel-pdr-bin-"));
   const callsLog = join(binDir, "gh-calls.log");
   const releasesResponseFile = join(binDir, "releases-response.json");
   const listStatusFile = join(binDir, "releases-response.status");
+  const patchStatusFile = join(binDir, "patch-response.status");
   writeFileSync(releasesResponseFile, opts.releasesResponseJson ?? "");
   writeFileSync(listStatusFile, String(opts.listLookupExit ?? 0));
+  writeFileSync(patchStatusFile, String(opts.patchExit ?? 0));
 
   const stub = `#!/usr/bin/env bash
 # Record argv to the calls log, one NUL-terminated record per call.
@@ -90,9 +94,9 @@ function setupGhStub(opts: {
 
 # gh api <path>             → return releases-response.json (the LIST
 #                             endpoint's JSON array) with the list-status exit
-# gh api --method PATCH ...   → always success, no output
+# gh api --method PATCH ...   → no output, exit with the patch-status code
 if [[ "$1" == "api" && "$2" == "--method" && "$3" == "PATCH" ]]; then
-  exit 0
+  exit "$(cat "${patchStatusFile}")"
 fi
 if [[ "$1" == "api" ]]; then
   cat "${releasesResponseFile}"
@@ -352,6 +356,44 @@ describe("publish-draft-release.sh", () => {
       // Lookup + PATCH.
       expect(calls).toHaveLength(2);
       expect(calls[0]).toEqual(["api", LIST_PATH]);
+      expect(calls[1]).toContain("PATCH");
+    } finally {
+      stub.cleanup();
+    }
+  });
+
+  it("fails loudly when the publish PATCH call errors", () => {
+    // (f) The draft is found and publishable, but the PATCH (draft=false)
+    // call itself errors. Like the lookup failures, a publish error is
+    // loud: a maintainer reading CI must be able to tell the green release
+    // did not reach adopters, rather than the run exiting on a bare
+    // non-zero with no signposted reason.
+    const releasesJson = JSON.stringify([
+      {
+        id: 4242,
+        tag_name: "v1.3.0",
+        draft: true,
+        target_commitish: "anysha",
+      },
+    ]);
+    const stub = setupGhStub({ releasesResponseJson: releasesJson, patchExit: 1 });
+    try {
+      const r = runScript({
+        binDir: stub.binDir,
+        env: {
+          GITHUB_TOKEN: "test-token",
+          GITHUB_REPOSITORY: "point-source/flywheel",
+          TAG_NAME: "v1.3.0",
+        },
+      });
+      expect(r.status).not.toBe(0);
+      expect(r.stderr + r.stdout).toMatch(/::error::/);
+      expect(r.stdout).not.toContain("Published.");
+
+      // The PATCH was attempted (lookup + PATCH), but the script did not
+      // claim success.
+      const calls = readCalls(stub.callsLog);
+      expect(calls).toHaveLength(2);
       expect(calls[1]).toContain("PATCH");
     } finally {
       stub.cleanup();
