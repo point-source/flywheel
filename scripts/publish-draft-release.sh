@@ -6,6 +6,16 @@
 # e2e suite confirms the tagged SHA. Idempotent: if the release for the tag
 # is already published the script reports that and exits 0.
 #
+# Lookup: lists releases via GET /repos/{owner}/{repo}/releases and filters
+# by tag_name. The list endpoint returns DRAFT releases to a push-access
+# token (the production FLYWHEEL_GH_APP_ID token has push access), whereas
+# the "get release by tag" endpoint 404s on drafts — the first green run's
+# release is always still a draft, so the tag endpoint can never find it.
+# Lookup errors fail LOUDLY: a gh error or a malformed/unparseable response
+# is a non-zero exit with a ::error:: line, never a silent "nothing to
+# publish". The ONLY benign no-op is a successful list that genuinely
+# contains no release for the tag.
+#
 # Extracted into a script (rather than inline `gh` calls in YAML) so the
 # tag/SHA mismatch checks and the "already published" idempotency branch
 # are unit-tested (tests/publish-draft-release.test.ts) — process-halting
@@ -41,14 +51,32 @@ set -euo pipefail
 # match the rest of the repo's workflows.
 export GH_TOKEN="${GH_TOKEN:-$GITHUB_TOKEN}"
 
-api_path="/repos/${GITHUB_REPOSITORY}/releases/tags/${TAG_NAME}"
+api_path="/repos/${GITHUB_REPOSITORY}/releases"
 
-# Look up the release by tag. `gh api` exits non-zero on HTTP 404, which
-# we want to handle as a benign "nothing to publish" rather than a hard
-# failure — a tag can exist with no release attached if semantic-release
-# was skipped or a manual tag was pushed.
-release_json="$(gh api "$api_path" 2>/dev/null || true)"
+# List releases (this endpoint returns drafts to a push-access token,
+# unlike the "get release by tag" endpoint which 404s on drafts). Capture
+# the exit code explicitly — NO `|| true`: a gh error must surface loudly,
+# because that is exactly the failure shape that silently stranded every
+# gated production release as an unpublished draft. On a gh error the error
+# JSON arrives on stdout and is captured into $releases_json; surfacing it
+# in the ::error:: line is intentional.
+if ! releases_json="$(gh api "$api_path")"; then
+  echo "::error::Failed to list releases for tag '$TAG_NAME' from $api_path — gh exited non-zero. Response: $releases_json"
+  exit 1
+fi
 
+# Select the release whose tag_name EXACTLY matches $TAG_NAME (by tag_name,
+# not by list position). Distinguish a jq PARSE failure (malformed /
+# non-array response → loud failure) from a successful-but-no-match result
+# (genuine absence → benign no-op below).
+if ! release_json="$(printf '%s' "$releases_json" | jq -c --arg tag "$TAG_NAME" 'map(select(.tag_name == $tag)) | first // empty')"; then
+  echo "::error::Could not parse releases response for tag '$TAG_NAME' (malformed API response) — refusing to treat as 'no release'."
+  exit 1
+fi
+
+# The ONLY benign no-op: a successful lookup that genuinely contains no
+# release for the tag (a tag can exist with no release attached if
+# semantic-release was skipped or a manual tag was pushed).
 if [[ -z "$release_json" ]]; then
   echo "::notice::No release found for tag '$TAG_NAME' — nothing to publish."
   exit 0
