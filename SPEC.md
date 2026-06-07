@@ -332,7 +332,7 @@ exhausts the bucket. Not yet implemented. §req:ci-priorities
 
 ## Release gate §spec:release-gate
 
-*Status: complete*
+*Status: in progress*
 
 flywheel is a runtime action: a broken release tagged at `@v1` is
 consumed by every adopter pinned to that major on their next CI run.
@@ -354,8 +354,10 @@ version tag. The release object exists and the tag is in place, but
 `release: published`, which GitHub does not raise for drafts.
 `.github/workflows/release-gate.yml` triggers on the production
 version tag's push, runs the full e2e suite against the tagged SHA,
-and on green calls GitHub's Update Release API with `draft: false`.
-The publish fires `release: published`, which triggers
+and on green publishes the draft (§spec:release-publish-step, which
+owns how the draft is located and flipped public, and how a publish
+that cannot complete is surfaced). The publish fires
+`release: published`, which triggers
 `release-major-tag.yml` to advance `@vN`. On red, the workflow exits
 non-zero; the draft stays unpublished, `@vN` stays at the prior
 release, and adopters pinned to the major continue to consume the
@@ -489,6 +491,107 @@ workflow trusts the tag pointer the same release pipeline pushed.
 The publish step calls a single authenticated GitHub API endpoint
 with a token already scoped to `point-source/flywheel`. No new
 attack surface beyond what `flywheel-push.yml` already exposes.
+
+## Release publish step §spec:release-publish-step
+
+*Status: not started*
+
+The release gate (§spec:release-gate) has two halves — block a red
+release, publish a green one — and only the block half is verified.
+The publish half has been failing silently in production: on a green
+e2e run, `scripts/publish-draft-release.sh` is supposed to locate the
+production tag's draft release and flip it public, but it never finds
+the draft, errors, and exits without publishing. Every production
+release since `release_as_draft` arrived at v1.4.0 (v1.4.0, v1.5.0,
+v1.6.0) is stranded as an unpublished draft; nothing has reached
+adopters since v1.3.0. To an adopter, a green gate that never
+publishes is indistinguishable from no release — a moving `@vN` never
+advances and an exact pin never appears — and because the drafts pile
+up with no error surfaced, the gap surfaces only when adopters are
+noticed to be versions behind. This section specifies the publish
+step so the full round trip holds: a green-gated release becomes a
+published release adopters receive, and a draft stays unpublished
+only when it legitimately failed verification.
+§req:release-safety-gate
+
+**Draft-aware lookup.** The publish step locates a release by its tag
+using a lookup that **includes unpublished drafts**. GitHub's
+`GET /repos/{owner}/{repo}/releases/tags/{tag}` is documented as "Get
+a *published* release" and excludes drafts entirely — it returns
+`404 Not Found` for a draft regardless of token scope, which is the
+root cause of the stranding. The release the gate needs to publish is,
+by construction, always a draft on its first green run, so the step
+shall query an endpoint that returns drafts (the list-releases
+endpoint, whose drafts are visible to a token with push access — which
+the `FLYWHEEL_GH_APP_ID` token holds) and select the release whose
+`tag_name` matches the gated tag. §req:release-safety-gate-criteria
+
+**Publish-on-green completes.** When the gate's e2e run is green and a
+draft release exists for the production tag, the system shall flip
+that release from draft to public on the same run that turned green.
+After the run, the release is visible to adopters and `release:
+published` has fired so `@vN` can advance. The draft-to-public
+transition is a guaranteed outcome of a green gate, not an incidental
+one. §req:release-safety-gate-criteria
+
+**A draft stays unpublished only for a legitimate reason.** Two — and
+only two — outcomes leave a release unpublished: a red e2e run (the
+gate exits before the publish step), or no release attached to the tag
+(semantic-release was skipped or a bare tag was pushed; the step logs
+a notice and is a benign no-op). A release that exists but cannot be
+located or flipped is **not** a legitimate reason to leave it a draft;
+that is the failure the loud-failure rule below covers.
+§req:release-safety-gate-criteria
+
+**Loud failure.** When the publish step cannot complete — the tag has
+a release that the lookup fails to return, the response is malformed,
+or the publish API call errors — the system shall fail the gate run
+non-zero with an error message in the CI log, so a maintainer reading
+CI can tell a green release did not reach adopters. The step shall not
+treat an unexpected or error response as the benign "no release on the
+tag" no-op. The original defect did exactly that: a 404 error body left
+on stdout (the API error JSON) passed an emptiness guard and was read
+as "nothing to publish," converting a hard failure into a silent one.
+The "no release" no-op is reserved for a genuine absence of any release
+for the tag, distinguished from a lookup or publish error.
+§req:release-safety-gate-criteria
+
+**Tested against real release behavior.** The publish path is
+exercised against the responses a real release and a real `gh` client
+produce — in particular, a draft lookup that misses returns a
+**non-empty** error body on stdout alongside a non-zero exit, not an
+empty string. A test that stubs an empty response for the miss case
+does not exercise the path that stranded production releases. The
+regression that would re-strand releases (an error response mistaken
+for "nothing to publish") shall be caught by a test before it ships,
+not in production. §req:release-safety-gate-criteria
+
+**Idempotency.** Re-running the gate on an already-published tag is a
+no-op: the release is found, observed to be non-draft, and the step
+exits 0 without re-issuing the publish. This preserves the gate's
+re-run recovery path (§spec:release-gate, Red-candidate behavior).
+
+**SHA pin.** When the gate passes the SHA its e2e ran against, the
+step refuses to publish a release whose target commit no longer
+matches — defending the rare case where the release object is
+retargeted between the gate's checkout and the publish. A mismatch is
+a loud failure, not a silent skip. §req:release-safety-gate-criteria
+
+**Why a list-and-filter lookup over the tags endpoint.** The tags
+endpoint cannot see drafts by GitHub's design, so no token scope or
+retry makes it work for the gate's first-publish case; switching to a
+draft-visible lookup is the only correct fix. Adding a second,
+draft-specific call alongside the tags endpoint was rejected — the
+list endpoint already returns both published and draft releases, so
+one lookup covers the already-published idempotency case and the
+draft-to-publish case. The gated draft is the most recent release for
+its tag and is created moments before the gate runs, so it appears
+without deep pagination; the step selects by `tag_name` rather than
+assuming list position.
+
+**Scope.** Restoring the already-stranded v1.4.0–v1.6.0 drafts is out
+of scope; this governs releases going forward. A maintainer may
+publish those drafts manually. §req:release-safety-gate
 
 ## Release CI budget §spec:release-ci-budget
 
