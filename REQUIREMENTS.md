@@ -12,6 +12,9 @@
 <!--     bot-authored release and back-merge commits -->
 <!--     (§req:release-ci-budget, §req:release-ci-budget-criteria, with -->
 <!--     additions threaded into the shared `§req:ci-*` sections) -->
+<!--   - Workflow run names — runs indistinguishable in the Actions list when -->
+<!--     many workflows fire on one commit -->
+<!--     (§req:workflow-run-names, §req:workflow-run-names-criteria) -->
 
 ## Problem statement §req:problem-statement
 
@@ -442,3 +445,93 @@ Required, in decreasing order of user impact:
 
 **Nice-to-have:** Per-run API-call counter visible in CI logs so drift
 in per-scenario cost surfaces before it exhausts the bucket.
+
+## Workflow run names §req:workflow-run-names
+
+When several workflows are triggered by the same commit, every run in the
+GitHub Actions list shows the same title — the raw commit message — because
+none of flywheel's workflow files set a run name and GitHub's fallback is
+the triggering commit's message. This is routine on `develop` and `main`,
+where a single release-bot commit such as `chore(release): 1.5.0` fans out
+to all of flywheel's top-level workflows at once. The list then reads as
+eight identical rows:
+
+```text
+chore(release): 1.5.0   develop   8 minutes ago
+chore(release): 1.5.0   develop   8 minutes ago
+chore(release): 1.5.0   develop   8 minutes ago
+...
+```
+
+The rows are not duplicates — they are distinct workflows (Governance Lint,
+Verify dist, Integration tests, Flywheel — Push, Release gate, and the
+rest) — but nothing in the title distinguishes them. A reader who wants to
+find one workflow's run, or see at a glance whether a particular workflow
+passed, has to read across to the workflow column or open each run's detail
+page.
+
+The user is the flywheel maintainer — and any adopter — reading the Actions
+list. The pain is frequent (every release, and any commit that triggers
+more than one workflow) but low-severity: the information is reachable, just
+one or more clicks away. Nobody is blocked. It is recurring developer-
+experience friction that taxes the maintainer every time they scan CI,
+which on this repository is many times a day across parallel agent work.
+
+GitHub provides exactly one lever for this: the
+[`run-name`](https://docs.github.com/en/actions/writing-workflows/workflow-syntax-for-github-actions#run-name)
+field on a workflow. Absent it, the commit-message fallback is the only
+behaviour available, so the rows stay identical. The fix is to give each
+workflow a run name led by the workflow's own human-readable name.
+
+## Workflow run name success criteria §req:workflow-run-names-criteria
+
+- For a commit that triggers several workflows (e.g. a `chore(release):`
+  push on `develop`), the Actions list shows a distinct, readable title for
+  each run, and each title begins with that workflow's human-readable name —
+  a reader identifies which run is which without opening any run or reading
+  across to the workflow column.
+- Each run title still carries the triggering change's context — the commit
+  message, or the pull-request title for PR-triggered runs — so a reader can
+  tie a run back to the change that caused it. The minimal form is
+  `<Workflow name> — <commit message or PR title>`.
+- Every workflow file under `.github/workflows/` carries a run name,
+  including the reusable `push.yml` and `pr.yml`. A reusable workflow
+  invoked via `workflow_call` appears nested under its caller and does not
+  produce its own row in the Actions list, so its run name is for source-
+  level consistency — every workflow file follows the same convention — not
+  for list disambiguation. This is a deliberate consistency choice, not an
+  expectation that the reusable workflows gain separate list entries.
+- The change is display-only: it alters no workflow's triggers, jobs,
+  permissions, or reported check names. A commit that triggered a given set
+  of workflows before triggers the same set after, with the same checks
+  reporting — only the titles in the Actions list change.
+
+## Workflow run name user stories §req:workflow-run-names-stories
+
+- As a flywheel maintainer scanning the Actions list after a release-bot
+  push, I want each workflow on that commit to show its own name, so I can
+  tell Governance Lint from Verify dist from Integration tests without
+  clicking into every run.
+- As a maintainer triaging a failed run, I want the run title to name both
+  the workflow and the change that triggered it, so I can find the right run
+  in a list of otherwise-identical rows.
+- As a flywheel maintainer or adopter reading the repository's workflow
+  files, I want every workflow to set a run name in the same way, so the
+  convention is obvious and a workflow added later follows it.
+
+## Workflow run name quality attributes and constraints §req:workflow-run-names-constraints
+
+- **Display-only.** The run name changes nothing about what a workflow does
+  — same triggers, same jobs, same permissions, same check names. It only
+  changes the title GitHub shows for a run.
+- **Sensible title across trigger types.** flywheel's workflows fire on a
+  mix of events — push, pull_request, release, schedule, workflow_dispatch.
+  A run name shall resolve to a useful title for whichever event actually
+  triggered a given run: a push has a head-commit message, a PR has a title,
+  and some events carry neither, so the expression shall degrade gracefully
+  rather than render blank or error. The exact expression per event type is
+  a design decision for SPEC, not a requirement here.
+- **Priority.** This is low-severity, high-frequency polish — a nice-to-have
+  that is nonetheless cheap and self-contained. It does not block any
+  release or adopter, and it should not be sequenced ahead of the CI-budget
+  and release-safety work above.

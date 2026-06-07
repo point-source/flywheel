@@ -1,4 +1,6 @@
 name: E2E tests
+run-name: >-
+  ${{ github.workflow }} — ${{ github.event.head_commit.message || github.event.pull_request.title || github.event.release.tag_name || github.ref_name }}
 # Manual-only since the release gate landed (see §spec:release-gate).
 # Production releases route their e2e signal through release-gate.yml,
 # which runs the full suite against the tagged SHA before publishing

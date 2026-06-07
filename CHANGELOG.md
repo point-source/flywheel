@@ -1,3 +1,10 @@
+# [1.6.0-dev.1](https://github.com/point-source/flywheel/compare/v1.5.0...v1.6.0-dev.1) (2026-06-07)
+
+
+### Features
+
+* distinguishable workflow run names in the Actions list ([#219](https://github.com/point-source/flywheel/issues/219)) ([05811f1](https://github.com/point-source/flywheel/commit/05811f1cef671e74d800efd9d91cbc2bb7c78d74))
+
 # [1.5.0](https://github.com/point-source/flywheel/compare/v1.4.0...v1.5.0) (2026-06-07)
 
 

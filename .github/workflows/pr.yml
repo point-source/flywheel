@@ -1,4 +1,6 @@
 name: Flywheel — PR (reusable)
+run-name: >-
+  ${{ github.workflow }} — ${{ github.event.head_commit.message || github.event.pull_request.title || github.event.release.tag_name || github.ref_name }}
 # Reusable workflow holding the canonical PR-event logic. Adopters pin
 # `point-source/flywheel/.github/workflows/pr.yml@v<major>` from a thin
 # caller; bug fixes and template tightening land here and propagate via
