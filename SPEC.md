@@ -494,7 +494,7 @@ attack surface beyond what `flywheel-push.yml` already exposes.
 
 ## Release publish step §spec:release-publish-step
 
-*Status: complete*
+*Status: in progress*
 
 The release gate (§spec:release-gate) has two halves — block a red
 release, publish a green one — and only the block half is verified.
@@ -564,18 +564,36 @@ empty string. A test that stubs an empty response for the miss case
 does not exercise the path that stranded production releases. The
 regression that would re-strand releases (an error response mistaken
 for "nothing to publish") shall be caught by a test before it ships,
-not in production. §req:release-safety-gate-criteria
+not in production. The retargeting defense is likewise exercised
+against the target shape a real release produces — its recorded
+target is a branch name, so the publishable case feeds that shape and
+asserts the release still publishes, rather than feeding a synthetic
+commit-shaped target that no real release ever carries. A guard that
+would reject every real release therefore cannot pass review again.
+This coverage stays in the fast local unit suite and adds no load to
+the e2e suite. §req:release-safety-gate-criteria
 
 **Idempotency.** Re-running the gate on an already-published tag is a
 no-op: the release is found, observed to be non-draft, and the step
 exits 0 without re-issuing the publish. This preserves the gate's
 re-run recovery path (§spec:release-gate, Red-candidate behavior).
 
-**SHA pin.** When the gate passes the SHA its e2e ran against, the
-step refuses to publish a release whose target commit no longer
-matches — defending the rare case where the release object is
-retargeted between the gate's checkout and the publish. A mismatch is
-a loud failure, not a silent skip. §req:release-safety-gate-criteria
+**SHA pin (retargeting defense).** When the gate passes the SHA its
+e2e ran against, the step publishes only if the tag being published
+resolves to that exact commit, and fails the run loudly otherwise.
+This defends the rare case where the tag is moved to a different
+commit between the gate's checkout and the publish — a release built
+on an untested commit shall never reach adopters. The defense
+establishes the tag-to-commit identity by **resolving the tag
+reference to its commit**, not by reading the field the release
+records as its target. `@semantic-release/github` sets that field
+(`target_commitish`) to the branch the release was cut from — `main`,
+never a commit identifier — so comparing it against a 40-character SHA
+can never match and would reject every legitimate green release. A
+release whose tag still points at the e2e-tested commit publishes;
+only a tag moved off that commit, or a tag that cannot be resolved to
+a commit at all, is blocked. A mismatch is a loud failure, not a
+silent skip. §req:release-safety-gate-criteria
 
 **Why a list-and-filter lookup over the tags endpoint.** The tags
 endpoint cannot see drafts by GitHub's design, so no token scope or
