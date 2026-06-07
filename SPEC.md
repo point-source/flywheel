@@ -494,7 +494,7 @@ attack surface beyond what `flywheel-push.yml` already exposes.
 
 ## Release publish step §spec:release-publish-step
 
-*Status: in progress*
+*Status: complete*
 
 The release gate (§spec:release-gate) has two halves — block a red
 release, publish a green one — and only the block half is verified.

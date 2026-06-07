@@ -14,10 +14,20 @@ import { fileURLToPath } from "node:url";
 // End-to-end exercise of scripts/publish-draft-release.sh — the final
 // step of release-gate.yml. The script lists the repository's releases
 // via the draft-visible LIST endpoint (GET /repos/{owner}/{repo}/releases),
-// jq-selects the element whose .tag_name matches TAG_NAME, refuses if the
-// target_commitish drifted from the SHA the gate ran e2e against, and on
-// a match flips the release from draft to public via
+// jq-selects the element whose .tag_name matches TAG_NAME, and on a match
+// flips the release from draft to public via
 // PATCH /repos/{owner}/{repo}/releases/{id}.
+//
+// Retargeting defense (the SHA pin, #224): when EXPECTED_SHA is set, the
+// script resolves the TAG REFERENCE to its commit — GET /git/ref/tags/{tag},
+// dereferencing an annotated-tag object via GET /git/tags/{sha} — and
+// refuses to publish unless that resolved commit equals EXPECTED_SHA. It
+// does NOT read the release's target_commitish for this check:
+// @semantic-release/github records target_commitish as the branch the
+// release was cut from ("main"), never a 40-char SHA, so a target_commitish
+// comparison would refuse every real green release. These tests therefore
+// feed the real shape — target_commitish: "main" — and drive the SHA pin
+// through the resolved tag commit instead.
 //
 // Why the LIST endpoint, not the tags endpoint: the per-tag releases
 // endpoint (/repos/.../releases/tags/{tag}) only returns *published*
@@ -62,24 +72,43 @@ interface GhStub {
 /** PATH-shadowing `gh` stub. argv is recorded one record per call,
  * NUL-terminated so newlines inside an argument don't split the record;
  * within a record args are TAB-separated. Canned responses model the
- * draft-visible LIST endpoint: `releases-response.json` (the JSON ARRAY
- * of release objects returned for `gh api /repos/.../releases`) and
- * `releases-response.status` (the gh exit code for that list lookup,
- * used to simulate an API error). The PATCH call defaults to success and
- * no output; `patchExit` overrides its exit code to simulate a publish
- * API error. The script doesn't read the PATCH output. */
+ * endpoints the script calls, dispatched on the API path:
+ *   - the draft-visible LIST endpoint (`gh api /repos/.../releases`):
+ *     `releasesResponseJson` (the JSON ARRAY of release objects) with
+ *     `listLookupExit` (the gh exit code, to simulate an API error);
+ *   - the tag-ref endpoint (`gh api /repos/.../git/ref/tags/{tag}`):
+ *     `refResponseJson` with `refLookupExit` — used by the SHA pin to
+ *     resolve the tag to its commit;
+ *   - the annotated-tag deref endpoint (`gh api /repos/.../git/tags/{sha}`):
+ *     `tagDerefResponseJson` with `tagDerefExit` — only reached when the
+ *     ref points at a tag object rather than a commit.
+ * The PATCH call defaults to success and no output; `patchExit` overrides
+ * its exit code to simulate a publish API error. The script doesn't read
+ * the PATCH output. */
 function setupGhStub(opts: {
   releasesResponseJson?: string;
   listLookupExit?: number;
+  refResponseJson?: string;
+  refLookupExit?: number;
+  tagDerefResponseJson?: string;
+  tagDerefExit?: number;
   patchExit?: number;
 }): GhStub {
   const binDir = mkdtempSync(join(tmpdir(), "flywheel-pdr-bin-"));
   const callsLog = join(binDir, "gh-calls.log");
   const releasesResponseFile = join(binDir, "releases-response.json");
   const listStatusFile = join(binDir, "releases-response.status");
+  const refResponseFile = join(binDir, "ref-response.json");
+  const refStatusFile = join(binDir, "ref-response.status");
+  const tagDerefResponseFile = join(binDir, "tag-deref-response.json");
+  const tagDerefStatusFile = join(binDir, "tag-deref-response.status");
   const patchStatusFile = join(binDir, "patch-response.status");
   writeFileSync(releasesResponseFile, opts.releasesResponseJson ?? "");
   writeFileSync(listStatusFile, String(opts.listLookupExit ?? 0));
+  writeFileSync(refResponseFile, opts.refResponseJson ?? "");
+  writeFileSync(refStatusFile, String(opts.refLookupExit ?? 0));
+  writeFileSync(tagDerefResponseFile, opts.tagDerefResponseJson ?? "");
+  writeFileSync(tagDerefStatusFile, String(opts.tagDerefExit ?? 0));
   writeFileSync(patchStatusFile, String(opts.patchExit ?? 0));
 
   const stub = `#!/usr/bin/env bash
@@ -92,15 +121,28 @@ function setupGhStub(opts: {
   printf '\\0'
 } >> "${callsLog}"
 
-# gh api <path>             → return releases-response.json (the LIST
-#                             endpoint's JSON array) with the list-status exit
-# gh api --method PATCH ...   → no output, exit with the patch-status code
+# gh api --method PATCH ...           → no output, exit with the patch-status code
+# gh api .../git/ref/tags/{tag}       → ref-response.json with the ref-status exit
+# gh api .../git/tags/{sha}           → tag-deref-response.json with its exit
+# gh api .../releases (the LIST path) → releases-response.json with the list-status exit
 if [[ "$1" == "api" && "$2" == "--method" && "$3" == "PATCH" ]]; then
   exit "$(cat "${patchStatusFile}")"
 fi
 if [[ "$1" == "api" ]]; then
-  cat "${releasesResponseFile}"
-  exit "$(cat "${listStatusFile}")"
+  case "$2" in
+    */git/ref/tags/*)
+      cat "${refResponseFile}"
+      exit "$(cat "${refStatusFile}")"
+      ;;
+    */git/tags/*)
+      cat "${tagDerefResponseFile}"
+      exit "$(cat "${tagDerefStatusFile}")"
+      ;;
+    *)
+      cat "${releasesResponseFile}"
+      exit "$(cat "${listStatusFile}")"
+      ;;
+  esac
 fi
 exit 0
 `;
@@ -151,17 +193,30 @@ function readCalls(callsLog: string): string[][] {
 const LIST_PATH = "/repos/point-source/flywheel/releases";
 
 describe("publish-draft-release.sh", () => {
-  it("publishes a draft release whose target_commitish matches EXPECTED_SHA", () => {
-    // (a1) The draft-visible LIST lookup returns the draft → publish proceeds.
+  it("publishes when the tag resolves to EXPECTED_SHA even though target_commitish is a branch name", () => {
+    // (a1) The publishable shape a REAL release carries: target_commitish
+    // is the branch the release was cut from ("main"), NOT a commit. The
+    // SHA pin must resolve the tag REFERENCE to its commit and match that
+    // against EXPECTED_SHA — so the release still publishes. (#224: the old
+    // guard compared target_commitish to EXPECTED_SHA and refused every
+    // real release, because "main" can never equal a 40-char SHA.)
     const releasesJson = JSON.stringify([
       {
         id: 12345,
         tag_name: "v1.3.0",
         draft: true,
-        target_commitish: "deadbeefcafef00d",
+        target_commitish: "main",
       },
     ]);
-    const stub = setupGhStub({ releasesResponseJson: releasesJson });
+    // Lightweight tag: the ref's object IS the commit, and it is EXPECTED_SHA.
+    const refJson = JSON.stringify({
+      ref: "refs/tags/v1.3.0",
+      object: { type: "commit", sha: "deadbeefcafef00d" },
+    });
+    const stub = setupGhStub({
+      releasesResponseJson: releasesJson,
+      refResponseJson: refJson,
+    });
     try {
       const r = runScript({
         binDir: stub.binDir,
@@ -179,8 +234,13 @@ describe("publish-draft-release.sh", () => {
       const calls = readCalls(stub.callsLog);
       // First call: list the releases (draft-visible endpoint).
       expect(calls[0]).toEqual(["api", LIST_PATH]);
-      // Second call: PATCH with draft=false on the resolved id.
+      // Second call: resolve the tag ref to its commit for the SHA pin.
       expect(calls[1]).toEqual([
+        "api",
+        "/repos/point-source/flywheel/git/ref/tags/v1.3.0",
+      ]);
+      // Third call: PATCH with draft=false on the resolved id.
+      expect(calls[2]).toEqual([
         "api",
         "--method",
         "PATCH",
@@ -188,6 +248,56 @@ describe("publish-draft-release.sh", () => {
         "-F",
         "draft=false",
       ]);
+    } finally {
+      stub.cleanup();
+    }
+  });
+
+  it("publishes an annotated tag by dereferencing it to its commit", () => {
+    // (a1b) Annotated tag: the ref points at a tag OBJECT, which must be
+    // dereferenced (GET /git/tags/{sha}) to the commit it wraps. That
+    // commit is EXPECTED_SHA → publish proceeds.
+    const releasesJson = JSON.stringify([
+      { id: 22, tag_name: "v1.3.0", draft: true, target_commitish: "main" },
+    ]);
+    const refJson = JSON.stringify({
+      ref: "refs/tags/v1.3.0",
+      object: { type: "tag", sha: "tagobjectsha00" },
+    });
+    const derefJson = JSON.stringify({
+      sha: "tagobjectsha00",
+      object: { type: "commit", sha: "deadbeefcafef00d" },
+    });
+    const stub = setupGhStub({
+      releasesResponseJson: releasesJson,
+      refResponseJson: refJson,
+      tagDerefResponseJson: derefJson,
+    });
+    try {
+      const r = runScript({
+        binDir: stub.binDir,
+        env: {
+          GITHUB_TOKEN: "test-token",
+          GITHUB_REPOSITORY: "point-source/flywheel",
+          TAG_NAME: "v1.3.0",
+          EXPECTED_SHA: "deadbeefcafef00d",
+        },
+      });
+      expect(r.status, `\nstdout:\n${r.stdout}\nstderr:\n${r.stderr}`).toBe(0);
+      expect(r.stdout).toContain("Published.");
+
+      const calls = readCalls(stub.callsLog);
+      expect(calls[0]).toEqual(["api", LIST_PATH]);
+      expect(calls[1]).toEqual([
+        "api",
+        "/repos/point-source/flywheel/git/ref/tags/v1.3.0",
+      ]);
+      // The annotated tag object was dereferenced before publishing.
+      expect(calls[2]).toEqual([
+        "api",
+        "/repos/point-source/flywheel/git/tags/tagobjectsha00",
+      ]);
+      expect(calls[3]).toContain("PATCH");
     } finally {
       stub.cleanup();
     }
@@ -299,17 +409,22 @@ describe("publish-draft-release.sh", () => {
     }
   });
 
-  it("refuses to publish when target_commitish drifts from EXPECTED_SHA", () => {
-    // (d) The matching draft's target_commitish != EXPECTED_SHA → loud refusal.
+  it("refuses to publish when the tag resolves to a different commit than EXPECTED_SHA", () => {
+    // (d) The tag was retargeted: it resolves to a commit other than the
+    // one the gate ran e2e against → loud refusal, no publish. target_commitish
+    // is "main" as a real release carries it; the drift is detected via the
+    // resolved tag commit, not the (branch-name) target_commitish.
     const releasesJson = JSON.stringify([
-      {
-        id: 12345,
-        tag_name: "v1.3.0",
-        draft: true,
-        target_commitish: "actualsha",
-      },
+      { id: 12345, tag_name: "v1.3.0", draft: true, target_commitish: "main" },
     ]);
-    const stub = setupGhStub({ releasesResponseJson: releasesJson });
+    const refJson = JSON.stringify({
+      ref: "refs/tags/v1.3.0",
+      object: { type: "commit", sha: "actualcommitsha" },
+    });
+    const stub = setupGhStub({
+      releasesResponseJson: releasesJson,
+      refResponseJson: refJson,
+    });
     try {
       const r = runScript({
         binDir: stub.binDir,
@@ -321,12 +436,51 @@ describe("publish-draft-release.sh", () => {
         },
       });
       expect(r.status).not.toBe(0);
+      expect(r.stderr + r.stdout).toMatch(/::error::/);
       expect(r.stderr + r.stdout).toMatch(/does not match expected SHA/);
 
-      // Lookup happened; PATCH did not.
+      // List + ref resolution happened; PATCH did not.
       const calls = readCalls(stub.callsLog);
-      expect(calls).toHaveLength(1);
-      expect(calls[0]).not.toContain("PATCH");
+      expect(calls.some((c) => c.includes("PATCH"))).toBe(false);
+    } finally {
+      stub.cleanup();
+    }
+  });
+
+  it("fails loudly when the tag ref cannot be resolved to a commit", () => {
+    // (d2) The SHA pin is set but the tag ref lookup errors (e.g. the tag
+    // was deleted, or the API returned an error body). An unverifiable tag
+    // must never publish: loud ::error:: + non-zero exit, no PATCH. This is
+    // the loud-failure half of the SHA pin — a refusal, not a silent skip.
+    const releasesJson = JSON.stringify([
+      { id: 12345, tag_name: "v1.3.0", draft: true, target_commitish: "main" },
+    ]);
+    const refErrorBody = JSON.stringify({
+      message: "Not Found",
+      documentation_url: "https://docs.github.com/rest",
+    });
+    const stub = setupGhStub({
+      releasesResponseJson: releasesJson,
+      refResponseJson: refErrorBody,
+      refLookupExit: 1,
+    });
+    try {
+      const r = runScript({
+        binDir: stub.binDir,
+        env: {
+          GITHUB_TOKEN: "test-token",
+          GITHUB_REPOSITORY: "point-source/flywheel",
+          TAG_NAME: "v1.3.0",
+          EXPECTED_SHA: "deadbeefcafef00d",
+        },
+      });
+      expect(r.status).not.toBe(0);
+      expect(r.stderr + r.stdout).toMatch(/::error::/);
+      expect(r.stderr + r.stdout).toMatch(/resolve tag ref/);
+      expect(r.stdout).not.toContain("Published.");
+
+      const calls = readCalls(stub.callsLog);
+      expect(calls.some((c) => c.includes("PATCH"))).toBe(false);
     } finally {
       stub.cleanup();
     }
