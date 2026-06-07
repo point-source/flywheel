@@ -1,4 +1,6 @@
 name: Verify dist
+run-name: >-
+  ${{ github.workflow }} — ${{ github.event.head_commit.message || github.event.pull_request.title || github.event.release.tag_name || github.ref_name }}
 on:
   pull_request:
   push:
