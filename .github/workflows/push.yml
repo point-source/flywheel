@@ -1,4 +1,6 @@
 name: Flywheel — Push (reusable)
+run-name: >-
+  ${{ github.workflow }} — ${{ github.event.head_commit.message || github.event.pull_request.title || github.event.release.tag_name || github.ref_name }}
 # Reusable workflow holding the canonical push-event logic: the action,
 # semantic-release with pinned plugin majors, the @-mention sanitizer
 # (#73), and the back-merge loop (#74). Adopters pin
