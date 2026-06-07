@@ -541,13 +541,13 @@ authored by the bot that emits that prefix. Two prefixes, two
 authoring identities, because flywheel's release pipeline uses two
 distinct bots:
 
-- `chore(release): ` — the version commit, authored by
+- `chore(release):` — the version commit, authored by
   `semantic-release-bot` (`semantic-release-bot@martynus.net`), the
   default committer of `@semantic-release/git` when the workflow
   configures no git identity of its own. This commit appears on the
   release branch push, and again on an upstream branch when the
   back-merge fast-forwards onto it.
-- `chore: back-merge ` — the back-merge merge commit (format
+- `chore: back-merge` — the back-merge merge commit (format
   `chore: back-merge vX.Y.Z from <branch> into <branch>`), authored
   by `github-actions[bot]`
   (`41898282+github-actions[bot]@users.noreply.github.com`), the
@@ -559,7 +559,7 @@ is fail-safe in the direction that matters: an unrecognized author
 classifies the commit as *non*-derived and the quality workflow
 runs — flywheel never skips CI on a commit it is unsure about. The
 promotion PR is a separate signal, identified by its title
-containing `: promote ` — the format flywheel emits when opening
+containing `: promote` — the format flywheel emits when opening
 the long-lived promotion PR. These prefixes, the two bot
 identities, and the promotion-PR title pattern are declared as part
 of flywheel's stable public surface in this section; flywheel's
@@ -616,7 +616,7 @@ lint job adds `needs: classify` plus `if: needs.classify.outputs
 `point-source/flywheel` produces one fan-out per workflow rather
 than two or three. §req:release-ci-budget-criteria
 
-The promotion PR's `: promote ` signal is not used by these
+The promotion PR's `: promote` signal is not used by these
 workflows — they trigger on `push`, not on the promotion PR — so
 `integration.yml` / `verify-dist.yml` / `governance-lint.yml` gate
 on `derived_release_commit` only. The `promotion_pr` output is
@@ -708,7 +708,7 @@ require a major bump on both actions.
 
 - The back-merge merge-commit message format (`chore: back-merge
   vX.Y.Z from <branch> into <branch>`), the release-commit prefix
-  (`chore(release): `), and the two authoring bot identities
+  (`chore(release):`), and the two authoring bot identities
   (`semantic-release-bot`, `github-actions[bot]`) become part of
   flywheel's stable public surface, formally locking them to the
   major version. Changing any of them becomes a breaking change.
