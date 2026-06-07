@@ -12,10 +12,30 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 // End-to-end exercise of scripts/publish-draft-release.sh — the final
-// step of release-gate.yml. The script reads a release by tag from the
-// GitHub API, refuses if the target_commitish drifted from the SHA the
-// gate ran e2e against, and on a match flips the release from draft to
-// public via PATCH /repos/{owner}/{repo}/releases/{id}.
+// step of release-gate.yml. The script lists the repository's releases
+// via the draft-visible LIST endpoint (GET /repos/{owner}/{repo}/releases),
+// jq-selects the element whose .tag_name matches TAG_NAME, refuses if the
+// target_commitish drifted from the SHA the gate ran e2e against, and on
+// a match flips the release from draft to public via
+// PATCH /repos/{owner}/{repo}/releases/{id}.
+//
+// Why the LIST endpoint, not the tags endpoint: the per-tag releases
+// endpoint (/repos/.../releases/tags/{tag}) only returns *published*
+// releases — it 404s on a draft. Because release-gate cuts the release
+// as a draft on purpose (the draft window is what the gate runs e2e
+// against), a tags-endpoint lookup 404'd on every gated release and
+// silently stranded it as an unpublished draft (the v1.4.0–v1.6.0
+// shape). The LIST endpoint is draft-visible, so it is the only lookup
+// that can see what this script must publish.
+//
+// Loud-failure contract: a lookup that *errors* (gh api exits non-zero,
+// or returns an unparseable body) is NOT "nothing to publish" — it is a
+// hard failure (`::error::`, non-zero exit, no PATCH). Only an actual
+// parseable array that contains no matching tag is the benign no-op.
+// Modelling the error case faithfully matters: in production a missing
+// lookup returns a NON-EMPTY error body on stdout alongside the
+// non-zero exit, which is the exact shape that stranded releases — a
+// test that stubs an empty body for the miss does not exercise it.
 //
 // This script gates whether a release reaches every adopter pinned to
 // @v1 on their next CI run. Per the project's "no critical code is
@@ -41,21 +61,26 @@ interface GhStub {
 
 /** PATH-shadowing `gh` stub. argv is recorded one record per call,
  * NUL-terminated so newlines inside an argument don't split the record;
- * within a record args are TAB-separated. Canned responses are written
- * to `tag-response.json` (returned for `gh api /repos/.../releases/tags/...`)
- * and `tag-response.status` (the gh exit code for the tags lookup, used
- * to simulate a 404). The PATCH call always succeeds — the script
- * doesn't read its output. */
+ * within a record args are TAB-separated. Canned responses model the
+ * draft-visible LIST endpoint: `releases-response.json` (the JSON ARRAY
+ * of release objects returned for `gh api /repos/.../releases`) and
+ * `releases-response.status` (the gh exit code for that list lookup,
+ * used to simulate an API error). The PATCH call defaults to success and
+ * no output; `patchExit` overrides its exit code to simulate a publish
+ * API error. The script doesn't read the PATCH output. */
 function setupGhStub(opts: {
-  tagResponseJson?: string;
-  tagLookupExit?: number;
+  releasesResponseJson?: string;
+  listLookupExit?: number;
+  patchExit?: number;
 }): GhStub {
   const binDir = mkdtempSync(join(tmpdir(), "flywheel-pdr-bin-"));
   const callsLog = join(binDir, "gh-calls.log");
-  const tagResponseFile = join(binDir, "tag-response.json");
-  const tagStatusFile = join(binDir, "tag-response.status");
-  writeFileSync(tagResponseFile, opts.tagResponseJson ?? "");
-  writeFileSync(tagStatusFile, String(opts.tagLookupExit ?? 0));
+  const releasesResponseFile = join(binDir, "releases-response.json");
+  const listStatusFile = join(binDir, "releases-response.status");
+  const patchStatusFile = join(binDir, "patch-response.status");
+  writeFileSync(releasesResponseFile, opts.releasesResponseJson ?? "");
+  writeFileSync(listStatusFile, String(opts.listLookupExit ?? 0));
+  writeFileSync(patchStatusFile, String(opts.patchExit ?? 0));
 
   const stub = `#!/usr/bin/env bash
 # Record argv to the calls log, one NUL-terminated record per call.
@@ -67,14 +92,15 @@ function setupGhStub(opts: {
   printf '\\0'
 } >> "${callsLog}"
 
-# gh api <path>            → return tag-response.json with tag-status exit
-# gh api --method PATCH ...  → always success, no output
+# gh api <path>             → return releases-response.json (the LIST
+#                             endpoint's JSON array) with the list-status exit
+# gh api --method PATCH ...   → no output, exit with the patch-status code
 if [[ "$1" == "api" && "$2" == "--method" && "$3" == "PATCH" ]]; then
-  exit 0
+  exit "$(cat "${patchStatusFile}")"
 fi
 if [[ "$1" == "api" ]]; then
-  cat "${tagResponseFile}"
-  exit "$(cat "${tagStatusFile}")"
+  cat "${releasesResponseFile}"
+  exit "$(cat "${listStatusFile}")"
 fi
 exit 0
 `;
@@ -122,14 +148,20 @@ function readCalls(callsLog: string): string[][] {
     .map((r) => r.split("\t"));
 }
 
+const LIST_PATH = "/repos/point-source/flywheel/releases";
+
 describe("publish-draft-release.sh", () => {
   it("publishes a draft release whose target_commitish matches EXPECTED_SHA", () => {
-    const tagJson = JSON.stringify({
-      id: 12345,
-      draft: true,
-      target_commitish: "deadbeefcafef00d",
-    });
-    const stub = setupGhStub({ tagResponseJson: tagJson });
+    // (a1) The draft-visible LIST lookup returns the draft → publish proceeds.
+    const releasesJson = JSON.stringify([
+      {
+        id: 12345,
+        tag_name: "v1.3.0",
+        draft: true,
+        target_commitish: "deadbeefcafef00d",
+      },
+    ]);
+    const stub = setupGhStub({ releasesResponseJson: releasesJson });
     try {
       const r = runScript({
         binDir: stub.binDir,
@@ -145,11 +177,8 @@ describe("publish-draft-release.sh", () => {
       expect(r.stdout).toContain("Published.");
 
       const calls = readCalls(stub.callsLog);
-      // First call: lookup by tag.
-      expect(calls[0]).toEqual([
-        "api",
-        "/repos/point-source/flywheel/releases/tags/v1.3.0",
-      ]);
+      // First call: list the releases (draft-visible endpoint).
+      expect(calls[0]).toEqual(["api", LIST_PATH]);
       // Second call: PATCH with draft=false on the resolved id.
       expect(calls[1]).toEqual([
         "api",
@@ -164,13 +193,57 @@ describe("publish-draft-release.sh", () => {
     }
   });
 
-  it("is idempotent: a release that is already published is a no-op (exit 0, no PATCH)", () => {
-    const tagJson = JSON.stringify({
-      id: 99,
-      draft: false,
-      target_commitish: "anysha",
+  it("fails loudly when the lookup errors with a non-empty body (the v1.4.0–v1.6.0 stranding shape)", () => {
+    // (a2) The stale tags-style miss AS IT REALLY HAPPENED: in production
+    // the failing lookup did NOT return an empty body — it returned a
+    // non-zero exit *together with* a non-empty error body on stdout
+    // (e.g. GitHub's `{"message":"Not Found",...}`). The previous test
+    // stubbed an EMPTY body for the miss, so the script's `[[ -z ... ]]`
+    // guard swallowed it as "nothing to publish" and the bug went
+    // unreproduced. A faithful stub must carry a NON-EMPTY body, which is
+    // why this case asserts the loud-failure path rather than a no-op.
+    const errorBody = JSON.stringify({
+      message: "Not Found",
+      documentation_url: "https://docs.github.com/rest",
     });
-    const stub = setupGhStub({ tagResponseJson: tagJson });
+    const stub = setupGhStub({
+      releasesResponseJson: errorBody,
+      listLookupExit: 1,
+    });
+    try {
+      const r = runScript({
+        binDir: stub.binDir,
+        env: {
+          GITHUB_TOKEN: "test-token",
+          GITHUB_REPOSITORY: "point-source/flywheel",
+          TAG_NAME: "v1.6.0",
+        },
+      });
+      expect(r.status).not.toBe(0);
+      expect(r.stderr + r.stdout).toMatch(/::error::/);
+      // Must NOT be misclassified as the benign "nothing to publish" no-op.
+      expect(r.stderr + r.stdout).not.toMatch(/No release found for tag/);
+
+      // The lookup happened; no PATCH was issued.
+      const calls = readCalls(stub.callsLog);
+      expect(calls).toHaveLength(1);
+      expect(calls[0]).toEqual(["api", LIST_PATH]);
+    } finally {
+      stub.cleanup();
+    }
+  });
+
+  it("is idempotent: a release that is already published is a no-op (exit 0, no PATCH)", () => {
+    // (b) The selected release has draft:false → idempotent no-op.
+    const releasesJson = JSON.stringify([
+      {
+        id: 99,
+        tag_name: "v1.3.0",
+        draft: false,
+        target_commitish: "anysha",
+      },
+    ]);
+    const stub = setupGhStub({ releasesResponseJson: releasesJson });
     try {
       const r = runScript({
         binDir: stub.binDir,
@@ -186,20 +259,57 @@ describe("publish-draft-release.sh", () => {
       const calls = readCalls(stub.callsLog);
       // Only the lookup happened — no PATCH.
       expect(calls).toHaveLength(1);
-      expect(calls[0]![0]).toBe("api");
+      expect(calls[0]).toEqual(["api", LIST_PATH]);
       expect(calls[0]).not.toContain("PATCH");
     } finally {
       stub.cleanup();
     }
   });
 
+  it("treats a genuine absence of any release for the tag as a benign no-op", () => {
+    // (c) The list parses fine but contains no element matching the tag —
+    // this is the only real "nothing to publish" case. Distinct from a2:
+    // here the lookup *succeeded* and simply found nothing.
+    const releasesJson = JSON.stringify([
+      {
+        id: 5,
+        tag_name: "v1.2.0",
+        draft: false,
+        target_commitish: "othersha",
+      },
+    ]);
+    const stub = setupGhStub({ releasesResponseJson: releasesJson });
+    try {
+      const r = runScript({
+        binDir: stub.binDir,
+        env: {
+          GITHUB_TOKEN: "test-token",
+          GITHUB_REPOSITORY: "point-source/flywheel",
+          TAG_NAME: "v9.9.9",
+        },
+      });
+      expect(r.status, `\nstdout:\n${r.stdout}\nstderr:\n${r.stderr}`).toBe(0);
+      expect(r.stdout).toContain("No release found for tag");
+
+      const calls = readCalls(stub.callsLog);
+      expect(calls).toHaveLength(1);
+      expect(calls[0]).toEqual(["api", LIST_PATH]);
+    } finally {
+      stub.cleanup();
+    }
+  });
+
   it("refuses to publish when target_commitish drifts from EXPECTED_SHA", () => {
-    const tagJson = JSON.stringify({
-      id: 12345,
-      draft: true,
-      target_commitish: "actualsha",
-    });
-    const stub = setupGhStub({ tagResponseJson: tagJson });
+    // (d) The matching draft's target_commitish != EXPECTED_SHA → loud refusal.
+    const releasesJson = JSON.stringify([
+      {
+        id: 12345,
+        tag_name: "v1.3.0",
+        draft: true,
+        target_commitish: "actualsha",
+      },
+    ]);
+    const stub = setupGhStub({ releasesResponseJson: releasesJson });
     try {
       const r = runScript({
         binDir: stub.binDir,
@@ -223,12 +333,15 @@ describe("publish-draft-release.sh", () => {
   });
 
   it("publishes without SHA verification when EXPECTED_SHA is unset", () => {
-    const tagJson = JSON.stringify({
-      id: 7,
-      draft: true,
-      target_commitish: "anysha",
-    });
-    const stub = setupGhStub({ tagResponseJson: tagJson });
+    const releasesJson = JSON.stringify([
+      {
+        id: 7,
+        tag_name: "v1.3.0",
+        draft: true,
+        target_commitish: "anysha",
+      },
+    ]);
+    const stub = setupGhStub({ releasesResponseJson: releasesJson });
     try {
       const r = runScript({
         binDir: stub.binDir,
@@ -242,28 +355,74 @@ describe("publish-draft-release.sh", () => {
       const calls = readCalls(stub.callsLog);
       // Lookup + PATCH.
       expect(calls).toHaveLength(2);
+      expect(calls[0]).toEqual(["api", LIST_PATH]);
       expect(calls[1]).toContain("PATCH");
     } finally {
       stub.cleanup();
     }
   });
 
-  it("handles a missing release for the tag (404) as a no-op", () => {
-    const stub = setupGhStub({ tagResponseJson: "", tagLookupExit: 1 });
+  it("fails loudly when the publish PATCH call errors", () => {
+    // (f) The draft is found and publishable, but the PATCH (draft=false)
+    // call itself errors. Like the lookup failures, a publish error is
+    // loud: a maintainer reading CI must be able to tell the green release
+    // did not reach adopters, rather than the run exiting on a bare
+    // non-zero with no signposted reason.
+    const releasesJson = JSON.stringify([
+      {
+        id: 4242,
+        tag_name: "v1.3.0",
+        draft: true,
+        target_commitish: "anysha",
+      },
+    ]);
+    const stub = setupGhStub({ releasesResponseJson: releasesJson, patchExit: 1 });
     try {
       const r = runScript({
         binDir: stub.binDir,
         env: {
           GITHUB_TOKEN: "test-token",
           GITHUB_REPOSITORY: "point-source/flywheel",
-          TAG_NAME: "v9.9.9",
+          TAG_NAME: "v1.3.0",
         },
       });
-      expect(r.status, `\nstdout:\n${r.stdout}\nstderr:\n${r.stderr}`).toBe(0);
-      expect(r.stdout).toContain("No release found for tag");
+      expect(r.status).not.toBe(0);
+      expect(r.stderr + r.stdout).toMatch(/::error::/);
+      expect(r.stdout).not.toContain("Published.");
+
+      // The PATCH was attempted (lookup + PATCH), but the script did not
+      // claim success.
+      const calls = readCalls(stub.callsLog);
+      expect(calls).toHaveLength(2);
+      expect(calls[1]).toContain("PATCH");
+    } finally {
+      stub.cleanup();
+    }
+  });
+
+  it("fails loudly when the lookup body is not a parseable JSON array", () => {
+    // (e) The list lookup succeeded (exit 0) but returned non-array
+    // garbage — the script cannot trust it and must fail loudly rather
+    // than silently treat it as "nothing to publish".
+    const stub = setupGhStub({
+      releasesResponseJson: "not json",
+      listLookupExit: 0,
+    });
+    try {
+      const r = runScript({
+        binDir: stub.binDir,
+        env: {
+          GITHUB_TOKEN: "test-token",
+          GITHUB_REPOSITORY: "point-source/flywheel",
+          TAG_NAME: "v1.3.0",
+        },
+      });
+      expect(r.status).not.toBe(0);
+      expect(r.stderr + r.stdout).toMatch(/::error::/);
 
       const calls = readCalls(stub.callsLog);
       expect(calls).toHaveLength(1);
+      expect(calls[0]).not.toContain("PATCH");
     } finally {
       stub.cleanup();
     }

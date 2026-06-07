@@ -233,6 +233,24 @@ has produced a release-eligible SHA that was never confirmed green. The
 two problems are independent failure modes that the same per-push e2e
 cadence has so far masked from each other.
 
+The gate has two halves — block a red release, publish a green one — and
+only the block half is verified. The publish-on-green half has been
+failing silently in production: flywheel creates each production release
+as an unpublished draft and relies on a publish step to flip it public
+once e2e is green, but that step never locates the draft, errors, and
+exits without publishing. Every production release since the draft
+mechanism arrived at v1.4.0 (v1.4.0, v1.5.0, v1.6.0) is stranded as an
+unpublished draft; nothing has reached adopters since v1.3.0. To an
+adopter a green gate that never publishes is indistinguishable from no
+release — a moving `@vN` never advances, an exact pin never appears — and
+because the drafts pile up with no error surfaced, the gap is found only
+when adopters are noticed to be versions behind. The outcome needed is
+the full round trip: a release that passes e2e reliably becomes a
+published release adopters receive, and a draft stays unpublished only
+when it legitimately failed verification (a red e2e run, or no release on
+the tag). Restoring the already-stranded v1.4.0–v1.6.0 drafts is out of
+scope; this governs releases going forward.
+
 ## Release CI budget §req:release-ci-budget
 
 Every flywheel release produces three pushes in rapid succession on the
@@ -313,6 +331,16 @@ change the outcome.
 - Adopters pinned to `@v1` observe no behavior change for green releases
   (same trigger, same timing) and no new opt-in is required to consume
   flywheel after the gate ships.
+- A green-gated release is published and visible to adopters on the same
+  run that turned green — the draft-to-public transition completes on
+  every green gate, not incidentally. A draft stays unpublished only for a
+  legitimate reason: a red e2e run, or no release attached to the tag.
+- When the publish step cannot complete, it fails loudly enough that a
+  maintainer reading CI can tell a green release did not reach adopters,
+  rather than discovering stranded drafts versions later.
+- The publish path is exercised against the behavior a real release
+  produces, so a regression that would strand releases is caught before
+  it ships rather than in production.
 
 ## Release CI budget success criteria §req:release-ci-budget-criteria
 
