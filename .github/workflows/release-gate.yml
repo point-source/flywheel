@@ -1,4 +1,6 @@
 name: Release gate
+run-name: >-
+  ${{ github.workflow }} — ${{ github.event.head_commit.message || github.event.pull_request.title || github.event.release.tag_name || github.ref_name }}
 # Production releases on main land as unpublished drafts because
 # .flywheel.yml sets release_as_draft: true on main. This workflow runs
 # the full e2e suite against the SHA the production version tag points

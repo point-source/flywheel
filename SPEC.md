@@ -680,3 +680,122 @@ require a major bump on both actions.
 provided, not adopter-controlled) and emits string outputs. It
 mints no token, makes no API call, and reads no secrets. No new
 attack surface.
+
+## Workflow run names §spec:workflow-run-names
+
+*Status: complete*
+
+When one commit triggers several of flywheel's workflows — routine on
+`develop` and `main`, where a single `chore(release): X.Y.Z` bot commit
+fans out to every top-level workflow at once — the GitHub Actions list
+shows the same title on every row, because none of flywheel's workflow
+files set `run-name` and GitHub's fallback is the triggering commit's
+message. The rows are distinct workflows (Governance Lint, Verify dist,
+Integration tests, Flywheel — Push, Release gate, and the rest), but
+nothing in the title tells them apart; a maintainer scanning CI reads
+across to the workflow column or opens each run to identify it. Every
+workflow file in this repository sets a `run-name` whose displayed title
+begins with the workflow's own human-readable name, so each run in the
+list is identifiable at a glance. §req:workflow-run-names
+
+**Observable behavior.** For a commit that triggers multiple workflows,
+the Actions list shows a distinct title per run, each of the form
+`<Workflow name> — <change context>`. The change context is the head
+commit's message for a push, the pull-request title for a `pull_request`
+run, and the tag or branch name otherwise — so a reader both identifies
+which workflow a row is and ties it back to the change that caused it,
+without opening any run. A workflow's triggers, jobs, permissions, and
+reported check names are unchanged; the same commit triggers the same set
+of workflows with the same checks reporting, and only the list titles
+differ. §req:workflow-run-names-criteria §req:workflow-run-names-constraints
+
+**Name source — `github.workflow`, not a repeated literal.** Each
+`run-name` leads with `${{ github.workflow }}` rather than re-typing the
+workflow's name as a string literal. `github.workflow` evaluates to the
+workflow's own `name:`, so the displayed title and the `name:` field
+cannot drift: renaming a workflow updates its run name automatically, and
+a workflow added later inherits the convention by copying one line. Every
+flywheel workflow already declares `name:`, so the expression always
+resolves to the intended human-readable name (GitHub's file-path fallback
+for a missing `name:` never applies here). §req:workflow-run-names-stories
+
+**Change-context expression — a graceful-degradation fallback chain.**
+flywheel's workflows fire on a mix of events — `push`, `pull_request`,
+`release`, `workflow_dispatch`, and tag pushes — and `run-name` is
+evaluated once, before any job runs, against whichever event actually
+triggered the run. A single expression shall therefore yield a useful,
+non-empty title for every such event. Each `run-name` resolves the change
+context through an ordered `||` chain that takes the first populated value
+for the firing event:
+
+1. `github.event.head_commit.message` — present on `push` (branch and
+   release-commit pushes), the dominant case this section exists to fix.
+2. `github.event.pull_request.title` — present on `pull_request`.
+3. `github.event.release.tag_name` — present on `release` (e.g.
+   `release-major-tag.yml`).
+4. `github.ref_name` — the branch or tag short name, always populated.
+
+The trailing `github.ref_name` is the floor: it is never blank for any
+event, so the expression can neither render an empty title nor error on an
+event that carries no commit or PR (a `workflow_dispatch` run, for
+instance, falls through to the branch name). Ordering commit-message first
+matches the fan-out the section targets — the release-bot push — and the
+PR title second covers the other high-frequency case. §req:workflow-run-names-constraints
+
+**Coverage — every workflow file, including the reusable ones.** All eight
+top-level workflows (`e2e.yml`, `flywheel-pr.yml`, `flywheel-push.yml`,
+`governance-lint.yml`, `integration.yml`, `release-gate.yml`,
+`release-major-tag.yml`, `verify-dist.yml`) carry the run name and gain
+distinct list rows. The two reusable workflows (`push.yml`, `pr.yml`),
+invoked via `workflow_call`, also carry it — even though GitHub ignores a
+called workflow's `run-name` and renders it nested under its caller's row,
+so the reusable workflows produce no separate list entry. Their run name
+is a deliberate source-level consistency choice — every workflow file
+follows one convention, and a contributor reading any file sees the same
+pattern — not an expectation that they gain their own rows.
+§req:workflow-run-names-criteria
+
+**Why this is display-only.** `run-name` controls solely the title GitHub
+shows for a run; it is not part of `on:`, `jobs`, `permissions`, or any
+job's reported check name. Adding it cannot change which workflows a commit
+triggers or which checks a branch-protection rule sees — the property that
+keeps this a zero-risk polish change rather than a CI-behavior change, and
+the reason it is safe to apply uniformly across every workflow at once.
+§req:workflow-run-names-constraints
+
+**Alternatives rejected.**
+
+- *Repeating the workflow name as a string literal* (e.g.
+  `run-name: "Verify dist — …"`, as the issue sketches). Works, but
+  duplicates the `name:` value in each file: a later rename updates one and
+  silently leaves the run name stale. `${{ github.workflow }}` keeps a
+  single source of truth for the name. §req:workflow-run-names-stories
+
+- *A per-event expression in each workflow* — tailoring the context to the
+  exact events that workflow declares (commit-only for a push-only
+  workflow, title-only for a PR-only workflow). Marginally shorter per
+  file, but every workflow then carries a different expression, the shared
+  convention is lost, and a workflow that later adds a trigger silently
+  renders blank for the new event. The one fallback chain is correct on
+  every event, so the same line is copied everywhere. §req:workflow-run-names-criteria
+
+- *Leaving the reusable workflows without a run name* — since GitHub
+  ignores it for called workflows, it changes nothing observable. Rejected
+  for consistency: "every workflow file sets `run-name` the same way" is a
+  simpler rule to state and to lint than "every workflow file except the
+  reusable ones," and it removes a question for the next contributor.
+  §req:workflow-run-names-criteria
+
+**Tradeoffs accepted.**
+
+- A run name built from `github.event.head_commit.message` carries the
+  full commit message, including any body, where GitHub's own default
+  fallback shows only the first line. In practice the Actions list renders
+  the leading line and flywheel's managed-branch commits are
+  single-line conventional commits, so the displayed title matches the
+  default's shape; a GitHub Actions expression cannot split on the first
+  newline, and the multi-line case is benign, so no trimming is attempted.
+
+- The change touches every workflow file in one sweep. Because it is
+  display-only (see above), the blast radius of a mistake is a wrong title,
+  not a broken or skipped check, so the uniform edit is low-risk.
