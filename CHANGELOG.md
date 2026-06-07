@@ -1,3 +1,29 @@
+# [1.5.0-dev.1](https://github.com/point-source/flywheel/compare/v1.4.0...v1.5.0-dev.1) (2026-05-28)
+
+
+### Features
+
+* skip redundant CI on flywheel release and back-merge commits ([#213](https://github.com/point-source/flywheel/issues/213)) ([101320b](https://github.com/point-source/flywheel/commit/101320bf5b8f77221f03c232b2c16195a2e462d9))
+
+# [1.4.0](https://github.com/point-source/flywheel/compare/v1.3.0...v1.4.0) (2026-05-27)
+
+
+### Bug Fixes
+
+* **ci:** pin governance-lint reusable workflow to [@v0](https://github.com/v0) ([#206](https://github.com/point-source/flywheel/issues/206)) ([997d301](https://github.com/point-source/flywheel/commit/997d301c4ccc1083e7e0ece0a512972b680d4b06)), closes [#185](https://github.com/point-source/flywheel/issues/185)
+
+
+### Features
+
+* **ci:** gate production release publication on sandbox e2e ([#201](https://github.com/point-source/flywheel/issues/201)) ([8cbe4b4](https://github.com/point-source/flywheel/commit/8cbe4b40cb23eaafad8a8388d8180ac96fa328a3))
+
+# [1.4.0-dev.2](https://github.com/point-source/flywheel/compare/v1.4.0-dev.1...v1.4.0-dev.2) (2026-05-27)
+
+
+### Bug Fixes
+
+* **ci:** pin governance-lint reusable workflow to [@v0](https://github.com/v0) ([#206](https://github.com/point-source/flywheel/issues/206)) ([997d301](https://github.com/point-source/flywheel/commit/997d301c4ccc1083e7e0ece0a512972b680d4b06)), closes [#185](https://github.com/point-source/flywheel/issues/185)
+
 # [1.4.0-dev.1](https://github.com/point-source/flywheel/compare/v1.3.0...v1.4.0-dev.1) (2026-05-25)
 
 

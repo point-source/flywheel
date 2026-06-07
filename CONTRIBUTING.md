@@ -66,6 +66,27 @@ Validation rules live in `src/config.ts` and are tested via `tests/config.test.t
 
 See the existing fixtures for examples — each one isolates a single failure mode.
 
+## The `classify` action and its stable surface
+
+Every release pushes up to three commits onto managed branches — the human merge, the `chore(release): X.Y.Z` version commit, and the back-merge into upstream branches — and each push re-triggers quality workflows that already passed on the merge. The release and back-merge commits carry no new source, so re-running tests against them cannot change the verdict; it just burns CI minutes (and, for adopters on metered runners or sandbox API budgets, real quota).
+
+The `classify` composite action (`classify/action.yml`, backed by `scripts/classify-commit.sh`) lets a quality workflow skip that redundant work. It reads only `github.event` — no checkout, no token, no API calls — and emits two boolean outputs:
+
+- **`derived_release_commit`** — `true` for a flywheel-produced commit that carries no test signal: the `chore(release):` version commit (authored by `semantic-release-bot`) or the `chore: back-merge …` merge commit (authored by `github-actions[bot]`). A fast-forward back-merge lands the `chore(release)` commit directly on the upstream branch, so it surfaces there too.
+- **`promotion_pr`** — `true` when the run is for the long-lived develop→main promotion PR (PR title contains `: promote `).
+
+Adopters gate on these in a job- or step-level `if:` (see `scripts/templates/quality.yml`); a skipped step/job reports `success` to required-status-check rules, so the gate stays honest. Flywheel dogfoods it in `integration.yml`, `verify-dist.yml`, and `governance-lint.yml`.
+
+**Stable surface — do not change these without a major version bump.** The classify action, the scaffolded `quality.yml` template, and adopters pinned to `@v1` all depend on these strings:
+
+| Signal | Pattern | Authored by |
+|--------|---------|-------------|
+| Release commit | message starts with `chore(release): ` | `semantic-release-bot` |
+| Back-merge commit | message starts with `chore: back-merge ` | `github-actions[bot]` |
+| Promotion PR | PR title contains `: promote ` | (n/a) |
+
+The release-commit author depends on the `@semantic-release/git` default committer (`semantic-release-bot`); flywheel-push.yml configures no git identity of its own. If you ever set an explicit release-commit identity, update `scripts/classify-commit.sh` and this table in the same change — they are the single record of that coupling. Each prefix is trusted only from the bot that emits it, so a hand-authored commit using one of these prefixes is classified non-derived and its CI runs (the safe direction). Renaming a prefix, changing a bot identity, or altering the promotion-PR title format is a breaking change for adopters' quality workflows; bump the major. The behavior is specified in `SPEC.md` §spec:release-ci-budget and exercised by `tests/classify-commit.test.ts`.
+
 ## PR conventions
 
 These rules apply to **everyone opening PRs against this repo** — human contributors and AI agents (Claude Code, Cursor, Copilot, Codex) alike. The same rule set is described generically in [docs/adopter/setup.md §6](./docs/adopter/setup.md#6-brief-your-contributors-human-and-ai); what follows is the dogfood version with this repo's actual values filled in. `CLAUDE.md` at the repo root is a thin pointer to this section, so keep it in sync if you restructure.
