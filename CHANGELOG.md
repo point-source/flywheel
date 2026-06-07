@@ -1,3 +1,10 @@
+## [1.6.1-dev.1](https://github.com/point-source/flywheel/compare/v1.6.0...v1.6.1-dev.1) (2026-06-07)
+
+
+### Bug Fixes
+
+* publish gated release drafts so green releases reach adopters ([#222](https://github.com/point-source/flywheel/issues/222)) ([bfb9adf](https://github.com/point-source/flywheel/commit/bfb9adfb19884ccac424410b147b700f9bccae6e)), closes [#221](https://github.com/point-source/flywheel/issues/221)
+
 # [1.6.0](https://github.com/point-source/flywheel/compare/v1.5.0...v1.6.0) (2026-06-07)
 
 
