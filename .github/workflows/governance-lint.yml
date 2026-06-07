@@ -5,13 +5,40 @@ on:
   pull_request:
 
 jobs:
+  # A chore(release) commit on main (and on push events generally) carries no
+  # SPEC/ROADMAP/README change, so the lint below cannot reach a different
+  # verdict on it. classify runs in this tiny preceding job and the lint job
+  # gates on its output. See §spec:release-ci-budget.
+  classify:
+    runs-on: ubuntu-latest
+    outputs:
+      derived_release_commit: ${{ steps.classify.outputs.derived_release_commit }}
+    steps:
+      - uses: actions/checkout@v6
+      - id: classify
+        uses: ./classify
+  # We used to delegate to symphonize's reusable governance-lint workflow
+  # (`uses: repentsinner/symphonize/.github/workflows/governance-lint.yml@v0`),
+  # but its CHANGELOG.md structure check requires a Keep-a-Changelog layout
+  # (`## [Unreleased]` + `## [N.N.N]` headings) that is incompatible with the
+  # semantic-release-generated CHANGELOG.md flywheel ships (compare-linked,
+  # prerelease-suffixed headings, no Unreleased section), and the reusable
+  # workflow exposes no input to disable that one step. So we vendor every other
+  # v0 check into scripts/governance-lint.sh and run it here. See that script's
+  # header for the full rationale.
   lint:
-    # @v0 not @v1: symphonize is pre-1.0 (latest tag v0.1.x) and their
-    # update-major-tag.yml only publishes a floating tag matching the
-    # current major. The `v1` ref their README documents does not exist
-    # as a tag on the upstream repo, so the reusable-workflow load fails
-    # before any job runs (run shows conclusion=failure, zero jobs, empty
-    # referenced_workflows). Re-pin to `v1` once symphonize cuts 1.0.
-    uses: repentsinner/symphonize/.github/workflows/governance-lint.yml@v0
-    with:
-      readme-type: "application"
+    needs: classify
+    # Skipped when classify flags a flywheel release/back-merge commit; a
+    # skipped job reports success to required-check rules, so the gate stays
+    # honest on every other push.
+    if: needs.classify.outputs.derived_release_commit != 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Run Vale prose linter
+        if: hashFiles('.vale.ini') != ''
+        uses: vale-cli/vale-action@v2
+        with:
+          fail_on_error: true
+      - name: Run governance lint (markdownlint + structure)
+        run: ./scripts/governance-lint.sh
