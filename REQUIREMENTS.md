@@ -19,6 +19,10 @@
 <!--     dispatcher resolves against the adopter's workspace, not the action's -->
 <!--     own checkout, so every external adopter fails -->
 <!--     (§req:composite-action-path, §req:composite-action-path-criteria) -->
+<!--   - setup-node v5 upgrade — every actions/setup-node pin is on the stale -->
+<!--     @v4 major; bump them uniformly to @v5 -->
+<!--     (§req:setup-node-v5, §req:setup-node-v5-criteria, -->
+<!--     §req:setup-node-v5-stories, §req:setup-node-v5-constraints) -->
 
 ## Problem statement §req:problem-statement
 
@@ -745,3 +749,105 @@ barrier for another.
   lower-severity polish items in this document (e.g. §req:workflow-run-names)
   and is bounded and self-contained — a single action's self-reference plus a
   cheap regression test.
+
+## setup-node v5 upgrade §req:setup-node-v5
+
+Every `actions/setup-node` reference in the repository pins the `@v4` major,
+a now-superseded version. `actions/setup-node@v5` is generally available, and
+flywheel already keeps `actions/checkout` on the current major (`@v6`)
+repo-wide — setup-node is the one action left a major behind. There are seven
+references: the dispatcher Node-setup step in `action.yml` (added alongside the
+composite-action work, §req:composite-action-path, and deliberately pinned to
+`@v4` to keep that fix tightly scoped), four CI workflows (`integration.yml`,
+`release-gate.yml`, `verify-dist.yml`, `e2e.yml`), the contributor note in
+`CONTRIBUTING.md`, and the example workflow in `docs/adopter/setup.md` that
+adopters copy verbatim.
+
+The user is the flywheel maintainer carrying the upgrade, and — through the
+adopter-facing example — the adopter starting a new project from flywheel's
+documented workflow. Nobody is blocked and nothing breaks today: the cost is a
+small, growing maintenance debt. A stale action major is what Dependabot and
+security advisories eventually flag, and the copy-paste example in the adopter
+docs currently seeds new adopters on an already-superseded version, contrary to
+flywheel's intent that its documented recipes be the current, correct starting
+point.
+
+A `setup-node` major bump is its own dependency upgrade with its own potential
+behavior changes — a different default Node version, deprecations, and cache
+behavior. Folding it into the composite-path bug fix (§req:composite-action-path)
+would have expanded that fix's blast radius across five files, so the bump was
+deliberately deferred to this separate, reviewable change. The upgrade is
+expected to be low-risk precisely because flywheel does not lean on the
+behaviors v5 changes: every setup-node usage explicitly pins `node-version: 24`,
+and none use the action's `cache` input — so v5's changed default Node version
+and any cache-behavior change fall outside flywheel's blast radius. That
+expectation is the thing to confirm rather than assume, which is why the bump is
+done deliberately and verified, not waved through on the edit alone.
+
+## setup-node v5 success criteria §req:setup-node-v5-criteria
+
+- A repository-wide search for `setup-node@v4` returns nothing: all seven
+  references — the `action.yml` dispatcher step, the four CI workflows, the
+  `CONTRIBUTING.md` note, and the `docs/adopter/setup.md` example — name the
+  `@v5` major.
+- The new pins use the same major-float style as the rest of the repo
+  (`@v5`, matching `actions/checkout@v6`), so a reader sees one consistent
+  pinning convention rather than a mix of styles.
+- Local CI is green under v5: typecheck, unit tests, and `verify-dist` all
+  pass. `verify-dist` in particular confirms the committed `dist/` bundle still
+  builds against node 24 after the bump.
+- The integration suite passes under v5, confirming a bumped workflow still
+  provisions node 24 and runs `npm ci` plus the suite exactly as before. (The
+  heavier e2e run is not required for this change — per §req:sandbox-ci-budget
+  it is reserved against the rate-limited sandbox installation.)
+- The composite dispatcher still provisions node 24 under v5: the `action.yml`
+  setup-node step continues to set the runtime the bundle targets (esbuild
+  node24), so an external adopter running flywheel gets the same Node runtime
+  as before the bump.
+- No observable change for adopters consuming flywheel: the same `node-version`
+  is pinned everywhere, with no reliance on v5's changed default Node version or
+  cache defaults, so the upgrade is invisible to anyone who runs the action.
+- The adopter-facing example in `docs/adopter/setup.md` — copied verbatim by new
+  adopters — shows `@v5`, so a fresh project starts on the current major.
+
+## setup-node v5 user stories §req:setup-node-v5-stories
+
+- As a flywheel maintainer, I want every `setup-node` pin on the current `@v5`
+  major, so the repo is not carrying a stale action version that Dependabot or
+  a security advisory will eventually flag, and so all my workflows share one
+  consistent pin.
+- As a maintainer reviewing this change, I want it as its own deliberate PR —
+  not folded into the composite-path fix (§req:composite-action-path) — so the
+  bump's potential behavior changes (default Node version, cache, deprecations)
+  get their own review and the bug fix stayed tightly scoped.
+- As an adopter copying flywheel's documented example workflow, I want it to
+  show the current `setup-node` major, so I do not start a new project on an
+  already-superseded version.
+- As an adopter consuming flywheel as an action, I want the dispatcher to keep
+  provisioning node 24 exactly as before, so the upgrade changes nothing about
+  how my releases run.
+
+## setup-node v5 quality attributes and constraints §req:setup-node-v5-constraints
+
+- **Uniformity.** All seven setup-node references move to `@v5` together; the
+  repository does not end up with a mix of `@v4` and `@v5`.
+- **Explicit Node version preserved.** Every usage keeps `node-version: "24"`
+  set explicitly, so v5's change to the default Node version cannot alter which
+  runtime is provisioned.
+- **No caching dependence.** No setup-node usage relies on the `cache` input,
+  so v5 cache-behavior changes are out of the blast radius. Adopting caching
+  would be a separate decision, not part of this bump.
+- **Maintenance-only for adopters.** The change alters no workflow's triggers,
+  jobs, permissions, or reported check names; adopters consuming flywheel see
+  identical release behavior.
+- **Major-float pinning.** Follow the repo's existing convention (`@v5`), not a
+  commit-SHA pin. SHA-hardening every action would be a separate, repo-wide
+  supply-chain decision out of scope here.
+- **Verify before merge, don't assume.** The reason for doing this deliberately
+  is to catch any v5 behavior change, so the bump is not "done" on the edit
+  alone — local CI plus the integration suite must be confirmed green under v5.
+- **Priority.** Low-severity, self-contained maintenance. Nothing is blocked
+  and nothing breaks today, so it should not be sequenced ahead of the
+  CI-budget, release-safety, or composite-action-path work in this document.
+  It is nonetheless cheap and removes a small, growing debt — a stale major
+  that advisories will flag and that adopters currently see in copy-paste docs.
