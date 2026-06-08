@@ -6,7 +6,7 @@ Thanks for hacking on Flywheel. This guide covers everything you need to make a 
 
 ## Prerequisites
 
-- **Node 24+** — `runs.using: node24` in `action.yml` and CI uses `actions/setup-node@v4` with `node-version: "24"`.
+- **Node 24+** — `runs.using: node24` in `action.yml` and CI uses `actions/setup-node@v5` with `node-version: "24"`.
 - **npm** — the repo is npm-only (no yarn / pnpm lockfiles).
 - **`gh` CLI** (optional) — handy for the dogfood loop below.
 
