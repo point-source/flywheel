@@ -1054,7 +1054,7 @@ unchanged. §req:composite-action-path-criteria
 
 ## setup-node on the current major §spec:setup-node-v5-upgrade
 
-*Status: not started*
+*Status: complete*
 
 Every `actions/setup-node` reference in the repository names the `@v5`
 major. A repository-wide search for `actions/setup-node@v4` returns
