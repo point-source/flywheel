@@ -12,9 +12,11 @@ import { dirname, join } from "node:path";
 // gated behind --skip-secrets / --skip-rulesets and are out of scope here.
 //
 // This test guards against a class of regression where a refactor to
-// init.sh's template-fetch path silently changes what gets written —
-// pairs with tests/workflow-template-parity.test.ts, which guards the
-// adopter template ↔ dogfood workflow drift.
+// init.sh's template-fetch path silently changes what gets written. The
+// emitted workflows must invoke `point-source/flywheel@<ref>` directly
+// — the single version surface §spec:action-version-lockstep delivers
+// to adopters. tests/action-shape.test.ts pins the template *content*;
+// this file pins init.sh's substitution behavior.
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 const initSh = join(repoRoot, "scripts/init.sh");
@@ -77,12 +79,11 @@ describe.skipIf(!ghAuthenticated())("init.sh deterministic file emission", () =>
             written.includes("__FLYWHEEL_VERSION__"),
             `${wf} should have no placeholder remaining`,
           ).toBe(false);
-          // The generated caller must pass `flywheel-version` so the
-          // reusable workflow checks the action source out at the same
-          // ref the caller pinned the workflow at — both stamped from
-          // --version. See SPEC §spec:action-version-lockstep.
-          expect(written, `${wf} passes flywheel-version`).toContain(
-            `flywheel-version: ${TEST_VERSION}`,
+          // The substituted line is the single version surface — the
+          // composite action ref the adopter pins. See SPEC
+          // §spec:action-version-lockstep.
+          expect(written, `${wf} pins the composite at --version`).toContain(
+            `uses: point-source/flywheel@${TEST_VERSION}`,
           );
         }
 

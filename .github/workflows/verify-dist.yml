@@ -71,7 +71,7 @@ jobs:
         if: steps.filter.outputs.non_docs == 'true' && steps.classify.outputs.derived_release_commit != 'true'
         run: |
           npm run build
-          if ! git diff --exit-code -- dist/; then
-            echo "::error::dist/ is out of sync with source. Run 'npm run build' and commit the result."
+          if ! git diff --exit-code -- core/dist/; then
+            echo "::error::core/dist/ is out of sync with source. Run 'npm run build' and commit the result."
             exit 1
           fi
