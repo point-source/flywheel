@@ -924,7 +924,7 @@ the reason it is safe to apply uniformly across every workflow at once.
 
 ## Composite self-reference §spec:composite-self-reference
 
-*Status: not started*
+*Status: complete*
 
 An external adopter who pins `point-source/flywheel@<ref>` and triggers
 flywheel on a `pull_request` or `push` event runs flywheel's logic to
@@ -1007,7 +1007,7 @@ unpublished v2.0.0 draft and its tag are left as they are.
 
 ## Adopter-style resolution regression test §spec:adopter-resolution-test
 
-*Status: not started*
+*Status: complete*
 
 A test in flywheel's cheap suite — unit or per-PR CI, not the
 rate-limited e2e sandbox — fails when the composite is consumed the way an
