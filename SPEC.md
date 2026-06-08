@@ -1051,3 +1051,79 @@ rewritten-pin adopter path as a backstop; it is no longer the first line
 of defense for this bug class. The dogfood (`flywheel-push.yml` and the
 other workflows that invoke flywheel on this repository) keeps passing
 unchanged. §req:composite-action-path-criteria
+
+## setup-node on the current major §spec:setup-node-v5-upgrade
+
+*Status: not started*
+
+Every `actions/setup-node` reference in the repository names the `@v5`
+major. A repository-wide search for `actions/setup-node@v4` returns
+nothing; all seven references — the dispatcher Node-setup step in
+`action.yml`, the four CI workflows (`integration.yml`,
+`release-gate.yml`, `verify-dist.yml`, `e2e.yml`), the contributor note
+in `CONTRIBUTING.md`, and the adopter example in `docs/adopter/setup.md`
+— pin `@v5`. The pin uses the same major-float style the rest of the
+repository already uses for first-party actions (`actions/checkout@v6`),
+so a reader sees one consistent convention rather than a mix of `@v4` and
+`@v5`. §req:setup-node-v5 §req:setup-node-v5-criteria
+§req:setup-node-v5-constraints
+
+**Why this is its own change.** A `setup-node` major bump is a dependency
+upgrade with its own potential behavior changes — a different default
+Node version, deprecations, and cache behavior. The dispatcher
+Node-setup step was added by the composite-action-path fix
+(§spec:composite-self-reference) and deliberately pinned *down* to `@v4`
+to match the rest of the repo and keep that bug fix tightly scoped;
+folding the bump into it would have spread the blast radius across five
+files. The upgrade is therefore carried as a separate, reviewable change.
+§req:setup-node-v5 §req:setup-node-v5-stories
+
+**Why it is low-risk — and why it is still verified, not assumed.** The
+two behaviors a setup-node major bump can change are out of flywheel's
+blast radius: every usage sets `node-version` explicitly (`"24"`), so v5's
+changed *default* Node version cannot alter which runtime is provisioned,
+and no usage relies on the action's `cache` input, so any cache-behavior
+change is moot. Because the whole point of doing this deliberately is to
+catch a v5 behavior change rather than wave it through on the edit alone,
+the change is confirmed against running CI: typecheck, unit tests, and
+`verify-dist` pass under v5, and the integration suite passes — confirming
+a bumped workflow still provisions node 24 and runs `npm ci` plus the
+suite exactly as before. The heavier e2e run is not required for this
+change; per §spec:sandbox-test-budget (§req:sandbox-ci-budget) it is
+reserved against the rate-limited sandbox installation.
+§req:setup-node-v5-criteria §req:setup-node-v5-constraints
+
+**Composite dispatcher unchanged in behavior.** Under `@v5` the
+`action.yml` setup-node step still provisions node 24 — the runtime the
+committed `dist/index.cjs` bundle targets (esbuild `node24`) — so an
+external adopter running flywheel gets the same Node runtime as before the
+bump (§spec:composite-self-reference). The change alters no workflow's
+triggers, jobs, permissions, or reported check names, and adds no GitHub
+App scope; an adopter consuming flywheel sees identical release behavior.
+The adopter example in `docs/adopter/setup.md`, copied verbatim by new
+adopters, shows `@v5`, so a fresh project starts on the current major
+rather than an already-superseded one. §req:setup-node-v5
+§req:setup-node-v5-stories §req:setup-node-v5-constraints
+
+**Criteria.**
+
+- A repository-wide search for `actions/setup-node@v4` shall return no
+  matches.
+- All seven `actions/setup-node` references shall name the `@v5` major,
+  pinned major-float (`@v5`), not a commit SHA.
+- Every usage shall keep `node-version` set explicitly to node 24.
+- No usage shall depend on the `cache` input.
+- When CI runs under v5, typecheck, unit tests, `verify-dist`, and the
+  integration suite shall pass.
+- When an external adopter runs the composite under v5, the dispatcher
+  shall provision node 24, unchanged from `@v4`.
+
+**Scope and alternatives.**
+
+- *SHA-pinning every action* for supply-chain hardening is a separate,
+  repo-wide decision and is out of scope; this change follows the existing
+  major-float convention.
+- *Adopting the `cache` input* while touching these steps is a separate
+  decision, not part of this bump; the steps remain cache-free.
+
+§req:setup-node-v5-constraints
