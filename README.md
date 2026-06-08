@@ -176,7 +176,7 @@ npm run build
 npm run verify-dist   # rebuilds and fails if dist/ drifts from source
 ```
 
-Source is TypeScript under `src/`; the bundled `dist/index.cjs` is committed and is what GitHub executes. The `verify-dist` workflow ensures the bundle stays in sync.
+Source is TypeScript under `src/`; the bundled `core/dist/index.cjs` is committed and is what GitHub executes. The `verify-dist` workflow ensures the bundle stays in sync.
 
 See [CONTRIBUTING.md](./CONTRIBUTING.md) for the full contributor workflow, sandbox testing, and PR conventions.
 

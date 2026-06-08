@@ -3,7 +3,7 @@ import { defineConfig } from "vitest/config";
 export default defineConfig({
   test: {
     include: ["tests/**/*.test.ts"],
-    exclude: ["tests/integration/**", "tests/e2e/**", "node_modules/**", "dist/**"],
+    exclude: ["tests/integration/**", "tests/e2e/**", "node_modules/**", "dist/**", "core/dist/**"],
     // Several suites here exercise real `git`/`bash`/`gh`-stub processes
     // against tmpdir repos (back-merge, merge-driver, sanitize-release-
     // mentions, init). Vitest's default 5s timeout is enough in
