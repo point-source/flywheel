@@ -1,10 +1,12 @@
 import { build } from "esbuild";
 
-// Bundle lives at core/dist/index.cjs to match the nested core/action.yml
-// (`runs.main: dist/index.cjs` relative to that action's directory). The
-// root composite action invokes the dispatcher via `uses: ./core`, so the
-// bundle must sit alongside core/action.yml — not at the repo root. See
-// SPEC §spec:action-version-lockstep.
+// Bundle lives at core/dist/index.cjs. The root composite action runs this
+// bundle directly by its absolute path — `node
+// "${{ github.action_path }}/core/dist/index.cjs"` — because a `uses: ./…`
+// reference inside a composite resolves against the adopter's workspace,
+// not flywheel's own checkout. core/action.yml documents the same entry
+// point (`runs.main: dist/index.cjs`, relative to core/). See SPEC
+// §spec:action-version-lockstep and §spec:composite-self-reference.
 await build({
   entryPoints: ["src/main.ts"],
   bundle: true,

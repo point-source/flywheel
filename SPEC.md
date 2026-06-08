@@ -28,8 +28,9 @@ jobs:
 The `@<ref>` on that line is the only version-control surface. GitHub
 resolves the ref and places flywheel's repository on the runner at that
 ref before any step executes; the composite's JavaScript dispatcher
-(`./core`), its bundled `scripts/` (addressed via `github.action_path`),
-and its `semantic-release` plugin set are therefore all at the pinned
+(`core/dist/index.cjs`, run directly via `github.action_path`), its
+bundled `scripts/` (also addressed via `github.action_path`), and its
+`semantic-release` plugin set are therefore all at the pinned
 version by construction. Pinning a floating major (`@v2`) tracks that
 major's latest release; pinning an exact version (`@v2.1.0`) runs exactly
 that release. There is no second version input, no ref derived at
@@ -64,6 +65,92 @@ checks out the adopter's repository — the trust position flywheel
 already holds. It mints its own GitHub App installation token from
 adopter-supplied credentials. The adopter's chosen `@<ref>` is the
 sole determinant of which flywheel code runs.
+
+## Composite self-reference §spec:composite-self-reference
+
+*Status: complete*
+
+Flywheel's composite (`action.yml`) addresses its own bundled files — the
+JavaScript dispatcher and the release `scripts/` — through
+`${{ github.action_path }}`, the absolute path to the action's own checkout on
+the runner, never through a workspace-relative `uses: ./…` or `bash scripts/…`
+reference. A `uses: ./…` reference inside a composite action resolves against
+`GITHUB_WORKSPACE` — the adopter's checked-out repository — not against the
+action's checkout, so the v2.0.0 dispatch step written as `uses: ./core` failed
+for every external adopter on the first dispatch step with `Can't find
+'action.yml'… /core`: by the time it ran, the workspace held the adopter's
+repository, which contains no `core/`. §req:composite-action-path
+
+**Dispatcher invocation.** The dispatch step runs the bundled node entrypoint
+directly: `node "${{ github.action_path }}/core/dist/index.cjs"`. Inputs are
+forwarded as the `INPUT_*` environment variables `@actions/core`'s `getInput`
+reads (`INPUT_EVENT`, `INPUT_APP-ID`, `INPUT_APP-PRIVATE-KEY`); the step keeps
+`id: core` so the dispatcher's `setOutput` calls flow to
+`steps.core.outputs.{token,managed_branch,back_merge_targets}` exactly as when
+it was a nested node action. A preceding `actions/setup-node` step pins the
+runtime to the version the bundle is built for (esbuild `target: node24`), so
+the entrypoint runs under the same node version the retired `using: node24`
+action provided rather than the runner's default.
+§req:composite-action-path-criteria
+
+**Full release cycle.** Every flywheel-shipped reference across the managed
+release flow resolves from the action's own checkout: the dispatcher (above),
+and the @-mention sanitizer, merge-driver registration, and back-merge scripts
+(`bash "${{ github.action_path }}/scripts/…"`). `semantic-release` and its
+plugin set install from npm at pinned majors and carry no self-reference. An
+external adopter therefore completes a full release cycle — dispatch,
+semantic-release, sanitize, register-merge-drivers, back-merge — with no step
+reaching into the workspace for flywheel's code.
+§req:composite-action-path-criteria
+
+**Lockstep preserved.** The dispatcher (`core/dist/index.cjs`), `scripts/`, and
+the semantic-release configuration all come from the single
+`point-source/flywheel@<ref>` the adopter pins; the fix introduces no second
+version surface (no `point-source/flywheel/core@<literal>`, no runtime-derived
+ref). The dogfood path (`uses: ./` with flywheel's source in the workspace) and
+adopters pinned to a v1 ref are unchanged — only the failing external-adopter
+v2 path becomes working. §spec:action-version-lockstep
+§req:composite-action-path-constraints
+
+**Why not keep a nested `uses:` action.** No `uses:` form resolves a local
+action against `github.action_path`; a `uses: ./…` always resolves against the
+workspace, and pinning `point-source/flywheel/core@<ref>` would reintroduce the
+second version surface §spec:action-version-lockstep exists to eliminate.
+Running the bundle by absolute path is the only mechanism that keeps one ref and
+resolves against the action's checkout. `core/action.yml` is retained only to
+document the bundled entrypoint; it is no longer invoked via `uses:`.
+
+## Adopter-resolution regression test §spec:adopter-resolution-test
+
+*Status: complete*
+
+The defect that stranded v2.0.0 reached a built release because the cheap,
+every-PR suites never modelled an adopter consuming flywheel from the action
+cache — only the rate-limited e2e suite did, and it caught the break after the
+release was built. `tests/adopter-resolution.test.ts` moves that coverage into
+the fast unit suite (`npm test` / vitest), adding no load to the e2e sandbox
+installation §req:sandbox-ci-budget already strains.
+§req:composite-action-path-criteria
+
+**The rule it asserts.** Over flywheel's composite action manifests
+(`action.yml`, `classify/action.yml`): no step in a composite's `runs.steps`
+references flywheel's own code through a workspace-relative `uses: ./…` or `bash
+scripts/…`; every reference to a flywheel-shipped file (the dispatcher
+`core/dist/index.cjs` and the release `scripts/*.sh`) resolves through
+`${{ github.action_path }}`. External action references (`actions/checkout@…`,
+`actions/setup-node@…`) are permitted. The rule is scoped to action manifests,
+not workflow files — flywheel's own dogfood workflows legitimately consume the
+local action with `uses: ./` and `uses: ./classify` (there the workspace *is*
+flywheel), and must not trip the rule. The test fails on any reintroduced
+`uses: ./core`-style self-reference and passes once resolution is correct.
+§req:composite-action-path-constraints
+
+**Replaces a rotted test.** The prior `tests/action-shape.test.ts` asserted the
+broken `uses: ./core` shape as correct and passed while every adopter failed; it
+is deleted. Its still-valid §spec:action-version-lockstep surface guarantees —
+composite shape, no `scripts_dir` output, single-ref adopter templates, retired
+reusable workflows, dogfood pinning `uses: ./` — are carried into the
+replacement so coverage is not lost. §req:composite-action-path-criteria
 
 ## Immutable release support §spec:immutable-release-support
 
