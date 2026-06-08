@@ -19,8 +19,9 @@ import { fileURLToPath } from "node:url";
 // PATCH /repos/{owner}/{repo}/releases/{id}.
 //
 // Retargeting defense (the SHA pin, #224): when EXPECTED_SHA is set, the
-// script resolves the TAG REFERENCE to its commit — GET /git/ref/tags/{tag},
-// dereferencing an annotated-tag object via GET /git/tags/{sha} — and
+// script resolves the TAG to its commit via GitHub's Get-a-commit endpoint
+// (GET /repos/{owner}/{repo}/commits/{tag}), which dereferences both
+// lightweight and annotated tags to the underlying commit in one call, and
 // refuses to publish unless that resolved commit equals EXPECTED_SHA. It
 // does NOT read the release's target_commitish for this check:
 // @semantic-release/github records target_commitish as the branch the
@@ -76,39 +77,31 @@ interface GhStub {
  *   - the draft-visible LIST endpoint (`gh api /repos/.../releases`):
  *     `releasesResponseJson` (the JSON ARRAY of release objects) with
  *     `listLookupExit` (the gh exit code, to simulate an API error);
- *   - the tag-ref endpoint (`gh api /repos/.../git/ref/tags/{tag}`):
- *     `refResponseJson` with `refLookupExit` — used by the SHA pin to
- *     resolve the tag to its commit;
- *   - the annotated-tag deref endpoint (`gh api /repos/.../git/tags/{sha}`):
- *     `tagDerefResponseJson` with `tagDerefExit` — only reached when the
- *     ref points at a tag object rather than a commit.
+ *   - the Get-a-commit endpoint (`gh api /repos/.../commits/{tag}`):
+ *     `commitResponseJson` with `commitLookupExit` — used by the SHA pin
+ *     to resolve the tag to its underlying commit (GitHub dereferences
+ *     both lightweight and annotated tags here).
  * The PATCH call defaults to success and no output; `patchExit` overrides
  * its exit code to simulate a publish API error. The script doesn't read
  * the PATCH output. */
 function setupGhStub(opts: {
   releasesResponseJson?: string;
   listLookupExit?: number;
-  refResponseJson?: string;
-  refLookupExit?: number;
-  tagDerefResponseJson?: string;
-  tagDerefExit?: number;
+  commitResponseJson?: string;
+  commitLookupExit?: number;
   patchExit?: number;
 }): GhStub {
   const binDir = mkdtempSync(join(tmpdir(), "flywheel-pdr-bin-"));
   const callsLog = join(binDir, "gh-calls.log");
   const releasesResponseFile = join(binDir, "releases-response.json");
   const listStatusFile = join(binDir, "releases-response.status");
-  const refResponseFile = join(binDir, "ref-response.json");
-  const refStatusFile = join(binDir, "ref-response.status");
-  const tagDerefResponseFile = join(binDir, "tag-deref-response.json");
-  const tagDerefStatusFile = join(binDir, "tag-deref-response.status");
+  const commitResponseFile = join(binDir, "commit-response.json");
+  const commitStatusFile = join(binDir, "commit-response.status");
   const patchStatusFile = join(binDir, "patch-response.status");
   writeFileSync(releasesResponseFile, opts.releasesResponseJson ?? "");
   writeFileSync(listStatusFile, String(opts.listLookupExit ?? 0));
-  writeFileSync(refResponseFile, opts.refResponseJson ?? "");
-  writeFileSync(refStatusFile, String(opts.refLookupExit ?? 0));
-  writeFileSync(tagDerefResponseFile, opts.tagDerefResponseJson ?? "");
-  writeFileSync(tagDerefStatusFile, String(opts.tagDerefExit ?? 0));
+  writeFileSync(commitResponseFile, opts.commitResponseJson ?? "");
+  writeFileSync(commitStatusFile, String(opts.commitLookupExit ?? 0));
   writeFileSync(patchStatusFile, String(opts.patchExit ?? 0));
 
   const stub = `#!/usr/bin/env bash
@@ -122,21 +115,16 @@ function setupGhStub(opts: {
 } >> "${callsLog}"
 
 # gh api --method PATCH ...           → no output, exit with the patch-status code
-# gh api .../git/ref/tags/{tag}       → ref-response.json with the ref-status exit
-# gh api .../git/tags/{sha}           → tag-deref-response.json with its exit
+# gh api .../commits/{tag}            → commit-response.json with the commit-status exit
 # gh api .../releases (the LIST path) → releases-response.json with the list-status exit
 if [[ "$1" == "api" && "$2" == "--method" && "$3" == "PATCH" ]]; then
   exit "$(cat "${patchStatusFile}")"
 fi
 if [[ "$1" == "api" ]]; then
   case "$2" in
-    */git/ref/tags/*)
-      cat "${refResponseFile}"
-      exit "$(cat "${refStatusFile}")"
-      ;;
-    */git/tags/*)
-      cat "${tagDerefResponseFile}"
-      exit "$(cat "${tagDerefStatusFile}")"
+    */commits/*)
+      cat "${commitResponseFile}"
+      exit "$(cat "${commitStatusFile}")"
       ;;
     *)
       cat "${releasesResponseFile}"
@@ -196,10 +184,11 @@ describe("publish-draft-release.sh", () => {
   it("publishes when the tag resolves to EXPECTED_SHA even though target_commitish is a branch name", () => {
     // (a1) The publishable shape a REAL release carries: target_commitish
     // is the branch the release was cut from ("main"), NOT a commit. The
-    // SHA pin must resolve the tag REFERENCE to its commit and match that
-    // against EXPECTED_SHA — so the release still publishes. (#224: the old
-    // guard compared target_commitish to EXPECTED_SHA and refused every
-    // real release, because "main" can never equal a 40-char SHA.)
+    // SHA pin must resolve the TAG to its commit (via the Get-a-commit
+    // endpoint, which dereferences both lightweight and annotated tags) and
+    // match that against EXPECTED_SHA — so the release still publishes.
+    // (#224: the old guard compared target_commitish to EXPECTED_SHA and
+    // refused every real release, because "main" can never equal a SHA.)
     const releasesJson = JSON.stringify([
       {
         id: 12345,
@@ -208,14 +197,11 @@ describe("publish-draft-release.sh", () => {
         target_commitish: "main",
       },
     ]);
-    // Lightweight tag: the ref's object IS the commit, and it is EXPECTED_SHA.
-    const refJson = JSON.stringify({
-      ref: "refs/tags/v1.3.0",
-      object: { type: "commit", sha: "deadbeefcafef00d" },
-    });
+    // Get-a-commit returns the resolved commit object; .sha is EXPECTED_SHA.
+    const commitJson = JSON.stringify({ sha: "deadbeefcafef00d" });
     const stub = setupGhStub({
       releasesResponseJson: releasesJson,
-      refResponseJson: refJson,
+      commitResponseJson: commitJson,
     });
     try {
       const r = runScript({
@@ -234,10 +220,10 @@ describe("publish-draft-release.sh", () => {
       const calls = readCalls(stub.callsLog);
       // First call: list the releases (draft-visible endpoint).
       expect(calls[0]).toEqual(["api", LIST_PATH]);
-      // Second call: resolve the tag ref to its commit for the SHA pin.
+      // Second call: resolve the tag to its commit for the SHA pin.
       expect(calls[1]).toEqual([
         "api",
-        "/repos/point-source/flywheel/git/ref/tags/v1.3.0",
+        "/repos/point-source/flywheel/commits/v1.3.0",
       ]);
       // Third call: PATCH with draft=false on the resolved id.
       expect(calls[2]).toEqual([
@@ -248,56 +234,6 @@ describe("publish-draft-release.sh", () => {
         "-F",
         "draft=false",
       ]);
-    } finally {
-      stub.cleanup();
-    }
-  });
-
-  it("publishes an annotated tag by dereferencing it to its commit", () => {
-    // (a1b) Annotated tag: the ref points at a tag OBJECT, which must be
-    // dereferenced (GET /git/tags/{sha}) to the commit it wraps. That
-    // commit is EXPECTED_SHA → publish proceeds.
-    const releasesJson = JSON.stringify([
-      { id: 22, tag_name: "v1.3.0", draft: true, target_commitish: "main" },
-    ]);
-    const refJson = JSON.stringify({
-      ref: "refs/tags/v1.3.0",
-      object: { type: "tag", sha: "tagobjectsha00" },
-    });
-    const derefJson = JSON.stringify({
-      sha: "tagobjectsha00",
-      object: { type: "commit", sha: "deadbeefcafef00d" },
-    });
-    const stub = setupGhStub({
-      releasesResponseJson: releasesJson,
-      refResponseJson: refJson,
-      tagDerefResponseJson: derefJson,
-    });
-    try {
-      const r = runScript({
-        binDir: stub.binDir,
-        env: {
-          GITHUB_TOKEN: "test-token",
-          GITHUB_REPOSITORY: "point-source/flywheel",
-          TAG_NAME: "v1.3.0",
-          EXPECTED_SHA: "deadbeefcafef00d",
-        },
-      });
-      expect(r.status, `\nstdout:\n${r.stdout}\nstderr:\n${r.stderr}`).toBe(0);
-      expect(r.stdout).toContain("Published.");
-
-      const calls = readCalls(stub.callsLog);
-      expect(calls[0]).toEqual(["api", LIST_PATH]);
-      expect(calls[1]).toEqual([
-        "api",
-        "/repos/point-source/flywheel/git/ref/tags/v1.3.0",
-      ]);
-      // The annotated tag object was dereferenced before publishing.
-      expect(calls[2]).toEqual([
-        "api",
-        "/repos/point-source/flywheel/git/tags/tagobjectsha00",
-      ]);
-      expect(calls[3]).toContain("PATCH");
     } finally {
       stub.cleanup();
     }
@@ -417,13 +353,10 @@ describe("publish-draft-release.sh", () => {
     const releasesJson = JSON.stringify([
       { id: 12345, tag_name: "v1.3.0", draft: true, target_commitish: "main" },
     ]);
-    const refJson = JSON.stringify({
-      ref: "refs/tags/v1.3.0",
-      object: { type: "commit", sha: "actualcommitsha" },
-    });
+    const commitJson = JSON.stringify({ sha: "actualcommitsha" });
     const stub = setupGhStub({
       releasesResponseJson: releasesJson,
-      refResponseJson: refJson,
+      commitResponseJson: commitJson,
     });
     try {
       const r = runScript({
@@ -439,7 +372,7 @@ describe("publish-draft-release.sh", () => {
       expect(r.stderr + r.stdout).toMatch(/::error::/);
       expect(r.stderr + r.stdout).toMatch(/does not match expected SHA/);
 
-      // List + ref resolution happened; PATCH did not.
+      // List + commit resolution happened; PATCH did not.
       const calls = readCalls(stub.callsLog);
       expect(calls.some((c) => c.includes("PATCH"))).toBe(false);
     } finally {
@@ -447,22 +380,23 @@ describe("publish-draft-release.sh", () => {
     }
   });
 
-  it("fails loudly when the tag ref cannot be resolved to a commit", () => {
-    // (d2) The SHA pin is set but the tag ref lookup errors (e.g. the tag
-    // was deleted, or the API returned an error body). An unverifiable tag
-    // must never publish: loud ::error:: + non-zero exit, no PATCH. This is
-    // the loud-failure half of the SHA pin — a refusal, not a silent skip.
+  it("fails loudly when the tag cannot be resolved to a commit (gh error)", () => {
+    // (d2) The SHA pin is set but the commit lookup errors (e.g. the tag
+    // was deleted, or the API returned an error body with a non-zero exit).
+    // An unverifiable tag must never publish: loud ::error:: + non-zero
+    // exit, no PATCH. This is the loud-failure half of the SHA pin — a
+    // refusal, not a silent skip.
     const releasesJson = JSON.stringify([
       { id: 12345, tag_name: "v1.3.0", draft: true, target_commitish: "main" },
     ]);
-    const refErrorBody = JSON.stringify({
+    const commitErrorBody = JSON.stringify({
       message: "Not Found",
       documentation_url: "https://docs.github.com/rest",
     });
     const stub = setupGhStub({
       releasesResponseJson: releasesJson,
-      refResponseJson: refErrorBody,
-      refLookupExit: 1,
+      commitResponseJson: commitErrorBody,
+      commitLookupExit: 1,
     });
     try {
       const r = runScript({
@@ -476,7 +410,45 @@ describe("publish-draft-release.sh", () => {
       });
       expect(r.status).not.toBe(0);
       expect(r.stderr + r.stdout).toMatch(/::error::/);
-      expect(r.stderr + r.stdout).toMatch(/resolve tag ref/);
+      expect(r.stderr + r.stdout).toMatch(/Could not resolve tag/);
+      expect(r.stdout).not.toContain("Published.");
+
+      const calls = readCalls(stub.callsLog);
+      expect(calls.some((c) => c.includes("PATCH"))).toBe(false);
+    } finally {
+      stub.cleanup();
+    }
+  });
+
+  it("fails loudly when the commit lookup succeeds but carries no .sha", () => {
+    // (d3) The load-bearing empty-guard: gh exits 0 but the body has no
+    // .sha (a malformed / unexpected response). `jq -er '.sha'` must exit
+    // non-zero on the null field so the script refuses — it must NOT yield
+    // an empty string that falls through to the equality check. An empty
+    // resolved SHA silently treated as a value is the exact #221-class
+    // silent-skip this guard exists to prevent.
+    const releasesJson = JSON.stringify([
+      { id: 12345, tag_name: "v1.3.0", draft: true, target_commitish: "main" },
+    ]);
+    const commitJson = JSON.stringify({ message: "unexpected shape" });
+    const stub = setupGhStub({
+      releasesResponseJson: releasesJson,
+      commitResponseJson: commitJson,
+      commitLookupExit: 0,
+    });
+    try {
+      const r = runScript({
+        binDir: stub.binDir,
+        env: {
+          GITHUB_TOKEN: "test-token",
+          GITHUB_REPOSITORY: "point-source/flywheel",
+          TAG_NAME: "v1.3.0",
+          EXPECTED_SHA: "deadbeefcafef00d",
+        },
+      });
+      expect(r.status).not.toBe(0);
+      expect(r.stderr + r.stdout).toMatch(/::error::/);
+      expect(r.stderr + r.stdout).toMatch(/unparseable response \(no \.sha\)/);
       expect(r.stdout).not.toContain("Published.");
 
       const calls = readCalls(stub.callsLog);

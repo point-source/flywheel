@@ -30,11 +30,11 @@
 #   TAG_NAME      Production version tag the release-gate workflow gated.
 #                 The release attached to this tag is the one published.
 #   EXPECTED_SHA  (optional) The SHA the gate ran e2e against. When set,
-#                 the script resolves the tag REFERENCE to its commit via
-#                 the git refs API and verifies that resolved commit matches
-#                 before publishing. Defends against the (vanishingly rare)
-#                 case where the tag got retargeted at a different commit
-#                 between the gate run and the publish.
+#                 the script resolves the tag to its commit via GitHub's
+#                 Get-a-commit endpoint and verifies that resolved commit
+#                 matches before publishing. Defends against the
+#                 (vanishingly rare) case where the tag got retargeted at a
+#                 different commit between the gate run and the publish.
 #                 NOTE: the release object's target_commitish is NOT used
 #                 for this check — @semantic-release/github records it as
 #                 the branch the release was cut from (e.g. "main"), never
@@ -115,58 +115,29 @@ fi
 # the tag is moved to a different commit between the gate's checkout and
 # this step.
 #
-# We resolve the tag REFERENCE to its underlying commit rather than reading
-# the release's target_commitish: @semantic-release/github records
+# We resolve the tag to its underlying commit rather than reading the
+# release's target_commitish: @semantic-release/github records
 # target_commitish as the branch the release was cut from (e.g. "main"),
 # never a commit SHA, so a target_commitish comparison can never match a
-# 40-char SHA and would refuse every green release (#224). Resolution
-# follows the git refs API: the tag ref points at either a commit
-# (lightweight tag) or an annotated tag object that must be dereferenced.
+# 40-char SHA and would refuse every green release (#224). GitHub's
+# "Get a commit" endpoint accepts a tag ref and dereferences it to the
+# underlying commit — for both lightweight and annotated tags — in one
+# call, so we do not walk the git-object model by hand.
+#
 # Every resolution failure is loud (::error:: + non-zero), never a silent
-# skip — an unverifiable tag must not publish.
+# skip — an unverifiable tag must not publish. The jq -er guard is
+# load-bearing: it exits non-zero when .sha is null/absent (a malformed or
+# error response), so a bad response fails loudly instead of yielding an
+# empty string that would fall through to the equality check — the exact
+# silent-skip shape that stranded v1.4.0–v1.6.0 (#221).
 if [[ -n "${EXPECTED_SHA:-}" ]]; then
-  ref_path="/repos/${GITHUB_REPOSITORY}/git/ref/tags/${TAG_NAME}"
-  if ! ref_json="$(gh api "$ref_path")"; then
-    echo "::error::Could not resolve tag ref '$TAG_NAME' ($ref_path) — gh exited non-zero. Refusing to publish. Response: $ref_json"
+  commit_path="/repos/${GITHUB_REPOSITORY}/commits/${TAG_NAME}"
+  if ! commit_json="$(gh api "$commit_path")"; then
+    echo "::error::Could not resolve tag '$TAG_NAME' to a commit ($commit_path) — gh exited non-zero. Refusing to publish. Response: $commit_json"
     exit 1
   fi
-
-  # jq -er fails (non-zero) on a null/missing field, so an unparseable or
-  # malformed ref response is treated as a loud failure, not a match.
-  if ! ref_type="$(printf '%s' "$ref_json" | jq -er '.object.type')"; then
-    echo "::error::Tag ref '$TAG_NAME' returned an unparseable response (no .object.type) — refusing to publish."
-    exit 1
-  fi
-  if ! ref_sha="$(printf '%s' "$ref_json" | jq -er '.object.sha')"; then
-    echo "::error::Tag ref '$TAG_NAME' returned an unparseable response (no .object.sha) — refusing to publish."
-    exit 1
-  fi
-
-  if [[ "$ref_type" == "commit" ]]; then
-    # Lightweight tag: the ref's object IS the commit.
-    resolved_sha="$ref_sha"
-  elif [[ "$ref_type" == "tag" ]]; then
-    # Annotated tag: dereference the tag object to the commit it points at.
-    tag_path="/repos/${GITHUB_REPOSITORY}/git/tags/${ref_sha}"
-    if ! tag_json="$(gh api "$tag_path")"; then
-      echo "::error::Could not dereference annotated tag object for '$TAG_NAME' ($tag_path) — gh exited non-zero. Refusing to publish. Response: $tag_json"
-      exit 1
-    fi
-    if ! deref_type="$(printf '%s' "$tag_json" | jq -er '.object.type')"; then
-      echo "::error::Annotated tag object for '$TAG_NAME' returned an unparseable response (no .object.type) — refusing to publish."
-      exit 1
-    fi
-    if ! deref_sha="$(printf '%s' "$tag_json" | jq -er '.object.sha')"; then
-      echo "::error::Annotated tag object for '$TAG_NAME' returned an unparseable response (no .object.sha) — refusing to publish."
-      exit 1
-    fi
-    if [[ "$deref_type" != "commit" ]]; then
-      echo "::error::Annotated tag '$TAG_NAME' does not dereference to a commit (got '$deref_type') — refusing to publish."
-      exit 1
-    fi
-    resolved_sha="$deref_sha"
-  else
-    echo "::error::Tag ref '$TAG_NAME' points at an unexpected object type '$ref_type' (not commit or tag) — refusing to publish."
+  if ! resolved_sha="$(printf '%s' "$commit_json" | jq -er '.sha')"; then
+    echo "::error::Tag '$TAG_NAME' resolution returned an unparseable response (no .sha) from $commit_path — refusing to publish."
     exit 1
   fi
 
