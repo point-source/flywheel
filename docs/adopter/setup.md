@@ -467,7 +467,7 @@ jobs:
               - '!*.md'
               - '!.github/ISSUE_TEMPLATE/**'
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         if: steps.filter.outputs.non_docs == 'true'
         with:
           node-version: "24"

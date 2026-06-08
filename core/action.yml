@@ -2,11 +2,14 @@ name: Flywheel (core)
 description: |
   Internal JavaScript dispatcher for the Flywheel composite action. Adopters
   must not reference this action directly — invoke point-source/flywheel
-  (the root composite) instead. The root composite invokes this nested
-  action via `uses: ./core`, which under composite-action semantics
-  resolves against flywheel's own checkout at the ref the adopter pinned,
-  keeping the dispatcher in lockstep with the release scripts and
-  semantic-release configuration. See SPEC §spec:action-version-lockstep.
+  (the root composite) instead. This manifest documents the bundled node
+  entrypoint (core/dist/index.cjs); the root composite runs that bundle
+  directly by its absolute path under `${{ github.action_path }}` rather
+  than via `uses: ./core` — a `uses: ./…` reference inside a composite
+  resolves against the adopter's workspace, not flywheel's own checkout.
+  Running it by action_path keeps the dispatcher in lockstep with the
+  release scripts and semantic-release configuration on the one pinned ref.
+  See SPEC §spec:action-version-lockstep and §spec:composite-self-reference.
 author: point-source
 inputs:
   event:

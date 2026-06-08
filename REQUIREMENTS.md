@@ -15,6 +15,14 @@
 <!--   - Workflow run names — runs indistinguishable in the Actions list when -->
 <!--     many workflows fire on one commit -->
 <!--     (§req:workflow-run-names, §req:workflow-run-names-criteria) -->
+<!--   - Composite action resolution — the v2 composite's nested `./core` -->
+<!--     dispatcher resolves against the adopter's workspace, not the action's -->
+<!--     own checkout, so every external adopter fails -->
+<!--     (§req:composite-action-path, §req:composite-action-path-criteria) -->
+<!--   - setup-node v5 upgrade — every actions/setup-node pin is on the stale -->
+<!--     @v4 major; bump them uniformly to @v5 -->
+<!--     (§req:setup-node-v5, §req:setup-node-v5-criteria, -->
+<!--     §req:setup-node-v5-stories, §req:setup-node-v5-constraints) -->
 
 ## Problem statement §req:problem-statement
 
@@ -590,3 +598,256 @@ workflow a run name led by the workflow's own human-readable name.
   that is nonetheless cheap and self-contained. It does not block any
   release or adopter, and it should not be sequenced ahead of the CI-budget
   and release-safety work above.
+
+## Composite action resolution §req:composite-action-path
+
+flywheel ships as a single composite GitHub Action that an adopter consumes
+with one line: `uses: point-source/flywheel@<ref>`. When that line runs,
+GitHub fetches flywheel's repository at `<ref>` into the runner's action
+cache (`/home/runner/work/_actions/point-source/flywheel/<ref>/`) and runs
+the composite's steps. The composite's first step checks the *adopter's*
+repository out into the runner's workspace (`GITHUB_WORKSPACE`); a later step
+dispatches flywheel's own logic.
+
+That dispatch step is written as `uses: ./core`, a local-action reference.
+flywheel's source comments assert that inside a composite action `./core`
+resolves against the action's own checkout — so the dispatcher would always
+match the `scripts/` and semantic-release plugin set shipped at the same ref.
+**That assertion is wrong.** GitHub resolves a `uses: ./…` reference inside a
+composite against the *workspace*, not the action's checkout. By the time the
+dispatch step runs, the workspace holds the adopter's repository, which
+contains no `core/`. Every external adopter therefore fails immediately with:
+
+```text
+Can't find 'action.yml', 'action.yaml' or 'Dockerfile' under
+'/home/runner/work/<adopter-repo>/<adopter-repo>/core'
+```
+
+This is new in the v2.0.0 composite form (#204); the pre-v2 action did not
+have this shape. It is not a partial or rare failure — it breaks **all**
+external adopters on the **first** dispatch step of **every** event, so the
+entire v2 major is unusable to anyone outside flywheel's own repository until
+it is fixed.
+
+flywheel's own CI hid the defect two ways. The dogfood workflow invokes
+flywheel as `uses: ./` (the whole repository as a local action); because
+`actions/checkout` first lays flywheel's own source — including `core/` —
+into the workspace, `./core` happens to resolve and the dogfood passes. Only
+the e2e suite exercises the real adopter path: `sync-e2e-fixtures.mjs`
+rewrites `uses: ./` to `uses: point-source/flywheel@<sha>` in the sandbox's
+workflows, reproducing exactly how an adopter pins flywheel — and there
+`./core` cannot be found. The v2.0.0 release gate's e2e run failed all ten
+scenarios on this, and the gate correctly refused to publish v2.0.0. The
+protection worked: no adopter received the broken major. But the defect
+reached a built (if unpublished) release because the cheap, every-PR suites
+never modelled an adopter consuming flywheel from the action cache rather
+than from a workspace that already contains flywheel's source.
+
+The users are two: the external adopter, for whom flywheel v2 simply does not
+run; and the flywheel maintainer, who cannot ship a usable v2 and who learned
+of the break only from the most expensive suite in the pipeline. The problem
+is mandatory (an adopter cannot work around it — the action fails before any
+of their configuration is read), universal across adopters, and self-
+inflicted on a brand-new major. It is distinct from the
+§req:release-safety-gate failures: there the gate's *publish* half was broken;
+here the gate's *block* half worked exactly as designed and the defect is in
+the action's own self-reference.
+
+Whatever fixes the dispatch step shall not dissolve the reason `./core`
+exists. flywheel deliberately keeps the dispatcher, the bundled `scripts/`,
+and the semantic-release configuration on a single pinned ref so an adopter
+pins one version and never reconciles a second
+(§spec:action-version-lockstep). A fix that asked adopters to pin or check out
+anything beyond `point-source/flywheel@<ref>` would trade one adoption
+barrier for another.
+
+## Composite action resolution success criteria §req:composite-action-path-criteria
+
+- An external adopter who pins `point-source/flywheel@<ref>` and triggers
+  flywheel on a `pull_request` or `push` event runs the dispatcher to
+  completion — no "Can't find action.yml" error — regardless of what the
+  adopter's repository contains. flywheel's own logic resolves from flywheel's
+  checkout in the action cache, not from the adopter's workspace.
+- An external adopter can complete a **full** managed release cycle on a
+  release branch: dispatch, semantic-release, @-mention sanitization,
+  merge-driver registration, and back-merge into upstream branches all run,
+  each step locating flywheel's bundled assets from flywheel's own checkout.
+  The fix is not done when only the dispatcher's first step is reachable —
+  every step that references flywheel-shipped files works for an adopter,
+  since several of those steps (sanitize, register-merge-drivers, back-merge)
+  were only ever exercised by the dogfood, never against a real adopter.
+- The single-ref guarantee is intact: an adopter still pins exactly one ref,
+  and the dispatcher, `scripts/`, and semantic-release config all come from
+  it. No adopter has to pin, check out, or track a second flywheel version
+  (§spec:action-version-lockstep preserved).
+- A test in the cheap suite — unit or per-PR CI, not the rate-limited e2e
+  sandbox — fails when the composite is consumed the way an external adopter
+  consumes it (flywheel resolved from an action checkout while the workspace
+  does not contain flywheel's source) and passes once resolution is correct.
+  This class of bug is caught before a release is built, not only by the e2e
+  gate. The check adds no load to the sandbox installation the e2e suite
+  already strains (§req:sandbox-ci-budget).
+- The dogfood continues to work unchanged: flywheel's own `flywheel-push.yml`
+  and the other workflows that invoke flywheel on this repository keep
+  passing.
+- Adopters pinned to a v1 ref are unaffected — this is purely the v2
+  composite path.
+- Scope is fix-forward: the requirement is met when the next release works
+  end-to-end for an external adopter. The already-built, unpublished v2.0.0
+  draft and its tag are left as they are; restoring or republishing that
+  specific artifact is out of scope, consistent with how
+  §req:release-safety-gate treats already-stranded drafts.
+
+## Composite action resolution user stories §req:composite-action-path-stories
+
+- As an external adopter pinning `point-source/flywheel@v2`, I want the action
+  to run instead of failing on "Can't find action.yml," so I can actually
+  adopt the current major.
+- As an adopter whose release branch runs the full flywheel flow, I want
+  semantic-release, mention-sanitization, merge-driver registration, and
+  back-merge to complete and not fail later for the same self-reference reason
+  the dispatcher did, so a release I start finishes.
+- As an adopter, I want to keep pinning a single `point-source/flywheel@<ref>`
+  and nothing else, so adopting the fix does not introduce a second version
+  for me to track.
+- As a flywheel maintainer, I want a cheap test that catches "the action can't
+  find its own files when consumed as an adopter consumes it," so I never ship
+  a broken major again only to discover it from the expensive e2e gate — or
+  from an adopter.
+- As a flywheel maintainer, I want the dogfood and existing v1 adopters to
+  keep working through the fix, so correcting v2 costs no regression
+  elsewhere.
+
+## Composite action resolution constraints and quality attributes §req:composite-action-path-constraints
+
+- **Lockstep is mandatory; mechanism is open.** Preserving the single-ref /
+  no-second-version-surface guarantee (§spec:action-version-lockstep) is a
+  hard requirement. *How* the dispatcher is invoked — keeping a nested action,
+  invoking the bundled JS directly via the action's own path, or another
+  structure — is a design decision for /symphonize:plan, not a requirement
+  here. Either way the adopter-visible contract is unchanged: one ref pins
+  everything.
+- **Work within GitHub's real resolution semantics.** The fix relies on how
+  GitHub Actions actually resolves paths: `uses: ./…` inside a composite
+  resolves against the workspace, whereas `${{ github.action_path }}` resolves
+  against the action's own checkout on the runner. The source comments
+  asserting that `./core` resolves against the action's checkout are incorrect
+  and shall be corrected so the assumption is not reintroduced.
+- **Backward compatible.** The dogfood path (`uses: ./` with flywheel's source
+  in the workspace) and adopters pinned to v1 see no behavior change. Only the
+  external-adopter v2 path changes — from failing to working.
+- **No new privilege.** The fix requires no additional GitHub App scopes or
+  permissions.
+- **Statelessness preserved.** The fix changes only how flywheel locates its
+  own bundled code; it holds no state between runs.
+- **Cheap coverage only.** The regression test lives in the fast local/CI
+  suite and shall not draw on the e2e sandbox's rate-limited installation
+  (§req:sandbox-ci-budget). e2e remains a backstop, not the first line of
+  defense for this class of bug.
+- **Priority.** This is the gating defect for the entire v2 major: until it is
+  fixed, no external adopter can run flywheel v2 at all. It outranks the
+  lower-severity polish items in this document (e.g. §req:workflow-run-names)
+  and is bounded and self-contained — a single action's self-reference plus a
+  cheap regression test.
+
+## setup-node v5 upgrade §req:setup-node-v5
+
+Every `actions/setup-node` reference in the repository pins the `@v4` major,
+a now-superseded version. `actions/setup-node@v5` is generally available, and
+flywheel already keeps `actions/checkout` on the current major (`@v6`)
+repo-wide — setup-node is the one action left a major behind. There are seven
+references: the dispatcher Node-setup step in `action.yml` (added alongside the
+composite-action work, §req:composite-action-path, and deliberately pinned to
+`@v4` to keep that fix tightly scoped), four CI workflows (`integration.yml`,
+`release-gate.yml`, `verify-dist.yml`, `e2e.yml`), the contributor note in
+`CONTRIBUTING.md`, and the example workflow in `docs/adopter/setup.md` that
+adopters copy verbatim.
+
+The user is the flywheel maintainer carrying the upgrade, and — through the
+adopter-facing example — the adopter starting a new project from flywheel's
+documented workflow. Nobody is blocked and nothing breaks today: the cost is a
+small, growing maintenance debt. A stale action major is what Dependabot and
+security advisories eventually flag, and the copy-paste example in the adopter
+docs currently seeds new adopters on an already-superseded version, contrary to
+flywheel's intent that its documented recipes be the current, correct starting
+point.
+
+A `setup-node` major bump is its own dependency upgrade with its own potential
+behavior changes — a different default Node version, deprecations, and cache
+behavior. Folding it into the composite-path bug fix (§req:composite-action-path)
+would have expanded that fix's blast radius across five files, so the bump was
+deliberately deferred to this separate, reviewable change. The upgrade is
+expected to be low-risk precisely because flywheel does not lean on the
+behaviors v5 changes: every setup-node usage explicitly pins `node-version: 24`,
+and none use the action's `cache` input — so v5's changed default Node version
+and any cache-behavior change fall outside flywheel's blast radius. That
+expectation is the thing to confirm rather than assume, which is why the bump is
+done deliberately and verified, not waved through on the edit alone.
+
+## setup-node v5 success criteria §req:setup-node-v5-criteria
+
+- A repository-wide search for `setup-node@v4` returns nothing: all seven
+  references — the `action.yml` dispatcher step, the four CI workflows, the
+  `CONTRIBUTING.md` note, and the `docs/adopter/setup.md` example — name the
+  `@v5` major.
+- The new pins use the same major-float style as the rest of the repo
+  (`@v5`, matching `actions/checkout@v6`), so a reader sees one consistent
+  pinning convention rather than a mix of styles.
+- Local CI is green under v5: typecheck, unit tests, and `verify-dist` all
+  pass. `verify-dist` in particular confirms the committed `dist/` bundle still
+  builds against node 24 after the bump.
+- The integration suite passes under v5, confirming a bumped workflow still
+  provisions node 24 and runs `npm ci` plus the suite exactly as before. (The
+  heavier e2e run is not required for this change — per §req:sandbox-ci-budget
+  it is reserved against the rate-limited sandbox installation.)
+- The composite dispatcher still provisions node 24 under v5: the `action.yml`
+  setup-node step continues to set the runtime the bundle targets (esbuild
+  node24), so an external adopter running flywheel gets the same Node runtime
+  as before the bump.
+- No observable change for adopters consuming flywheel: the same `node-version`
+  is pinned everywhere, with no reliance on v5's changed default Node version or
+  cache defaults, so the upgrade is invisible to anyone who runs the action.
+- The adopter-facing example in `docs/adopter/setup.md` — copied verbatim by new
+  adopters — shows `@v5`, so a fresh project starts on the current major.
+
+## setup-node v5 user stories §req:setup-node-v5-stories
+
+- As a flywheel maintainer, I want every `setup-node` pin on the current `@v5`
+  major, so the repo is not carrying a stale action version that Dependabot or
+  a security advisory will eventually flag, and so all my workflows share one
+  consistent pin.
+- As a maintainer reviewing this change, I want it as its own deliberate PR —
+  not folded into the composite-path fix (§req:composite-action-path) — so the
+  bump's potential behavior changes (default Node version, cache, deprecations)
+  get their own review and the bug fix stayed tightly scoped.
+- As an adopter copying flywheel's documented example workflow, I want it to
+  show the current `setup-node` major, so I do not start a new project on an
+  already-superseded version.
+- As an adopter consuming flywheel as an action, I want the dispatcher to keep
+  provisioning node 24 exactly as before, so the upgrade changes nothing about
+  how my releases run.
+
+## setup-node v5 quality attributes and constraints §req:setup-node-v5-constraints
+
+- **Uniformity.** All seven setup-node references move to `@v5` together; the
+  repository does not end up with a mix of `@v4` and `@v5`.
+- **Explicit Node version preserved.** Every usage keeps `node-version: "24"`
+  set explicitly, so v5's change to the default Node version cannot alter which
+  runtime is provisioned.
+- **No caching dependence.** No setup-node usage relies on the `cache` input,
+  so v5 cache-behavior changes are out of the blast radius. Adopting caching
+  would be a separate decision, not part of this bump.
+- **Maintenance-only for adopters.** The change alters no workflow's triggers,
+  jobs, permissions, or reported check names; adopters consuming flywheel see
+  identical release behavior.
+- **Major-float pinning.** Follow the repo's existing convention (`@v5`), not a
+  commit-SHA pin. SHA-hardening every action would be a separate, repo-wide
+  supply-chain decision out of scope here.
+- **Verify before merge, don't assume.** The reason for doing this deliberately
+  is to catch any v5 behavior change, so the bump is not "done" on the edit
+  alone — local CI plus the integration suite must be confirmed green under v5.
+- **Priority.** Low-severity, self-contained maintenance. Nothing is blocked
+  and nothing breaks today, so it should not be sequenced ahead of the
+  CI-budget, release-safety, or composite-action-path work in this document.
+  It is nonetheless cheap and removes a small, growing debt — a stale major
+  that advisories will flag and that adopters currently see in copy-paste docs.
