@@ -6,10 +6,12 @@ branding:
   color: blue
 # Composite action. The single `uses: point-source/flywheel@<ref>` in an
 # adopter's workflow checks this action's repository out at <ref>, and
-# every step below runs from that ref — the nested `./core` dispatcher,
-# the bundled `scripts/`, and the semantic-release invocation alike.
-# There is no second version surface for an adopter to keep in sync. See
-# SPEC §spec:action-version-lockstep.
+# every step below runs from that ref — the bundled JS dispatcher
+# (core/dist/index.cjs), the bundled `scripts/`, and the semantic-release
+# invocation alike, all addressed via `${{ github.action_path }}` (the
+# absolute path to this action's own checkout on the runner). There is no
+# second version surface for an adopter to keep in sync. See SPEC
+# §spec:action-version-lockstep and §spec:composite-self-reference.
 inputs:
   event:
     description: "Event to handle: 'pull_request' or 'push'."
@@ -47,18 +49,31 @@ runs:
         fetch-depth: 0
         persist-credentials: false
 
-    # Dispatch by event type. Inside a composite action `./core`
-    # resolves against this action's own checkout at the ref the adopter
-    # pinned, so the dispatcher always matches the scripts/ and
-    # semantic-release plugin set below — no second version surface.
-    # See SPEC §spec:action-version-lockstep.
+    # Dispatch by event type. A `uses: ./…` reference inside a composite
+    # resolves against GITHUB_WORKSPACE (the adopter's checked-out repo),
+    # NOT this action's own checkout — so the dispatcher is invoked by its
+    # absolute path under `${{ github.action_path }}` instead, exactly as
+    # the release-script steps below address scripts/. This keeps the
+    # dispatcher, scripts/, and the semantic-release plugin set all on the
+    # one ref the adopter pinned — no second version surface. The node
+    # entrypoint reads its inputs from the INPUT_* env vars that
+    # @actions/core's getInput resolves, and writes step outputs to
+    # $GITHUB_OUTPUT, so `steps.core.outputs.*` works just as it did when
+    # this was a nested node action. setup-node pins the runtime to the
+    # version the bundle is built for (esbuild target node24). See SPEC
+    # §spec:action-version-lockstep and §spec:composite-self-reference.
+    - name: Set up Node.js for the dispatcher
+      uses: actions/setup-node@v4
+      with:
+        node-version: 24
     - name: Run Flywheel dispatcher
       id: core
-      uses: ./core
-      with:
-        event: ${{ inputs.event }}
-        app-id: ${{ inputs.app-id }}
-        app-private-key: ${{ inputs.app-private-key }}
+      shell: bash
+      env:
+        INPUT_EVENT: ${{ inputs.event }}
+        INPUT_APP-ID: ${{ inputs.app-id }}
+        INPUT_APP-PRIVATE-KEY: ${{ inputs.app-private-key }}
+      run: node "${{ github.action_path }}/core/dist/index.cjs"
 
     - name: Run semantic-release
       # Plugins must be co-installed; npx will not resolve them from the
