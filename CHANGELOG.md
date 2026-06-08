@@ -1,3 +1,10 @@
+# [1.7.0](https://github.com/point-source/flywheel/compare/v1.6.1...v1.7.0) (2026-06-08)
+
+
+### Features
+
+* release SHA-pin guard publishes green-gated releases ([#224](https://github.com/point-source/flywheel/issues/224)) ([#225](https://github.com/point-source/flywheel/issues/225)) ([26b66b6](https://github.com/point-source/flywheel/commit/26b66b63c7209afab85edbce637b9b7ee0a86908)), closes [#error](https://github.com/point-source/flywheel/issues/error) [#221-class](https://github.com/point-source/flywheel/issues/221-class)
+
 # [1.7.0-dev.1](https://github.com/point-source/flywheel/compare/v1.6.1...v1.7.0-dev.1) (2026-06-08)
 
 
