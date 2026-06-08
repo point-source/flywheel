@@ -1,3 +1,10 @@
+## [2.0.1-dev.1](https://github.com/point-source/flywheel/compare/v2.0.0...v2.0.1-dev.1) (2026-06-08)
+
+
+### Bug Fixes
+
+* resolve composite dispatcher via github.action_path so external adopters can run v2 ([#229](https://github.com/point-source/flywheel/issues/229)) ([8322b88](https://github.com/point-source/flywheel/commit/8322b88f8165075c793e7072f4e2b123e7b7dc23)), closes [#228](https://github.com/point-source/flywheel/issues/228) [#228](https://github.com/point-source/flywheel/issues/228) [#228](https://github.com/point-source/flywheel/issues/228) [#228](https://github.com/point-source/flywheel/issues/228) [#228](https://github.com/point-source/flywheel/issues/228)
+
 # [2.0.0](https://github.com/point-source/flywheel/compare/v1.7.0...v2.0.0) (2026-06-08)
 
 
