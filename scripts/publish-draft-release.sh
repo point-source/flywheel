@@ -30,11 +30,18 @@
 #   TAG_NAME      Production version tag the release-gate workflow gated.
 #                 The release attached to this tag is the one published.
 #   EXPECTED_SHA  (optional) The SHA the gate ran e2e against. When set,
-#                 the script verifies the release's target_commitish (or
-#                 the tag's commit) matches before publishing. Defends
-#                 against the (vanishingly rare) case where the release
-#                 object got recreated against a different SHA between
-#                 the gate run and the publish.
+#                 the script resolves the tag to its commit via GitHub's
+#                 Get-a-commit endpoint and verifies that resolved commit
+#                 matches before publishing. Defends against the
+#                 (vanishingly rare) case where the tag got retargeted at a
+#                 different commit between the gate run and the publish.
+#                 NOTE: the release object's target_commitish is NOT used
+#                 for this check — @semantic-release/github records it as
+#                 the branch the release was cut from (e.g. "main"), never
+#                 a commit identifier, so it can never equal a 40-char SHA
+#                 and a target_commitish comparison would refuse every
+#                 green release. The identity check therefore resolves the
+#                 tag ref to its underlying commit instead (see #224).
 #
 # Exits 0 on a successful publish, on an already-published no-op, or on
 # a tag that has no associated release (the latter logs a notice). Exits
@@ -84,7 +91,10 @@ fi
 
 release_id="$(printf '%s' "$release_json" | jq -r '.id')"
 is_draft="$(printf '%s' "$release_json" | jq -r '.draft')"
-release_sha="$(printf '%s' "$release_json" | jq -r '.target_commitish')"
+# Captured purely for the human-facing log line below — this is the branch
+# the release was cut from (e.g. "main"), NOT a commit identifier, and is
+# never used for the SHA-pin identity check (see #224).
+release_target="$(printf '%s' "$release_json" | jq -r '.target_commitish')"
 
 if [[ -z "$release_id" || "$release_id" == "null" ]]; then
   echo "::error::Release lookup for tag '$TAG_NAME' returned no id."
@@ -99,19 +109,45 @@ if [[ "$is_draft" != "true" ]]; then
 fi
 
 # Optional SHA-pin: when the caller passes the SHA the gate's e2e ran
-# against, refuse to publish if the release was retargeted in the
-# meantime. The release-gate workflow checks out the tag, so the value
-# of github.sha there is the tag's commit; passing it here closes the
-# (rare) race where the release object's target_commitish changes
-# between the gate's checkout and this step.
+# against, refuse to publish if the tag was retargeted in the meantime.
+# The release-gate workflow checks out the tag, so the value of github.sha
+# there is the tag's commit; passing it here closes the (rare) race where
+# the tag is moved to a different commit between the gate's checkout and
+# this step.
+#
+# We resolve the tag to its underlying commit rather than reading the
+# release's target_commitish: @semantic-release/github records
+# target_commitish as the branch the release was cut from (e.g. "main"),
+# never a commit SHA, so a target_commitish comparison can never match a
+# 40-char SHA and would refuse every green release (#224). GitHub's
+# "Get a commit" endpoint accepts a tag ref and dereferences it to the
+# underlying commit — for both lightweight and annotated tags — in one
+# call, so we do not walk the git-object model by hand.
+#
+# Every resolution failure is loud (::error:: + non-zero), never a silent
+# skip — an unverifiable tag must not publish. The jq -er guard is
+# load-bearing: it exits non-zero when .sha is null/absent (a malformed or
+# error response), so a bad response fails loudly instead of yielding an
+# empty string that would fall through to the equality check — the exact
+# silent-skip shape that stranded v1.4.0–v1.6.0 (#221).
 if [[ -n "${EXPECTED_SHA:-}" ]]; then
-  if [[ "$release_sha" != "$EXPECTED_SHA" ]]; then
-    echo "::error::Release target_commitish ($release_sha) does not match expected SHA ($EXPECTED_SHA) — refusing to publish."
+  commit_path="/repos/${GITHUB_REPOSITORY}/commits/${TAG_NAME}"
+  if ! commit_json="$(gh api "$commit_path")"; then
+    echo "::error::Could not resolve tag '$TAG_NAME' to a commit ($commit_path) — gh exited non-zero. Refusing to publish. Response: $commit_json"
+    exit 1
+  fi
+  if ! resolved_sha="$(printf '%s' "$commit_json" | jq -er '.sha')"; then
+    echo "::error::Tag '$TAG_NAME' resolution returned an unparseable response (no .sha) from $commit_path — refusing to publish."
+    exit 1
+  fi
+
+  if [[ "$resolved_sha" != "$EXPECTED_SHA" ]]; then
+    echo "::error::Tag '$TAG_NAME' resolves to commit $resolved_sha, which does not match expected SHA ($EXPECTED_SHA) — refusing to publish."
     exit 1
   fi
 fi
 
-echo "Publishing release id=${release_id} for tag '$TAG_NAME' (target ${release_sha})…"
+echo "Publishing release id=${release_id} for tag '$TAG_NAME' (target ${release_target})…"
 # A publish failure is loud, like the lookup failures above: surface an
 # ::error:: line so a maintainer reading CI can tell the green release did
 # not reach adopters, rather than relying on set -e's bare non-zero exit.

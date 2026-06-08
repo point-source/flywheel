@@ -251,6 +251,23 @@ when it legitimately failed verification (a red e2e run, or no release on
 the tag). Restoring the already-stranded v1.4.0–v1.6.0 drafts is out of
 scope; this governs releases going forward.
 
+Fixing the draft lookup exposed a second failure in the same publish
+path. The publish step carries an optional retargeting defense — a green
+release shall not be published if its tag was moved to a different commit
+between the e2e run and the publish — and that defense rejects every
+release it is asked to protect. It compares the value the release records
+as its target against the e2e-tested commit, but the recorded target is
+the name of the branch the release was cut from, never a commit
+identifier; a branch name can never equal a commit, so the check fails
+for every legitimate green release. The defense is still wanted — a tag
+moved off the tested commit shall still be caught — but it shall establish
+that the tag being published resolves to the exact e2e-tested commit
+without assuming the release records its target as a commit identifier.
+The failure stayed invisible because the publish path's automated check
+fed it a target shaped like a commit, the one shape a real release never
+produces; the check exercised a case that cannot occur in production
+while the case that always occurs went untested.
+
 ## Release CI budget §req:release-ci-budget
 
 Every flywheel release produces three pushes in rapid succession on the
@@ -341,6 +358,16 @@ change the outcome.
 - The publish path is exercised against the behavior a real release
   produces, so a regression that would strand releases is caught before
   it ships rather than in production.
+- The retargeting defense never rejects a legitimate green release. A
+  release whose tag still points at the e2e-tested commit publishes; the
+  defense blocks only a release whose tag has been moved to a different
+  commit since e2e ran. The defense does not depend on the release
+  recording its target as a commit identifier.
+- The publish path's automated verification covers the target shape a
+  real release produces — a branch name, not a commit identifier — so a
+  guard that would reject every real release cannot pass review again.
+  This verification stays in the fast local test suite and adds no load
+  to the e2e suite.
 
 ## Release CI budget success criteria §req:release-ci-budget-criteria
 

@@ -14,10 +14,21 @@ import { fileURLToPath } from "node:url";
 // End-to-end exercise of scripts/publish-draft-release.sh — the final
 // step of release-gate.yml. The script lists the repository's releases
 // via the draft-visible LIST endpoint (GET /repos/{owner}/{repo}/releases),
-// jq-selects the element whose .tag_name matches TAG_NAME, refuses if the
-// target_commitish drifted from the SHA the gate ran e2e against, and on
-// a match flips the release from draft to public via
+// jq-selects the element whose .tag_name matches TAG_NAME, and on a match
+// flips the release from draft to public via
 // PATCH /repos/{owner}/{repo}/releases/{id}.
+//
+// Retargeting defense (the SHA pin, #224): when EXPECTED_SHA is set, the
+// script resolves the TAG to its commit via GitHub's Get-a-commit endpoint
+// (GET /repos/{owner}/{repo}/commits/{tag}), which dereferences both
+// lightweight and annotated tags to the underlying commit in one call, and
+// refuses to publish unless that resolved commit equals EXPECTED_SHA. It
+// does NOT read the release's target_commitish for this check:
+// @semantic-release/github records target_commitish as the branch the
+// release was cut from ("main"), never a 40-char SHA, so a target_commitish
+// comparison would refuse every real green release. These tests therefore
+// feed the real shape — target_commitish: "main" — and drive the SHA pin
+// through the resolved tag commit instead.
 //
 // Why the LIST endpoint, not the tags endpoint: the per-tag releases
 // endpoint (/repos/.../releases/tags/{tag}) only returns *published*
@@ -62,24 +73,35 @@ interface GhStub {
 /** PATH-shadowing `gh` stub. argv is recorded one record per call,
  * NUL-terminated so newlines inside an argument don't split the record;
  * within a record args are TAB-separated. Canned responses model the
- * draft-visible LIST endpoint: `releases-response.json` (the JSON ARRAY
- * of release objects returned for `gh api /repos/.../releases`) and
- * `releases-response.status` (the gh exit code for that list lookup,
- * used to simulate an API error). The PATCH call defaults to success and
- * no output; `patchExit` overrides its exit code to simulate a publish
- * API error. The script doesn't read the PATCH output. */
+ * endpoints the script calls, dispatched on the API path:
+ *   - the draft-visible LIST endpoint (`gh api /repos/.../releases`):
+ *     `releasesResponseJson` (the JSON ARRAY of release objects) with
+ *     `listLookupExit` (the gh exit code, to simulate an API error);
+ *   - the Get-a-commit endpoint (`gh api /repos/.../commits/{tag}`):
+ *     `commitResponseJson` with `commitLookupExit` — used by the SHA pin
+ *     to resolve the tag to its underlying commit (GitHub dereferences
+ *     both lightweight and annotated tags here).
+ * The PATCH call defaults to success and no output; `patchExit` overrides
+ * its exit code to simulate a publish API error. The script doesn't read
+ * the PATCH output. */
 function setupGhStub(opts: {
   releasesResponseJson?: string;
   listLookupExit?: number;
+  commitResponseJson?: string;
+  commitLookupExit?: number;
   patchExit?: number;
 }): GhStub {
   const binDir = mkdtempSync(join(tmpdir(), "flywheel-pdr-bin-"));
   const callsLog = join(binDir, "gh-calls.log");
   const releasesResponseFile = join(binDir, "releases-response.json");
   const listStatusFile = join(binDir, "releases-response.status");
+  const commitResponseFile = join(binDir, "commit-response.json");
+  const commitStatusFile = join(binDir, "commit-response.status");
   const patchStatusFile = join(binDir, "patch-response.status");
   writeFileSync(releasesResponseFile, opts.releasesResponseJson ?? "");
   writeFileSync(listStatusFile, String(opts.listLookupExit ?? 0));
+  writeFileSync(commitResponseFile, opts.commitResponseJson ?? "");
+  writeFileSync(commitStatusFile, String(opts.commitLookupExit ?? 0));
   writeFileSync(patchStatusFile, String(opts.patchExit ?? 0));
 
   const stub = `#!/usr/bin/env bash
@@ -92,15 +114,23 @@ function setupGhStub(opts: {
   printf '\\0'
 } >> "${callsLog}"
 
-# gh api <path>             → return releases-response.json (the LIST
-#                             endpoint's JSON array) with the list-status exit
-# gh api --method PATCH ...   → no output, exit with the patch-status code
+# gh api --method PATCH ...           → no output, exit with the patch-status code
+# gh api .../commits/{tag}            → commit-response.json with the commit-status exit
+# gh api .../releases (the LIST path) → releases-response.json with the list-status exit
 if [[ "$1" == "api" && "$2" == "--method" && "$3" == "PATCH" ]]; then
   exit "$(cat "${patchStatusFile}")"
 fi
 if [[ "$1" == "api" ]]; then
-  cat "${releasesResponseFile}"
-  exit "$(cat "${listStatusFile}")"
+  case "$2" in
+    */commits/*)
+      cat "${commitResponseFile}"
+      exit "$(cat "${commitStatusFile}")"
+      ;;
+    *)
+      cat "${releasesResponseFile}"
+      exit "$(cat "${listStatusFile}")"
+      ;;
+  esac
 fi
 exit 0
 `;
@@ -151,17 +181,28 @@ function readCalls(callsLog: string): string[][] {
 const LIST_PATH = "/repos/point-source/flywheel/releases";
 
 describe("publish-draft-release.sh", () => {
-  it("publishes a draft release whose target_commitish matches EXPECTED_SHA", () => {
-    // (a1) The draft-visible LIST lookup returns the draft → publish proceeds.
+  it("publishes when the tag resolves to EXPECTED_SHA even though target_commitish is a branch name", () => {
+    // (a1) The publishable shape a REAL release carries: target_commitish
+    // is the branch the release was cut from ("main"), NOT a commit. The
+    // SHA pin must resolve the TAG to its commit (via the Get-a-commit
+    // endpoint, which dereferences both lightweight and annotated tags) and
+    // match that against EXPECTED_SHA — so the release still publishes.
+    // (#224: the old guard compared target_commitish to EXPECTED_SHA and
+    // refused every real release, because "main" can never equal a SHA.)
     const releasesJson = JSON.stringify([
       {
         id: 12345,
         tag_name: "v1.3.0",
         draft: true,
-        target_commitish: "deadbeefcafef00d",
+        target_commitish: "main",
       },
     ]);
-    const stub = setupGhStub({ releasesResponseJson: releasesJson });
+    // Get-a-commit returns the resolved commit object; .sha is EXPECTED_SHA.
+    const commitJson = JSON.stringify({ sha: "deadbeefcafef00d" });
+    const stub = setupGhStub({
+      releasesResponseJson: releasesJson,
+      commitResponseJson: commitJson,
+    });
     try {
       const r = runScript({
         binDir: stub.binDir,
@@ -179,8 +220,13 @@ describe("publish-draft-release.sh", () => {
       const calls = readCalls(stub.callsLog);
       // First call: list the releases (draft-visible endpoint).
       expect(calls[0]).toEqual(["api", LIST_PATH]);
-      // Second call: PATCH with draft=false on the resolved id.
+      // Second call: resolve the tag to its commit for the SHA pin.
       expect(calls[1]).toEqual([
+        "api",
+        "/repos/point-source/flywheel/commits/v1.3.0",
+      ]);
+      // Third call: PATCH with draft=false on the resolved id.
+      expect(calls[2]).toEqual([
         "api",
         "--method",
         "PATCH",
@@ -299,17 +345,19 @@ describe("publish-draft-release.sh", () => {
     }
   });
 
-  it("refuses to publish when target_commitish drifts from EXPECTED_SHA", () => {
-    // (d) The matching draft's target_commitish != EXPECTED_SHA → loud refusal.
+  it("refuses to publish when the tag resolves to a different commit than EXPECTED_SHA", () => {
+    // (d) The tag was retargeted: it resolves to a commit other than the
+    // one the gate ran e2e against → loud refusal, no publish. target_commitish
+    // is "main" as a real release carries it; the drift is detected via the
+    // resolved tag commit, not the (branch-name) target_commitish.
     const releasesJson = JSON.stringify([
-      {
-        id: 12345,
-        tag_name: "v1.3.0",
-        draft: true,
-        target_commitish: "actualsha",
-      },
+      { id: 12345, tag_name: "v1.3.0", draft: true, target_commitish: "main" },
     ]);
-    const stub = setupGhStub({ releasesResponseJson: releasesJson });
+    const commitJson = JSON.stringify({ sha: "actualcommitsha" });
+    const stub = setupGhStub({
+      releasesResponseJson: releasesJson,
+      commitResponseJson: commitJson,
+    });
     try {
       const r = runScript({
         binDir: stub.binDir,
@@ -321,12 +369,90 @@ describe("publish-draft-release.sh", () => {
         },
       });
       expect(r.status).not.toBe(0);
+      expect(r.stderr + r.stdout).toMatch(/::error::/);
       expect(r.stderr + r.stdout).toMatch(/does not match expected SHA/);
 
-      // Lookup happened; PATCH did not.
+      // List + commit resolution happened; PATCH did not.
       const calls = readCalls(stub.callsLog);
-      expect(calls).toHaveLength(1);
-      expect(calls[0]).not.toContain("PATCH");
+      expect(calls.some((c) => c.includes("PATCH"))).toBe(false);
+    } finally {
+      stub.cleanup();
+    }
+  });
+
+  it("fails loudly when the tag cannot be resolved to a commit (gh error)", () => {
+    // (d2) The SHA pin is set but the commit lookup errors (e.g. the tag
+    // was deleted, or the API returned an error body with a non-zero exit).
+    // An unverifiable tag must never publish: loud ::error:: + non-zero
+    // exit, no PATCH. This is the loud-failure half of the SHA pin — a
+    // refusal, not a silent skip.
+    const releasesJson = JSON.stringify([
+      { id: 12345, tag_name: "v1.3.0", draft: true, target_commitish: "main" },
+    ]);
+    const commitErrorBody = JSON.stringify({
+      message: "Not Found",
+      documentation_url: "https://docs.github.com/rest",
+    });
+    const stub = setupGhStub({
+      releasesResponseJson: releasesJson,
+      commitResponseJson: commitErrorBody,
+      commitLookupExit: 1,
+    });
+    try {
+      const r = runScript({
+        binDir: stub.binDir,
+        env: {
+          GITHUB_TOKEN: "test-token",
+          GITHUB_REPOSITORY: "point-source/flywheel",
+          TAG_NAME: "v1.3.0",
+          EXPECTED_SHA: "deadbeefcafef00d",
+        },
+      });
+      expect(r.status).not.toBe(0);
+      expect(r.stderr + r.stdout).toMatch(/::error::/);
+      expect(r.stderr + r.stdout).toMatch(/Could not resolve tag/);
+      expect(r.stdout).not.toContain("Published.");
+
+      const calls = readCalls(stub.callsLog);
+      expect(calls.some((c) => c.includes("PATCH"))).toBe(false);
+    } finally {
+      stub.cleanup();
+    }
+  });
+
+  it("fails loudly when the commit lookup succeeds but carries no .sha", () => {
+    // (d3) The load-bearing empty-guard: gh exits 0 but the body has no
+    // .sha (a malformed / unexpected response). `jq -er '.sha'` must exit
+    // non-zero on the null field so the script refuses — it must NOT yield
+    // an empty string that falls through to the equality check. An empty
+    // resolved SHA silently treated as a value is the exact #221-class
+    // silent-skip this guard exists to prevent.
+    const releasesJson = JSON.stringify([
+      { id: 12345, tag_name: "v1.3.0", draft: true, target_commitish: "main" },
+    ]);
+    const commitJson = JSON.stringify({ message: "unexpected shape" });
+    const stub = setupGhStub({
+      releasesResponseJson: releasesJson,
+      commitResponseJson: commitJson,
+      commitLookupExit: 0,
+    });
+    try {
+      const r = runScript({
+        binDir: stub.binDir,
+        env: {
+          GITHUB_TOKEN: "test-token",
+          GITHUB_REPOSITORY: "point-source/flywheel",
+          TAG_NAME: "v1.3.0",
+          EXPECTED_SHA: "deadbeefcafef00d",
+        },
+      });
+      expect(r.status).not.toBe(0);
+      expect(r.stderr + r.stdout).toMatch(/::error::/);
+      expect(r.stderr + r.stdout).toMatch(/unparseable response \(no \.sha\)/);
+      expect(r.stdout).not.toContain("Published.");
+
+      const calls = readCalls(stub.callsLog);
+      expect(calls.some((c) => c.includes("PATCH"))).toBe(false);
     } finally {
       stub.cleanup();
     }
