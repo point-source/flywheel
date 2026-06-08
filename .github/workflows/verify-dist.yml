@@ -51,7 +51,7 @@ jobs:
       # — those are human commits, not derived — so tests/docs-examples.test.ts
       # keeps catching doc-YAML regressions; only flywheel's own release
       # commits short-circuit the suite.
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         if: steps.classify.outputs.derived_release_commit != 'true'
         with:
           node-version: "24"
