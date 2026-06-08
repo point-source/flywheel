@@ -27,10 +27,11 @@ jobs:
 
 The `@<ref>` on that line is the only version-control surface. GitHub
 resolves the ref and places flywheel's repository on the runner at that
-ref before any step executes; the composite's JavaScript dispatcher
-(`./core`), its bundled `scripts/` (addressed via `github.action_path`),
-and its `semantic-release` plugin set are therefore all at the pinned
-version by construction. Pinning a floating major (`@v2`) tracks that
+ref before any step executes; the composite's JavaScript dispatcher, its
+bundled `scripts/`, and its `semantic-release` plugin set are therefore
+all at the pinned version by construction. The dispatcher and scripts are
+addressed against that checkout via `github.action_path`, not via a
+workspace-relative `uses: ./…` (see §spec:composite-self-reference). Pinning a floating major (`@v2`) tracks that
 major's latest release; pinning an exact version (`@v2.1.0`) runs exactly
 that release. There is no second version input, no ref derived at
 runtime, and no file that records or rewrites a version.
@@ -920,3 +921,133 @@ the reason it is safe to apply uniformly across every workflow at once.
 - The change touches every workflow file in one sweep. Because it is
   display-only (see above), the blast radius of a mistake is a wrong title,
   not a broken or skipped check, so the uniform edit is low-risk.
+
+## Composite self-reference §spec:composite-self-reference
+
+*Status: not started*
+
+An external adopter who pins `point-source/flywheel@<ref>` and triggers
+flywheel on a `pull_request` or `push` event runs flywheel's logic to
+completion, regardless of what the adopter's own repository contains. No
+step fails with `Can't find 'action.yml', 'action.yaml' or 'Dockerfile'`,
+because every flywheel-shipped file a step invokes — the JavaScript
+dispatcher, the bundled `scripts/`, and the semantic-release plugin set —
+is located from flywheel's own checkout on the runner, never from the
+adopter's workspace. §req:composite-action-path §req:composite-action-path-criteria
+
+**The problem this fixes.** GitHub places flywheel's repository at the
+pinned ref in the runner's action cache, then the composite's first step
+checks the *adopter's* repository into `GITHUB_WORKSPACE`. A local-action
+reference written as `uses: ./…` inside a composite resolves against the
+workspace — the adopter's repository — not against the action's own
+checkout. The v2.0.0 composite invoked its dispatcher as `uses: ./core`
+under the mistaken belief that `./core` resolves against flywheel's
+checkout; it does not. By the time the dispatch step ran, the workspace
+held the adopter's repository, which contains no `core/`, so every
+external adopter failed on the first dispatch step of every event — the
+entire v2 major was unusable outside flywheel's own repository.
+§req:composite-action-path
+
+**The resolution rule.** flywheel addresses its own files through
+`${{ github.action_path }}`, GitHub's built-in absolute path to the
+action's checkout on the runner. The three release-script steps
+(sanitize, register-merge-drivers, back-merge) already resolved this way
+and were correct. The defect was isolated to the one `uses: ./…`
+self-reference, the sole construct subject to workspace-relative
+resolution. Bringing the dispatcher under the same `github.action_path`
+rule unifies every flywheel self-reference under one resolution semantics
+and removes the only workspace-relative reference to flywheel's own code.
+The source comments and the §spec:action-version-lockstep description that
+asserted `./core` resolves against the action's checkout were wrong and
+are corrected, so the assumption cannot be reintroduced.
+§req:composite-action-path-constraints
+
+**Full release cycle, not just the first step.** The guarantee covers the
+entire managed-release flow an adopter can reach on a release branch:
+dispatch, semantic-release, release-body @-mention sanitization,
+merge-driver registration, and back-merge into upstream branches. Each
+step locates flywheel's bundled assets from flywheel's own checkout. The
+fix is not complete when only the dispatcher's first step is reachable —
+several later steps (sanitize, register-merge-drivers, back-merge) were
+only ever exercised by flywheel's dogfood, never against a real adopter,
+so each is verified to resolve correctly on the adopter path.
+§req:composite-action-path-criteria §req:composite-action-path-stories
+
+**Lockstep preserved.** The adopter still pins exactly one ref, and the
+dispatcher, `scripts/`, and semantic-release configuration all come from
+it; `github.action_path` points at that single ref's checkout. The
+adopter-visible contract is unchanged — one ref pins everything — so the
+fix introduces no second version surface to track
+(§spec:action-version-lockstep). §req:composite-action-path-constraints
+
+**Scope.** The dogfood path (`uses: ./` with flywheel's source already in
+the workspace) and adopters pinned to a v1 ref see no behavior change;
+only the external-adopter v2 path changes, from failing to working. The
+fix adds no GitHub App scope or permission and holds no state between
+runs. It is fix-forward: the requirement is met when the next release
+works end-to-end for an external adopter, and the already-built,
+unpublished v2.0.0 draft and its tag are left as they are.
+§req:composite-action-path-constraints §req:composite-action-path-criteria
+
+**Alternatives considered.**
+
+- *Pin the nested action by repository path* (`uses:
+  point-source/flywheel/core@<ref>`). `uses:` does not interpolate
+  expressions, so `<ref>` would be a hardcoded literal — exactly the
+  second version surface §spec:action-version-lockstep exists to
+  eliminate. Rejected.
+- *Copy or symlink `core/` into the workspace* before the dispatch step.
+  Pollutes the adopter's checkout, can collide with adopter files, and
+  leaves a workspace-relative reference that the next contributor could
+  re-break the same way. Rejected.
+- *Collapse `core/` into the root action.* The root must stay a composite
+  (it checks out the adopter repo, then runs semantic-release and the
+  release scripts as sibling steps), so it cannot itself be the node
+  action. Rejected.
+
+## Adopter-style resolution regression test §spec:adopter-resolution-test
+
+*Status: not started*
+
+A test in flywheel's cheap suite — unit or per-PR CI, not the
+rate-limited e2e sandbox — fails when the composite is consumed the way an
+external adopter consumes it (flywheel's files resolved from the action's
+checkout while the workspace does not contain flywheel's source) and
+passes once resolution is correct. This class of bug — flywheel unable to
+find its own files when run from the action cache rather than from a
+workspace that already holds its source — is caught before a release is
+built, not only by the e2e gate or by an adopter.
+§req:composite-action-path-criteria §req:composite-action-path-stories
+
+**Why the cheap suite, and why the e2e gate was not enough.** flywheel's
+v2.0.0 defect reached a built release because the every-PR suites never
+modelled an adopter consuming flywheel from the action cache. The dogfood
+invokes flywheel as `uses: ./`, which lays flywheel's own source —
+including `core/` — into the workspace, so `./core` happened to resolve
+and the dogfood passed. Only `sync-e2e-fixtures.mjs` rewrites `uses: ./`
+to a pinned `point-source/flywheel@<sha>` and reproduces the real adopter
+path, and only the e2e suite ran it — the most expensive, rate-limited
+suite in the pipeline (§spec:sandbox-test-budget, §req:sandbox-ci-budget).
+The release gate correctly refused to publish, so no adopter received the
+broken major, but the maintainer learned of a total break from the
+slowest possible signal. A cheap test moves first detection of this class
+to every PR and adds no load to the sandbox installation the e2e suite
+already strains. §req:composite-action-path §req:composite-action-path-constraints
+
+**What the test asserts.** The guard models the resolution *rule*, not a
+literal action-file shape. The prior `action-shape.test.ts` asserted the
+composite contained `uses: ./core` — it encoded the broken assumption and
+passed happily while every adopter failed, which is how a static
+shape-check can rot. The replacement instead asserts adopter-style
+resolution semantics: no flywheel self-reference in the composite resolves
+against the workspace (no `uses: ./…` pointing at flywheel's own code),
+and every reference to a flywheel-shipped file — dispatcher and scripts
+alike — resolves through `github.action_path`. A reviewer can state the
+rule the test enforces in one sentence and check it against the running
+action. §req:composite-action-path-criteria §req:composite-action-path-constraints
+
+**Backstop unchanged.** The e2e suite keeps exercising the full
+rewritten-pin adopter path as a backstop; it is no longer the first line
+of defense for this bug class. The dogfood (`flywheel-push.yml` and the
+other workflows that invoke flywheel on this repository) keeps passing
+unchanged. §req:composite-action-path-criteria
