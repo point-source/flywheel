@@ -63,7 +63,7 @@ runs:
     # version the bundle is built for (esbuild target node24). See SPEC
     # §spec:action-version-lockstep and §spec:composite-self-reference.
     - name: Set up Node.js for the dispatcher
-      uses: actions/setup-node@v5
+      uses: actions/setup-node@v4
       with:
         node-version: 24
     - name: Run Flywheel dispatcher
