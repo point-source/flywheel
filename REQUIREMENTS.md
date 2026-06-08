@@ -15,6 +15,10 @@
 <!--   - Workflow run names — runs indistinguishable in the Actions list when -->
 <!--     many workflows fire on one commit -->
 <!--     (§req:workflow-run-names, §req:workflow-run-names-criteria) -->
+<!--   - Composite action resolution — the v2 composite's nested `./core` -->
+<!--     dispatcher resolves against the adopter's workspace, not the action's -->
+<!--     own checkout, so every external adopter fails -->
+<!--     (§req:composite-action-path, §req:composite-action-path-criteria) -->
 
 ## Problem statement §req:problem-statement
 
@@ -590,3 +594,154 @@ workflow a run name led by the workflow's own human-readable name.
   that is nonetheless cheap and self-contained. It does not block any
   release or adopter, and it should not be sequenced ahead of the CI-budget
   and release-safety work above.
+
+## Composite action resolution §req:composite-action-path
+
+flywheel ships as a single composite GitHub Action that an adopter consumes
+with one line: `uses: point-source/flywheel@<ref>`. When that line runs,
+GitHub fetches flywheel's repository at `<ref>` into the runner's action
+cache (`/home/runner/work/_actions/point-source/flywheel/<ref>/`) and runs
+the composite's steps. The composite's first step checks the *adopter's*
+repository out into the runner's workspace (`GITHUB_WORKSPACE`); a later step
+dispatches flywheel's own logic.
+
+That dispatch step is written as `uses: ./core`, a local-action reference.
+flywheel's source comments assert that inside a composite action `./core`
+resolves against the action's own checkout — so the dispatcher would always
+match the `scripts/` and semantic-release plugin set shipped at the same ref.
+**That assertion is wrong.** GitHub resolves a `uses: ./…` reference inside a
+composite against the *workspace*, not the action's checkout. By the time the
+dispatch step runs, the workspace holds the adopter's repository, which
+contains no `core/`. Every external adopter therefore fails immediately with:
+
+```text
+Can't find 'action.yml', 'action.yaml' or 'Dockerfile' under
+'/home/runner/work/<adopter-repo>/<adopter-repo>/core'
+```
+
+This is new in the v2.0.0 composite form (#204); the pre-v2 action did not
+have this shape. It is not a partial or rare failure — it breaks **all**
+external adopters on the **first** dispatch step of **every** event, so the
+entire v2 major is unusable to anyone outside flywheel's own repository until
+it is fixed.
+
+flywheel's own CI hid the defect two ways. The dogfood workflow invokes
+flywheel as `uses: ./` (the whole repository as a local action); because
+`actions/checkout` first lays flywheel's own source — including `core/` —
+into the workspace, `./core` happens to resolve and the dogfood passes. Only
+the e2e suite exercises the real adopter path: `sync-e2e-fixtures.mjs`
+rewrites `uses: ./` to `uses: point-source/flywheel@<sha>` in the sandbox's
+workflows, reproducing exactly how an adopter pins flywheel — and there
+`./core` cannot be found. The v2.0.0 release gate's e2e run failed all ten
+scenarios on this, and the gate correctly refused to publish v2.0.0. The
+protection worked: no adopter received the broken major. But the defect
+reached a built (if unpublished) release because the cheap, every-PR suites
+never modelled an adopter consuming flywheel from the action cache rather
+than from a workspace that already contains flywheel's source.
+
+The users are two: the external adopter, for whom flywheel v2 simply does not
+run; and the flywheel maintainer, who cannot ship a usable v2 and who learned
+of the break only from the most expensive suite in the pipeline. The problem
+is mandatory (an adopter cannot work around it — the action fails before any
+of their configuration is read), universal across adopters, and self-
+inflicted on a brand-new major. It is distinct from the
+§req:release-safety-gate failures: there the gate's *publish* half was broken;
+here the gate's *block* half worked exactly as designed and the defect is in
+the action's own self-reference.
+
+Whatever fixes the dispatch step shall not dissolve the reason `./core`
+exists. flywheel deliberately keeps the dispatcher, the bundled `scripts/`,
+and the semantic-release configuration on a single pinned ref so an adopter
+pins one version and never reconciles a second
+(§spec:action-version-lockstep). A fix that asked adopters to pin or check out
+anything beyond `point-source/flywheel@<ref>` would trade one adoption
+barrier for another.
+
+## Composite action resolution success criteria §req:composite-action-path-criteria
+
+- An external adopter who pins `point-source/flywheel@<ref>` and triggers
+  flywheel on a `pull_request` or `push` event runs the dispatcher to
+  completion — no "Can't find action.yml" error — regardless of what the
+  adopter's repository contains. flywheel's own logic resolves from flywheel's
+  checkout in the action cache, not from the adopter's workspace.
+- An external adopter can complete a **full** managed release cycle on a
+  release branch: dispatch, semantic-release, @-mention sanitization,
+  merge-driver registration, and back-merge into upstream branches all run,
+  each step locating flywheel's bundled assets from flywheel's own checkout.
+  The fix is not done when only the dispatcher's first step is reachable —
+  every step that references flywheel-shipped files works for an adopter,
+  since several of those steps (sanitize, register-merge-drivers, back-merge)
+  were only ever exercised by the dogfood, never against a real adopter.
+- The single-ref guarantee is intact: an adopter still pins exactly one ref,
+  and the dispatcher, `scripts/`, and semantic-release config all come from
+  it. No adopter has to pin, check out, or track a second flywheel version
+  (§spec:action-version-lockstep preserved).
+- A test in the cheap suite — unit or per-PR CI, not the rate-limited e2e
+  sandbox — fails when the composite is consumed the way an external adopter
+  consumes it (flywheel resolved from an action checkout while the workspace
+  does not contain flywheel's source) and passes once resolution is correct.
+  This class of bug is caught before a release is built, not only by the e2e
+  gate. The check adds no load to the sandbox installation the e2e suite
+  already strains (§req:sandbox-ci-budget).
+- The dogfood continues to work unchanged: flywheel's own `flywheel-push.yml`
+  and the other workflows that invoke flywheel on this repository keep
+  passing.
+- Adopters pinned to a v1 ref are unaffected — this is purely the v2
+  composite path.
+- Scope is fix-forward: the requirement is met when the next release works
+  end-to-end for an external adopter. The already-built, unpublished v2.0.0
+  draft and its tag are left as they are; restoring or republishing that
+  specific artifact is out of scope, consistent with how
+  §req:release-safety-gate treats already-stranded drafts.
+
+## Composite action resolution user stories §req:composite-action-path-stories
+
+- As an external adopter pinning `point-source/flywheel@v2`, I want the action
+  to run instead of failing on "Can't find action.yml," so I can actually
+  adopt the current major.
+- As an adopter whose release branch runs the full flywheel flow, I want
+  semantic-release, mention-sanitization, merge-driver registration, and
+  back-merge to complete and not fail later for the same self-reference reason
+  the dispatcher did, so a release I start finishes.
+- As an adopter, I want to keep pinning a single `point-source/flywheel@<ref>`
+  and nothing else, so adopting the fix does not introduce a second version
+  for me to track.
+- As a flywheel maintainer, I want a cheap test that catches "the action can't
+  find its own files when consumed as an adopter consumes it," so I never ship
+  a broken major again only to discover it from the expensive e2e gate — or
+  from an adopter.
+- As a flywheel maintainer, I want the dogfood and existing v1 adopters to
+  keep working through the fix, so correcting v2 costs no regression
+  elsewhere.
+
+## Composite action resolution constraints and quality attributes §req:composite-action-path-constraints
+
+- **Lockstep is mandatory; mechanism is open.** Preserving the single-ref /
+  no-second-version-surface guarantee (§spec:action-version-lockstep) is a
+  hard requirement. *How* the dispatcher is invoked — keeping a nested action,
+  invoking the bundled JS directly via the action's own path, or another
+  structure — is a design decision for /symphonize:plan, not a requirement
+  here. Either way the adopter-visible contract is unchanged: one ref pins
+  everything.
+- **Work within GitHub's real resolution semantics.** The fix relies on how
+  GitHub Actions actually resolves paths: `uses: ./…` inside a composite
+  resolves against the workspace, whereas `${{ github.action_path }}` resolves
+  against the action's own checkout on the runner. The source comments
+  asserting that `./core` resolves against the action's checkout are incorrect
+  and shall be corrected so the assumption is not reintroduced.
+- **Backward compatible.** The dogfood path (`uses: ./` with flywheel's source
+  in the workspace) and adopters pinned to v1 see no behavior change. Only the
+  external-adopter v2 path changes — from failing to working.
+- **No new privilege.** The fix requires no additional GitHub App scopes or
+  permissions.
+- **Statelessness preserved.** The fix changes only how flywheel locates its
+  own bundled code; it holds no state between runs.
+- **Cheap coverage only.** The regression test lives in the fast local/CI
+  suite and shall not draw on the e2e sandbox's rate-limited installation
+  (§req:sandbox-ci-budget). e2e remains a backstop, not the first line of
+  defense for this class of bug.
+- **Priority.** This is the gating defect for the entire v2 major: until it is
+  fixed, no external adopter can run flywheel v2 at all. It outranks the
+  lower-severity polish items in this document (e.g. §req:workflow-run-names)
+  and is bounded and self-contained — a single action's self-reference plus a
+  cheap regression test.
