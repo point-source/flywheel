@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { dirname, join } from "node:path";
+import { dirname, join, relative } from "node:path";
 import yaml from "js-yaml";
 
 // An external adopter pins `point-source/flywheel@<ref>` once; GitHub fetches
@@ -37,12 +37,36 @@ function steps(relPath: string): Step[] {
   return doc.runs?.steps ?? [];
 }
 
-// Every composite action manifest flywheel ships. Workflow files under
-// .github/workflows/ are deliberately excluded: flywheel's own dogfood
-// workflows consume the local action with `uses: ./` and `uses: ./classify`,
-// which is correct there because the workspace *is* flywheel — the rule is
-// about the action's own self-references, not how flywheel consumes itself.
-const COMPOSITE_MANIFESTS = ["action.yml", "classify/action.yml"] as const;
+// Discover every composite action manifest flywheel ships rather than listing
+// them, so a composite added later is guarded automatically and the bug class
+// can never re-enter through a manifest someone forgot to enumerate. A file is
+// in scope iff it is named action.yml/action.yaml and declares
+// `runs.using: composite`; core/action.yml (a node24 manifest with no steps)
+// is therefore excluded, and workflow files under .github/workflows/ never
+// match the name — flywheel's dogfood workflows legitimately consume the local
+// action with `uses: ./` and `uses: ./classify`, which is correct there
+// because the workspace *is* flywheel. The rule is about an action's own
+// self-references, not how flywheel consumes itself.
+const IGNORED_DIRS = new Set(["node_modules", ".git", "dist", "coverage"]);
+
+function findActionManifests(dir: string): string[] {
+  const found: string[] = [];
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    if (entry.isDirectory()) {
+      if (!IGNORED_DIRS.has(entry.name)) {
+        found.push(...findActionManifests(join(dir, entry.name)));
+      }
+    } else if (entry.name === "action.yml" || entry.name === "action.yaml") {
+      found.push(relative(repoRoot, join(dir, entry.name)));
+    }
+  }
+  return found;
+}
+
+const COMPOSITE_MANIFESTS = findActionManifests(repoRoot).filter((manifest) => {
+  const doc = yaml.load(readFile(manifest)) as { runs?: { using?: string } };
+  return doc.runs?.using === "composite";
+});
 
 // A run: line references one of flywheel's own shipped files when it names the
 // bundled dispatcher or a release script. Such a reference must resolve
@@ -50,6 +74,14 @@ const COMPOSITE_MANIFESTS = ["action.yml", "classify/action.yml"] as const;
 const FLYWHEEL_FILE = /core\/dist\/index\.cjs|scripts\/[^\s"']+\.sh/;
 
 describe("adopter resolution rule (§spec:composite-self-reference)", () => {
+  // Guards the discovery itself: if the walk silently found nothing (or missed
+  // a known manifest), the per-manifest rules below would pass vacuously.
+  it("discovers flywheel's composite manifests", () => {
+    expect(COMPOSITE_MANIFESTS).toEqual(
+      expect.arrayContaining(["action.yml", "classify/action.yml"]),
+    );
+  });
+
   for (const manifest of COMPOSITE_MANIFESTS) {
     describe(manifest, () => {
       it("is a composite action", () => {
