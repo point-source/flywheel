@@ -1,3 +1,31 @@
+# [2.0.0](https://github.com/point-source/flywheel/compare/v1.7.0...v2.0.0) (2026-06-08)
+
+
+* feat!: migrate adopter surface to composite action ([3c73f8b](https://github.com/point-source/flywheel/commit/3c73f8b4b74b95704f656d79ccb81ecca4ded1e3))
+* feat!: split action.yml into composite root + core/ JS action ([5d5d57a](https://github.com/point-source/flywheel/commit/5d5d57a5b7fd53064c50e161d8a8c085fc6be37f))
+
+
+### BREAKING CHANGES
+
+* .github/workflows/pr.yml and .github/workflows/push.yml
+reusable workflows are removed. Adopters on the v1 caller form
+(`uses: point-source/flywheel/.github/workflows/pr.yml@<ref>` /
+`...push.yml@<ref>`) must migrate to the v2 composite form
+(`uses: point-source/flywheel@<ref>`) by re-running scripts/init.sh
+with --force, or by manually updating their flywheel-pr.yml and
+flywheel-push.yml caller workflows to the new shape documented in
+docs/adopter/setup.md. The `scripts_dir` and `flywheel-version`
+caller inputs are also gone — the composite resolves both internally
+from the @<ref> the caller pinned.
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+* the scripts_dir action output is removed. The
+adopter migration lands together with §road:composite-action-adoption,
+which rewrites the caller form to invoke the composite directly and
+no longer needs a separate scripts path.
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
 # [2.0.0-dev.1](https://github.com/point-source/flywheel/compare/v1.7.0...v2.0.0-dev.1) (2026-06-08)
 
 
