@@ -23,6 +23,11 @@
 <!--     @v4 major; bump them uniformly to @v5 -->
 <!--     (§req:setup-node-v5, §req:setup-node-v5-criteria, -->
 <!--     §req:setup-node-v5-stories, §req:setup-node-v5-constraints) -->
+<!--   - Pre-flight environment detection — setup probes the environment and -->
+<!--     repo up front, classifies each finding by bucket × severity, and shares -->
+<!--     one vocabulary across init and doctor -->
+<!--     (§req:preflight-detection, §req:preflight-detection-criteria, -->
+<!--     §req:preflight-detection-stories, §req:preflight-detection-constraints) -->
 
 ## Problem statement §req:problem-statement
 
@@ -851,3 +856,179 @@ done deliberately and verified, not waved through on the edit alone.
   CI-budget, release-safety, or composite-action-path work in this document.
   It is nonetheless cheap and removes a small, growing debt — a stale major
   that advisories will flag and that adopters currently see in copy-paste docs.
+
+## Pre-flight environment detection §req:preflight-detection
+
+flywheel's setup script (`scripts/init.sh`) discovers the state of the
+adopter's environment and repository piecemeal and *late*: it begins
+prompting for choices and writing files — `.flywheel.yml`, the two
+workflow files, `.gitattributes`, merge-driver git config — and only
+*then*, partway through, does it probe for things like existing App
+credentials or the owner's account type. A problem that should have been
+caught up front instead surfaces mid-run, after the scaffold has already
+been partly laid down, or fails in a later step (a `gh` call that needs a
+scope the adopter's token does not have) with an error that names the API
+call rather than the missing prerequisite. The adopter is left with a
+half-written setup and a diagnosis they have to reverse-engineer.
+
+Some of this is caught — but only *afterward*, by `scripts/doctor.sh`, a
+separate read-only validator the adopter runs once setup is done. doctor
+speaks its own severity vocabulary (FAIL / WARN / NOTE) that does not
+match anything init says, so an adopter wiring up flywheel learns two
+different languages for "what is wrong with my setup" and gets the
+post-hoc check only after the mistakes are already committed to the repo.
+
+Two classes of problem are entirely undetected today and bite hardest.
+First, **the local environment**: whether `gh` is installed,
+authenticated, and — critically — carries the *specific* scopes and
+permissions the path the adopter chose will need (repo-admin to write the
+App-ID variable and private-key secret and to apply rulesets; `admin:org`
+when credentials are scoped org-wide; the ability to create a GitHub App
+when the adopter asks init to create one). Setup proceeds optimistically
+and dies at the first `gh` call that exceeds the token's grant. Second,
+**a release system already in the repo**: if the repo already runs
+release-please, a separate semantic-release, or hand-rolled
+`gh release create` / `git tag` / `npm version` in a push or dispatch
+workflow, layering flywheel on top produces two systems racing to tag and
+publish releases — a conflict the adopter discovers only when releases
+start colliding.
+
+Underneath all of this is a framing the adopter never gets: when setup
+reports a problem, is it **theirs to fix on their own machine**
+(local-env — a pre-flight concern), **a one-time fix to the repo during
+install** (instance — an install-time concern), or **an ongoing
+configuration matter that lives on** (config — a long-term concern)?
+Without that classification the adopter cannot tell who owns a fix or
+whether it will recur, and the same finding reads differently coming out
+of init than out of doctor.
+
+The users are the adopter wiring flywheel into a repo — greenfield or
+retrofit — and the flywheel maintainer who owns the setup tooling and runs
+it (including in CI and via `curl … | bash`). The problem is frequent (every
+adoption), mandatory (an adopter cannot avoid setup), and self-inflicted
+friction rather than a release-correctness fault: nobody's published
+releases break, but every adopter pays in failed-partway-through setups and
+two-vocabulary confusion.
+
+This requirement is the **shared spine** for the rest of the setup-onboarding
+cluster (#234–242): the credentials prompt and the GitHub-App detection both
+need the same environment-probing and classification capability, so it is
+built once here — detection and vocabulary — and the sibling issues refine
+the prompts and messaging that consume it.
+
+## Pre-flight detection success criteria §req:preflight-detection-criteria
+
+- Detection runs **before** `init.sh` issues any prompt or writes any file.
+  An adopter whose environment has a blocking problem learns of it before the
+  scaffold is touched — nothing is half-written when setup stops.
+- Every finding is labelled on **two independent axes**: a **bucket**
+  (local-env / instance / config — whose problem it is and when it is fixed)
+  and a **severity** (block / warn / info — how serious it is). An adopter
+  reading a finding can tell both, e.g. "`gh` not authenticated" = local-env +
+  block, "repo already runs release-please" = instance + block, and
+  "`allow_auto_merge` disabled" = config + warn.
+- `gh` auth detection reports the **specific scopes/permissions** the chosen
+  path needs and names which later step a missing one would block: repo-admin
+  for the App-ID variable, the private-key secret, and ruleset application;
+  `admin:org` when credentials are scoped org-wide; GitHub-App creation
+  permission when the adopter asks init to create the App. A missing scope is
+  reported up front, tied to the step it blocks — not as a raw `gh` API error
+  mid-run.
+- An existing release system **known to interfere with flywheel** — another
+  tag/release producer such as release-please, a separate semantic-release, or
+  hand-rolled `gh release create` / `git tag` / `npm version` in a push or
+  dispatch workflow — is detected and reported as a **block**-severity
+  finding. Interactive setup halts on it unless the adopter passes an explicit
+  override flag; the override is a deliberate action, never a default.
+- The release-system check is **best-effort and minimal**: it covers systems
+  that would actually race flywheel's releases, not an exhaustive audit of
+  every release tool. It tolerates a false negative (missing an exotic system)
+  in preference to a false positive that needlessly blocks a clean repo.
+- `doctor.sh` prints the **bucket label** on each finding and keeps its
+  existing exit contract unchanged: exit 1 when any block-severity finding is
+  present, 0 otherwise. init's pre-flight and doctor speak one vocabulary —
+  the same buckets and the same severity names — so an adopter does not learn
+  two languages for "what is wrong."
+- In **non-interactive** runs (no TTY, e.g. `curl … | bash` or CI), a
+  block-severity finding causes setup to **exit non-zero with the reason**,
+  rather than printing the finding and proceeding with defaults as init does
+  today.
+- The **credentials detection** (the `FLYWHEEL_GH_APP_ID` variable and
+  `FLYWHEEL_GH_APP_PRIVATE_KEY` secret, at repo and org level) and the
+  **GitHub-App existence/installation detection** run as part of the same
+  pre-flight pass and are classified on the same two axes — #232 ships the
+  complete pre-flight, with the sibling issues (#234–242) refining the prompts
+  that consume its findings.
+- An adopter running setup on a clean machine and a clean repo sees the
+  pre-flight pass with no blockers and setup proceeds exactly as before. The
+  pass is additive: it changes nothing about a healthy setup's flow beyond
+  adding a passing summary.
+
+## Pre-flight detection user stories §req:preflight-detection-stories
+
+- As an adopter, I want setup to tell me my `gh` CLI isn't authenticated — or
+  lacks `admin:org` for the org-wide install I chose — before it writes
+  anything, so I fix it once up front instead of discovering it half-way
+  through a partially-scaffolded repo.
+- As an adopter retrofitting flywheel onto a repo that already runs
+  release-please, I want setup to stop and name the conflict before it layers
+  flywheel on top, with an explicit override if I know what I'm doing, so I
+  don't end up with two systems racing to tag and publish releases.
+- As an adopter reading any finding, I want to know whether it's something on
+  my own machine (local-env), a one-time fix to the repo (instance), or
+  ongoing configuration (config), so I know who owns the fix and whether it
+  will come back.
+- As an adopter, I want init's pre-flight and doctor's validation to describe
+  problems with the same buckets and severity names, so I don't learn two
+  different vocabularies for the same kinds of problem.
+- As a maintainer running setup in CI or via `curl … | bash`, I want a
+  block-severity finding to fail the run loudly with a clear reason, so an
+  unattended setup never proceeds on a broken environment.
+- As a flywheel maintainer, I want the environment-probing and classification
+  built once and reused by the credentials and GitHub-App work, so those
+  features don't each reinvent detection or invent a third vocabulary.
+
+## Pre-flight detection quality attributes and constraints §req:preflight-detection-constraints
+
+- **Two-axis classification.** Bucket (local-env / instance / config) and
+  severity (block / warn / info) are independent; every finding carries both.
+  The bucket answers *whose problem and when it's fixed*; the severity answers
+  *how bad*.
+- **Detection precedes action.** In init, detection runs before any prompt or
+  file write. "Before setup starts" is literal — the pre-flight pass is the
+  first thing the adopter sees, and a block stops setup before the scaffold is
+  touched.
+- **Severity drives control flow.** A block halts: interactively, until the
+  adopter resolves it or passes an explicit override where one is offered;
+  non-interactively, by exiting non-zero. Warn and info are advisory and never
+  halt.
+- **Override is explicit, never default.** The override for a blocking
+  existing-release-system finding is an opt-in flag the adopter must pass
+  deliberately. Setup never silently proceeds past a block.
+- **Minimal, best-effort release-system detection.** Scoped to known
+  flywheel-interfering release producers; not an exhaustive scanner. Designed
+  to tolerate a missed exotic system rather than block a clean repo on a false
+  positive.
+- **One vocabulary, preserved doctor behavior.** doctor adopts the bucket
+  labels and the block/warn/info severity names but stays read-only and keeps
+  its exit-1-on-block contract. Unification is of *vocabulary* across init and
+  doctor; whether they share code is a design decision for SPEC, not a
+  requirement here.
+- **Reusable spine.** The detection is structured so the credentials and
+  GitHub-App detections (sibling issues #234–242) consume the same
+  classification and reporting, per the issue's build-once-reuse intent.
+- **Read-only, no new privilege.** Detection probes local tools, `gh` auth
+  state, and repo/remote state read-only; it requests no permissions beyond
+  what setup already needs — indeed it exists partly to surface when those
+  permissions are missing.
+- **Backward compatible.** A clean environment and clean repo see no
+  behavioral change beyond an added passing pre-flight summary; adopters
+  consuming flywheel as an action are unaffected (this is setup-time tooling
+  only).
+- **Priority.** This is the gating spine of the setup-onboarding cluster and
+  precedes the prompt-refinement siblings (#234–242) that consume its output.
+  Among the broader areas in this document it is onboarding developer
+  experience, not a release-correctness fault, so it does not outrank the
+  release-safety (§req:release-safety-gate) or composite-action
+  (§req:composite-action-path) work — but it is the lead item of the setup
+  cluster and unblocks the rest of it.
