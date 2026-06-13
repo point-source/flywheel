@@ -133,7 +133,9 @@ const SCAFFOLD_FILES = [
 // All runs force the interactive gate branch (without a TTY) so a block halts
 // at the gate before any prompt/REPO resolution, exercising the "halted"
 // wording. The clean-pass tests still complete because no block is emitted.
-const INTERACTIVE = { FLYWHEEL_ASSUME_INTERACTIVE: "1" };
+// FLYWHEEL_TEST_HOOKS opts into the test-only hooks (init.sh ignores
+// FLYWHEEL_ASSUME_INTERACTIVE unless it is set).
+const INTERACTIVE = { FLYWHEEL_ASSUME_INTERACTIVE: "1", FLYWHEEL_TEST_HOOKS: "1" };
 
 describe("init.sh — gh-capability pre-flight detection (§spec:preflight-gh-capability)", () => {
   it("installed + authenticated surfaces as a passing local-env finding", () => {

@@ -70,18 +70,23 @@ if [[ -n "$doctor_src" ]]; then
 fi
 
 # Source the shared finding vocabulary (scripts/lib/findings.sh). Locate it next
-# to this script; otherwise fetch it from the same v1 source as the linter.
-# Without it doctor cannot emit vocabulary findings — that is a hard error.
+# to this script; otherwise fetch it. The fetch ref follows FLYWHEEL_TEMPLATES_BASE
+# when set (so a pinned consumer gets the matching findings.sh, not main),
+# defaulting to main otherwise. Without it doctor cannot emit vocabulary
+# findings — that is a hard error.
 # shellcheck source=scripts/lib/findings.sh
 if [[ -n "$doctor_dir" && -f "$doctor_dir/lib/findings.sh" ]]; then
   # shellcheck disable=SC1091
   . "$doctor_dir/lib/findings.sh"
 else
+  findings_base="${FLYWHEEL_TEMPLATES_BASE:-https://raw.githubusercontent.com/point-source/flywheel/main/scripts/templates}"
   findings_tmp="$(mktemp)"
-  if curl -fsSL "https://raw.githubusercontent.com/point-source/flywheel/main/scripts/lib/findings.sh" -o "$findings_tmp" 2>/dev/null; then
+  if curl -fsSL "${findings_base%/templates}/lib/findings.sh" -o "$findings_tmp" 2>/dev/null; then
     # shellcheck disable=SC1090
     . "$findings_tmp"
+    rm -f "$findings_tmp"
   else
+    rm -f "$findings_tmp"
     echo "error: could not locate or fetch scripts/lib/findings.sh — doctor cannot emit findings without it." >&2
     exit 1
   fi

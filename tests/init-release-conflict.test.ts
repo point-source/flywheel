@@ -84,6 +84,9 @@ function runInit(
     env: {
       ...process.env,
       PATH: `${binDir}:${process.env.PATH}`,
+      // Opt into the test-only pre-flight hooks (FLYWHEEL_ASSUME_INTERACTIVE),
+      // which init.sh ignores unless this is set.
+      FLYWHEEL_TEST_HOOKS: "1",
       ...(opts.env ?? {}),
     },
   });

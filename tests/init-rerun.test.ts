@@ -229,7 +229,9 @@ describe("init.sh re-run resolves App ID via repo variable", () => {
   //   1) detect the creds via `gh {variable,secret} list --org $owner`
   //      and not double-prompt,
   //   2) recover the App ID via `gh variable get FLYWHEEL_GH_APP_ID --org`
-  //      after the repo-level get returns empty,
+  //      (the pre-flight probe reads the value once at the level where the
+  //      variable actually exists — org here, since the repo-level list missed —
+  //      and the --app-id readback reuses it rather than re-fetching),
   //   3) pass --app-id through to apply-rulesets.sh.
   it("recovers --app-id from org-level variable when owner is org and repo level missing", () => {
     const s = setup();
@@ -248,8 +250,10 @@ describe("init.sh re-run resolves App ID via repo variable", () => {
       // Existence-check fan-out: repo first, then org.
       expect(ghLog).toMatch(/^variable list --org test-owner/m);
       expect(ghLog).toMatch(/^secret list --org test-owner/m);
-      // App ID readback: repo miss → org hit.
-      expect(ghLog).toMatch(/^variable get FLYWHEEL_GH_APP_ID --repo test-owner\/test-repo$/m);
+      // App ID value is read once, at the level where the variable exists (org).
+      // The repo-level list missed, so no repo-level `variable get` is issued —
+      // the --app-id readback reuses the value the pre-flight probe captured.
+      expect(ghLog).not.toMatch(/^variable get FLYWHEEL_GH_APP_ID --repo/m);
       expect(ghLog).toMatch(/^variable get FLYWHEEL_GH_APP_ID --org test-owner$/m);
 
       expect(out).toContain("already set (org-level)");
