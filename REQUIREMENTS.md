@@ -28,6 +28,16 @@
 <!--     one vocabulary across init and doctor -->
 <!--     (§req:preflight-detection, §req:preflight-detection-criteria, -->
 <!--     §req:preflight-detection-stories, §req:preflight-detection-constraints) -->
+<!--   - apply-rulesets PyYAML — the one-shot ruleset setup script aborts on a -->
+<!--     missing PyYAML and prescribes a persistent user install for a script -->
+<!--     run once; stale "preinstalled on macOS" comment -->
+<!--     (§req:apply-rulesets-pyyaml, §req:apply-rulesets-pyyaml-criteria, -->
+<!--     §req:apply-rulesets-pyyaml-stories, §req:apply-rulesets-pyyaml-constraints) -->
+<!--   - apply-rulesets.sh stdin invocation — the documented `curl … | bash` -->
+<!--     one-liner fails (exit 2) because the script can't resolve its bundled -->
+<!--     ruleset templates when read from stdin -->
+<!--     (§req:apply-rulesets-stdin, §req:apply-rulesets-stdin-criteria, -->
+<!--     §req:apply-rulesets-stdin-stories, §req:apply-rulesets-stdin-constraints) -->
 
 ## Problem statement §req:problem-statement
 
@@ -1032,3 +1042,267 @@ the prompts and messaging that consume it.
   release-safety (§req:release-safety-gate) or composite-action
   (§req:composite-action-path) work — but it is the lead item of the setup
   cluster and unblocks the rest of it.
+
+## apply-rulesets PyYAML §req:apply-rulesets-pyyaml
+
+`scripts/apply-rulesets.sh` is the one-shot setup step an adopter runs once
+per repository — `docs/adopter/setup.md` §5 documents it as a
+`curl … | bash -s -- …` one-liner — to apply Flywheel's branch- and
+tag-protection rulesets. To enumerate the managed branches it must read
+`.flywheel.yml`, which it does with two small Python parses (a managed-branch
+list and a production-release-branch list) that depend on **PyYAML**.
+
+When PyYAML is not importable the script aborts with
+`error: PyYAML is required. Install with: pip3 install --user pyyaml`. That
+instruction tells the adopter to **permanently** mutate their user
+site-packages — a lasting change to their machine — to satisfy a script they
+run a single time. The reporter's own resolution was to hand-build a throwaway
+virtualenv, install PyYAML into it, point the script at it, and delete it
+afterward: clear evidence the desired behavior is ephemeral, not persistent.
+
+On current macOS the rude path is the *common* path. The script's header
+comment claims `python3 with PyYAML (preinstalled on macOS …)`, but that was
+true only of the retired system Python 2. The Xcode Command Line Tools
+`python3` (3.9.x) that adopters actually have does **not** ship PyYAML, so a
+first-time adopter following the documented setup hits a hard stop on the very
+first flywheel action they take — and the stale comment misleads anyone reading
+the script about why.
+
+The users are two: the adopter onboarding a repository, for whom this is the
+first thing they run and therefore a first-impression adoption barrier; and the
+flywheel maintainer, who owns a script whose documented dependencies no longer
+match reality. The problem is mandatory (the script will not run without the
+parse), frequent on macOS (the default interpreter lacks the package), and
+self-inflicted by a stale assumption. It blocks no *existing* adopter mid-flow —
+it bites at setup time — but it taxes exactly the moment flywheel most wants to
+feel frictionless.
+
+## apply-rulesets PyYAML success criteria §req:apply-rulesets-pyyaml-criteria
+
+- An adopter on stock macOS (Xcode CLT `python3`, no PyYAML) runs
+  `apply-rulesets.sh` as documented in `docs/adopter/setup.md` and it completes
+  end-to-end **without any manual dependency install** and without prompting
+  them to install anything.
+- After the script exits — whether it succeeds or fails — the adopter's Python
+  environment and user site-packages are exactly as they were before. Nothing
+  PyYAML-related is left installed on their machine.
+- The same behavior holds on mainstream Linux. Where auto-provisioning genuinely
+  cannot work in a given environment, the script fails with a clear,
+  copy-pasteable, actionable message — not a cryptic import error.
+- The two `.flywheel.yml` reads produce identical results to today: the
+  complete list of managed branch refs, and the list of `release: production`
+  branch refs, with the same downstream ruleset behavior.
+- The script's header comment no longer claims PyYAML is preinstalled on macOS;
+  its stated dependencies match what adopters actually have.
+- An adopter whose `python3` already has PyYAML importable sees no change and
+  does no extra work — the existing fast path is preserved, with no added
+  latency or steps.
+
+## apply-rulesets PyYAML user stories §req:apply-rulesets-pyyaml-stories
+
+- As an adopter onboarding a new repository on macOS, I want `apply-rulesets.sh`
+  to just work without my installing anything, so my first flywheel step
+  succeeds and leaves my machine clean.
+- As an adopter who runs this script exactly once, I do not want to permanently
+  install a Python package for a single use, so my user site-packages stay
+  uncluttered.
+- As an adopter on an environment where the script cannot self-provision, I want
+  a clear message telling me precisely what to do, so I am not stranded on
+  "PyYAML is required."
+- As a flywheel maintainer, I want the script's documented dependencies to match
+  reality, so adopters are not misled by a stale "preinstalled on macOS" claim.
+- As an adopter who already has PyYAML, I want the existing path unchanged, so
+  nothing slows down or breaks for me.
+
+## apply-rulesets PyYAML quality attributes and constraints §req:apply-rulesets-pyyaml-constraints
+
+- **No persistent side effects.** The default path leaves nothing installed in
+  the adopter's environment after the script exits. This is the core grievance
+  in #245 and is a hard requirement.
+- **Zero manual steps on the common path.** When PyYAML is missing, the script
+  resolves it itself rather than asking the adopter to act.
+- **Cross-platform with graceful degradation.** Works on stock macOS and
+  mainstream Linux; where self-provisioning is genuinely impossible (e.g.
+  `ensurepip` stripped on some Debian/Ubuntu builds and no alternative
+  available), it exits with a clear, actionable message instead of a cryptic
+  error.
+- **One-shot / `curl | bash` friendly.** The script runs without relying on a
+  project checkout's tooling or a pre-existing virtualenv, and stays safe to
+  re-run.
+- **Parse parity.** Branch enumeration from `.flywheel.yml` is byte-for-byte
+  equivalent to today; this change touches how the dependency is satisfied, not
+  what the parses compute.
+- **Mechanism is open.** Whether the fix self-provisions an ephemeral
+  environment, uses a tool like `uv` when present, drops the PyYAML dependency
+  altogether, or some combination is a design decision for /symphonize:plan. The
+  requirement fixes the adopter experience and the no-persistence guarantee, not
+  the means.
+- **Low blast radius.** The change is confined to the setup script and its
+  comment/docs; it does not disturb the ruleset-application logic itself.
+- **Priority.** This is an adoption-path papercut — the first thing a new
+  adopter runs, and broken on the common macOS configuration — but it blocks no
+  existing adopter mid-flow and is cheap and self-contained. It should not be
+  sequenced ahead of the functional defects in this document (e.g.
+  §req:composite-action-path), but it is low-cost polish that removes a
+  first-impression barrier.
+## apply-rulesets.sh stdin invocation §req:apply-rulesets-stdin
+
+`docs/adopter/setup.md` §5 documents applying Flywheel's branch and tag
+protection without checking out the repository, by piping the script straight
+from `raw.githubusercontent.com`:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/point-source/flywheel/main/scripts/apply-rulesets.sh | bash -s -- <owner/repo>
+```
+
+Run that way, the script never applies anything — it dies with exit code 2
+before the first GitHub API call. `apply-rulesets.sh` reads its four ruleset
+templates (`managed-branches.json`, `managed-branches-review.json`,
+`release-gate.json`, `tag-namespace.json`) from a `rulesets/` directory it
+locates relative to *its own file*: `SCRIPT_DIR="$(cd "$(dirname
+"${BASH_SOURCE[0]}")" && pwd)"`. A script read from stdin has no file on disk,
+so `BASH_SOURCE[0]` is unset; under the script's `set -u` strict mode the
+reference degrades to the caller's current working directory, and the later
+`jq … "$SCRIPT_DIR/rulesets/managed-branches.json"` read fails ("Could not open
+file … No such file or directory") unless the caller happens to already be
+standing inside a Flywheel checkout — exactly the situation the piped form
+exists to avoid.
+
+The one redeeming property is that the failure is clean: the script dies at
+template resolution, before it has created any ruleset, enabled
+`delete_branch_on_merge`, or made any other change. The adopter's repository is
+left untouched — no half-applied protection. But the documented command simply
+does not do what the docs say it does.
+
+The trap is sharpened by inconsistency. The neighbouring quick-start one-liners
+in the same document — `init.sh` and `doctor.sh` — *are* genuinely stdin-safe
+and work piped. An adopter who has just run `curl … init.sh | bash` and
+`curl … doctor.sh | bash` successfully has every reason to assume the
+`apply-rulesets.sh` one-liner on the same page works the same way. The repo
+offers two contradictory invocation contracts under one visual pattern.
+
+The users are two: the adopter following Flywheel's documented quick path with
+no local checkout, for whom a copy-pasted, documented command fails on first
+use; and the Flywheel maintainer, whose onboarding docs promise an install
+step that cannot work. The problem is frequent for that adopter (it is the
+*first* protection step in the quick path) and universal (it fails for every
+adopter who takes the piped route, regardless of their config), though no
+adopter is hard-blocked — the checkout invocation
+(`scripts/apply-rulesets.sh …`) still works and is documented alongside.
+
+This is the same shape of defect as §req:composite-action-path: a code path
+that only the real adopter exercises (consuming Flywheel's script without
+Flywheel's source already on disk) was never modelled by the project's own
+runs, which always have the checkout present. The decided outcome is to make
+the documented piped command genuinely work, to keep the docs honest about
+which invocation forms are supported, to audit every other documented
+`curl … | bash` one-liner for the same latent failure, and to add a cheap test
+that exercises the stdin path so this class of break cannot ship again.
+
+## apply-rulesets.sh stdin success criteria §req:apply-rulesets-stdin-criteria
+
+- An adopter with **no Flywheel checkout**, running the exact command
+  documented in setup.md §5 (`curl -fsSL …/apply-rulesets.sh | bash -s --
+  <owner/repo>` plus its `--required-checks` / `--app-id` / optional
+  `--release-required-checks` flags), applies the rulesets end to end — the
+  destruction-protection, review, and tag-namespace rulesets, plus the release
+  gate when requested — with the same result a checkout invocation produces. No
+  exit-2, no "Could not open file," no dependence on the caller's working
+  directory.
+- The piped run resolves all four ruleset templates regardless of the directory
+  the adopter happens to be in when they run it. Running from `$HOME`, from an
+  unrelated repository, or from an empty `mktemp -d` yields the same templates
+  and the same applied rulesets.
+- The templates a piped run applies are consistent with the version of the
+  script being run — a piped run never combines the logic of one script version
+  with ruleset shapes from another in a way that produces a malformed or
+  mismatched ruleset. (How the script obtains version-consistent templates is a
+  design decision for SPEC; the requirement is that the rulesets it applies are
+  the ones that script intends.)
+- Every script that setup.md (or the README) documents as a `curl … | bash`
+  one-liner is genuinely stdin-safe: piping it produces the behaviour the docs
+  describe, with no latent `BASH_SOURCE`/`SCRIPT_DIR`-style failure. Where a
+  script legitimately must run from a checkout, the docs present it that way and
+  do **not** show a piped form for it.
+- The checkout invocation (`scripts/apply-rulesets.sh <owner/repo> …`) is
+  unchanged — same templates, same applied rulesets, same idempotent
+  create-or-replace behaviour as today.
+- A fast local/CI test runs `apply-rulesets.sh` the way an adopter pipes it —
+  read from stdin, with no Flywheel checkout in the working directory — and
+  fails if the script cannot resolve its ruleset templates; it passes once the
+  script resolves them. The test reproduces the failure at template resolution,
+  before any GitHub API call, so it needs no live GitHub access and adds no load
+  to the rate-limited sandbox installation (§req:sandbox-ci-budget). e2e stays a
+  backstop, not the first line of defence for this class of bug.
+- The clean-failure property is preserved: if the script genuinely cannot obtain
+  its templates (e.g. no network on a piped run), it still aborts before
+  creating any ruleset or changing any repository setting, leaving no
+  partially-applied protection state.
+
+## apply-rulesets.sh stdin user stories §req:apply-rulesets-stdin-stories
+
+- As an adopter with no Flywheel checkout, I want the documented
+  `curl … apply-rulesets.sh | bash -s -- <owner/repo>` command to actually apply
+  my branch and tag protection, so I can secure my repo from the quick path
+  without cloning Flywheel first.
+- As an adopter who just ran the `init.sh` and `doctor.sh` one-liners
+  successfully, I want `apply-rulesets.sh` to work the same way when piped, so I
+  am not tripped up by one script on the page that silently needs a checkout the
+  others do not.
+- As an adopter, I want a failed template fetch to abort the run before any
+  ruleset is applied, so a botched piped run never leaves my repository
+  half-protected.
+- As a Flywheel maintainer, I want setup.md to show only invocation forms that
+  work, so no adopter hits exit 2 on a command I documented.
+- As a Flywheel maintainer, I want every documented `curl … | bash` one-liner
+  verified stdin-safe, so I learn about a latent self-location failure from my
+  own audit rather than from an adopter's bug report.
+- As a Flywheel maintainer, I want a cheap test that runs the script exactly as
+  an adopter pipes it, so the "our own runs always have the checkout, so the
+  adopter path is never modelled" failure mode (the same shape as
+  §req:composite-action-path) cannot ship again.
+
+## apply-rulesets.sh stdin quality attributes and constraints §req:apply-rulesets-stdin-constraints
+
+- **Fail clean, never half-protected.** The script's existing property — it dies
+  before touching any ruleset or repo setting when it cannot proceed — is a hard
+  requirement to preserve. A run that cannot obtain valid templates leaves the
+  repository exactly as it found it.
+- **Idempotence preserved.** The fix changes only how the script locates its
+  templates, not its create-or-replace-by-name behaviour; re-running it (piped or
+  from a checkout) still updates existing rulesets in place rather than stacking
+  duplicates.
+- **One consistent invocation contract.** After the fix, every documented piped
+  one-liner behaves the same way when piped — the adopter does not have to know
+  which scripts secretly require a checkout. Consistency across `init.sh`,
+  `doctor.sh`, and `apply-rulesets.sh` is part of the outcome, not just the
+  single-script fix.
+- **Strict mode stays.** The script relies on `set -u` (and its other strict-mode
+  guards) to fail fast on unset variables; the fix coexists with strict mode
+  rather than relaxing it to paper over the unbound `BASH_SOURCE[0]`.
+- **Version-consistent templates.** Under stdin the script cannot read its own
+  file location, and therefore cannot derive from the runner which Flywheel ref
+  it was fetched from; whatever templates a piped run uses must still match the
+  script's own logic. Choosing the ref/source for a remote fetch deterministically
+  is a SPEC design decision — the requirement is only that the result is
+  version-consistent, never a silent script/template mismatch.
+- **No heavier dependency surface for the adopter.** A piped run already requires
+  network (it is itself fetched over the network and it calls the GitHub API via
+  `gh`) and already requires `gh`, `jq`, and `python3`/PyYAML. The fix should not
+  impose new tools or new privileges on the adopter beyond what the script
+  already demands.
+- **Cheap coverage only.** The regression test lives in the fast local/CI suite
+  and does not draw on the e2e sandbox's rate-limited installation
+  (§req:sandbox-ci-budget).
+- **Priority.** Adopter-facing and on the documented onboarding path — the *first*
+  protection step in the quick start — so it directly degrades first-run
+  experience for every adopter who takes the piped route. It ranks below the
+  failures that break releases or the whole v2 major (§req:release-safety-gate,
+  §req:composite-action-path): no adopter is hard-blocked, since the checkout
+  invocation works and is documented alongside, and the failure is clean rather
+  than corrupting. It is self-contained — one script's self-location, a docs
+  audit, and a cheap test — and removes a documented command that fails on first
+  use. In decreasing order of user impact: (1) make the piped
+  `apply-rulesets.sh` command work end to end; (2) keep the docs honest and audit
+  every other documented one-liner for the same class of failure; (3) the cheap
+  stdin regression guard.

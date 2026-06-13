@@ -1,3 +1,17 @@
+# [2.1.0-dev.2](https://github.com/point-source/flywheel/compare/v2.1.0-dev.1...v2.1.0-dev.2) (2026-06-13)
+
+
+### Features
+
+* stdin-safe ruleset application for piped apply-rulesets.sh ([#249](https://github.com/point-source/flywheel/issues/249)) ([4b67490](https://github.com/point-source/flywheel/commit/4b67490830ca4a0f21a80ff69e6932e6a6214f23)), closes [#244](https://github.com/point-source/flywheel/issues/244) [#244](https://github.com/point-source/flywheel/issues/244) [#244](https://github.com/point-source/flywheel/issues/244) [#244](https://github.com/point-source/flywheel/issues/244) [#244](https://github.com/point-source/flywheel/issues/244) [#244](https://github.com/point-source/flywheel/issues/244) [#245](https://github.com/point-source/flywheel/issues/245) [#244](https://github.com/point-source/flywheel/issues/244)
+
+# [2.1.0-dev.1](https://github.com/point-source/flywheel/compare/v2.0.1...v2.1.0-dev.1) (2026-06-13)
+
+
+### Features
+
+* apply-rulesets self-provisions PyYAML ephemerally ([#247](https://github.com/point-source/flywheel/issues/247)) ([d363a2f](https://github.com/point-source/flywheel/commit/d363a2f90a6de6d31ad1ffed6d24e67cf4e597ec)), closes [#245](https://github.com/point-source/flywheel/issues/245) [#245](https://github.com/point-source/flywheel/issues/245) [#245](https://github.com/point-source/flywheel/issues/245) [#245](https://github.com/point-source/flywheel/issues/245) [#245](https://github.com/point-source/flywheel/issues/245) [#245](https://github.com/point-source/flywheel/issues/245) [#245](https://github.com/point-source/flywheel/issues/245)
+
 ## [2.0.1](https://github.com/point-source/flywheel/compare/v2.0.0...v2.0.1) (2026-06-08)
 
 
