@@ -11,7 +11,7 @@ Step-by-step guide to wiring Flywheel into your repository.
 
 ## Quick start (one command)
 
-If you have `gh`, `jq`, and `python3` (with `PyYAML`) installed and you're in your repo with `gh auth login` already done, the steps below collapse to:
+If you have `gh`, `jq`, and `python3` installed and you're in your repo with `gh auth login` already done, the steps below collapse to:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/point-source/flywheel/main/scripts/init.sh | bash
@@ -518,6 +518,8 @@ scripts/apply-rulesets.sh <owner/repo> --required-checks "quality" --app-id <you
 ```
 
 (Or via `curl -fsSL https://raw.githubusercontent.com/point-source/flywheel/main/scripts/apply-rulesets.sh | bash -s -- <owner/repo>` if you don't have the Flywheel repo checked out.)
+
+> **PyYAML is auto-provisioned.** `apply-rulesets.sh` needs PyYAML to read `.flywheel.yml`. When your `python3` can't `import yaml` (e.g. stock macOS, where PyYAML isn't preinstalled), the script provisions it into a throwaway virtualenv for that single run and removes it on exit — nothing is left installed. You don't need to `pip install` anything first (#245).
 
 ## 6. Brief your contributors (human and AI)
 
