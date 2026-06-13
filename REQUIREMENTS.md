@@ -23,6 +23,11 @@
 <!--     @v4 major; bump them uniformly to @v5 -->
 <!--     (§req:setup-node-v5, §req:setup-node-v5-criteria, -->
 <!--     §req:setup-node-v5-stories, §req:setup-node-v5-constraints) -->
+<!--   - apply-rulesets PyYAML — the one-shot ruleset setup script aborts on a -->
+<!--     missing PyYAML and prescribes a persistent user install for a script -->
+<!--     run once; stale "preinstalled on macOS" comment -->
+<!--     (§req:apply-rulesets-pyyaml, §req:apply-rulesets-pyyaml-criteria, -->
+<!--     §req:apply-rulesets-pyyaml-stories, §req:apply-rulesets-pyyaml-constraints) -->
 
 ## Problem statement §req:problem-statement
 
@@ -851,3 +856,106 @@ done deliberately and verified, not waved through on the edit alone.
   CI-budget, release-safety, or composite-action-path work in this document.
   It is nonetheless cheap and removes a small, growing debt — a stale major
   that advisories will flag and that adopters currently see in copy-paste docs.
+
+## apply-rulesets PyYAML §req:apply-rulesets-pyyaml
+
+`scripts/apply-rulesets.sh` is the one-shot setup step an adopter runs once
+per repository — `docs/adopter/setup.md` §5 documents it as a
+`curl … | bash -s -- …` one-liner — to apply Flywheel's branch- and
+tag-protection rulesets. To enumerate the managed branches it must read
+`.flywheel.yml`, which it does with two small Python parses (a managed-branch
+list and a production-release-branch list) that depend on **PyYAML**.
+
+When PyYAML is not importable the script aborts with
+`error: PyYAML is required. Install with: pip3 install --user pyyaml`. That
+instruction tells the adopter to **permanently** mutate their user
+site-packages — a lasting change to their machine — to satisfy a script they
+run a single time. The reporter's own resolution was to hand-build a throwaway
+virtualenv, install PyYAML into it, point the script at it, and delete it
+afterward: clear evidence the desired behavior is ephemeral, not persistent.
+
+On current macOS the rude path is the *common* path. The script's header
+comment claims `python3 with PyYAML (preinstalled on macOS …)`, but that was
+true only of the retired system Python 2. The Xcode Command Line Tools
+`python3` (3.9.x) that adopters actually have does **not** ship PyYAML, so a
+first-time adopter following the documented setup hits a hard stop on the very
+first flywheel action they take — and the stale comment misleads anyone reading
+the script about why.
+
+The users are two: the adopter onboarding a repository, for whom this is the
+first thing they run and therefore a first-impression adoption barrier; and the
+flywheel maintainer, who owns a script whose documented dependencies no longer
+match reality. The problem is mandatory (the script will not run without the
+parse), frequent on macOS (the default interpreter lacks the package), and
+self-inflicted by a stale assumption. It blocks no *existing* adopter mid-flow —
+it bites at setup time — but it taxes exactly the moment flywheel most wants to
+feel frictionless.
+
+## apply-rulesets PyYAML success criteria §req:apply-rulesets-pyyaml-criteria
+
+- An adopter on stock macOS (Xcode CLT `python3`, no PyYAML) runs
+  `apply-rulesets.sh` as documented in `docs/adopter/setup.md` and it completes
+  end-to-end **without any manual dependency install** and without prompting
+  them to install anything.
+- After the script exits — whether it succeeds or fails — the adopter's Python
+  environment and user site-packages are exactly as they were before. Nothing
+  PyYAML-related is left installed on their machine.
+- The same behavior holds on mainstream Linux. Where auto-provisioning genuinely
+  cannot work in a given environment, the script fails with a clear,
+  copy-pasteable, actionable message — not a cryptic import error.
+- The two `.flywheel.yml` reads produce identical results to today: the
+  complete list of managed branch refs, and the list of `release: production`
+  branch refs, with the same downstream ruleset behavior.
+- The script's header comment no longer claims PyYAML is preinstalled on macOS;
+  its stated dependencies match what adopters actually have.
+- An adopter whose `python3` already has PyYAML importable sees no change and
+  does no extra work — the existing fast path is preserved, with no added
+  latency or steps.
+
+## apply-rulesets PyYAML user stories §req:apply-rulesets-pyyaml-stories
+
+- As an adopter onboarding a new repository on macOS, I want `apply-rulesets.sh`
+  to just work without my installing anything, so my first flywheel step
+  succeeds and leaves my machine clean.
+- As an adopter who runs this script exactly once, I do not want to permanently
+  install a Python package for a single use, so my user site-packages stay
+  uncluttered.
+- As an adopter on an environment where the script cannot self-provision, I want
+  a clear message telling me precisely what to do, so I am not stranded on
+  "PyYAML is required."
+- As a flywheel maintainer, I want the script's documented dependencies to match
+  reality, so adopters are not misled by a stale "preinstalled on macOS" claim.
+- As an adopter who already has PyYAML, I want the existing path unchanged, so
+  nothing slows down or breaks for me.
+
+## apply-rulesets PyYAML quality attributes and constraints §req:apply-rulesets-pyyaml-constraints
+
+- **No persistent side effects.** The default path leaves nothing installed in
+  the adopter's environment after the script exits. This is the core grievance
+  in #245 and is a hard requirement.
+- **Zero manual steps on the common path.** When PyYAML is missing, the script
+  resolves it itself rather than asking the adopter to act.
+- **Cross-platform with graceful degradation.** Works on stock macOS and
+  mainstream Linux; where self-provisioning is genuinely impossible (e.g.
+  `ensurepip` stripped on some Debian/Ubuntu builds and no alternative
+  available), it exits with a clear, actionable message instead of a cryptic
+  error.
+- **One-shot / `curl | bash` friendly.** The script runs without relying on a
+  project checkout's tooling or a pre-existing virtualenv, and stays safe to
+  re-run.
+- **Parse parity.** Branch enumeration from `.flywheel.yml` is byte-for-byte
+  equivalent to today; this change touches how the dependency is satisfied, not
+  what the parses compute.
+- **Mechanism is open.** Whether the fix self-provisions an ephemeral
+  environment, uses a tool like `uv` when present, drops the PyYAML dependency
+  altogether, or some combination is a design decision for /symphonize:plan. The
+  requirement fixes the adopter experience and the no-persistence guarantee, not
+  the means.
+- **Low blast radius.** The change is confined to the setup script and its
+  comment/docs; it does not disturb the ruleset-application logic itself.
+- **Priority.** This is an adoption-path papercut — the first thing a new
+  adopter runs, and broken on the common macOS configuration — but it blocks no
+  existing adopter mid-flow and is cheap and self-contained. It should not be
+  sequenced ahead of the functional defects in this document (e.g.
+  §req:composite-action-path), but it is low-cost polish that removes a
+  first-impression barrier.
