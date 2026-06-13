@@ -109,8 +109,18 @@ done
 # interrupt mid-provision still removes the throwaway dir.
 PYYAML_PYTHON="python3"
 PYYAML_TMPDIR=""
-cleanup_pyyaml() { [[ -n "$PYYAML_TMPDIR" ]] && rm -rf "$PYYAML_TMPDIR"; return 0; }
-trap cleanup_pyyaml EXIT
+# Set when a piped run (no checkout) fetches ruleset templates into a throwaway
+# dir, below. Declared here so the shared cleanup trap can see it under `set -u`.
+RULESETS_TMPDIR=""
+# A single EXIT handler removes every throwaway dir this run created — the PyYAML
+# venv and the fetched-templates dir — so nothing is left behind on success,
+# error under `set -e`, or interrupt. INT/TERM `exit` so they funnel through it.
+cleanup_tmpdirs() {
+  [[ -n "$PYYAML_TMPDIR" ]] && rm -rf "$PYYAML_TMPDIR"
+  [[ -n "$RULESETS_TMPDIR" ]] && rm -rf "$RULESETS_TMPDIR"
+  return 0
+}
+trap cleanup_tmpdirs EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
@@ -165,10 +175,11 @@ else
   # Piped (no checkout on disk): fetch every ruleset template we'll need into
   # a temp dir BEFORE applying anything, so a failed fetch aborts before any
   # ruleset is created or any repo setting is flipped — never half-protected.
-  RULESETS_DIR="$(mktemp -d)"
-  # Remove the throwaway template dir on any exit — success, error under
-  # `set -e`, or interrupt — so a piped run leaves nothing behind in $TMPDIR.
-  trap 'rm -rf "$RULESETS_DIR"' EXIT INT TERM
+  # Templates land in a throwaway dir cleaned up by the shared EXIT trap above
+  # (cleanup_tmpdirs) — no second trap here, which would clobber that handler
+  # and leak the PyYAML venv.
+  RULESETS_TMPDIR="$(mktemp -d)"
+  RULESETS_DIR="$RULESETS_TMPDIR"
   needed_rulesets=(managed-branches.json managed-branches-review.json tag-namespace.json)
   if [[ -n "$RELEASE_REQUIRED_CHECKS" ]]; then
     needed_rulesets+=(release-gate.json)
