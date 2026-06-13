@@ -120,6 +120,14 @@ elif { exec 3</dev/tty; } 2>/dev/null; then
   INTERACTIVE=1
 fi
 
+# Test-only override: force the interactive gate branch without a real TTY.
+# Used by the pre-flight test suite to exercise the interactive halt path; never
+# set in normal use. It does NOT open fd 3, so it is only safe on paths that
+# exit before any `read -u 3` — which the pre-flight gate (below) does.
+if [[ "${FLYWHEEL_ASSUME_INTERACTIVE:-0}" -eq 1 ]]; then
+  INTERACTIVE=1
+fi
+
 TEMPLATES_BASE="${FLYWHEEL_TEMPLATES_BASE:-https://raw.githubusercontent.com/point-source/flywheel/main/scripts/templates}"
 # When piped via `curl ... | bash`, BASH_SOURCE is unset and `set -u` would
 # trip; default to empty and skip local-templates detection in that case.
@@ -198,7 +206,40 @@ preflight_run() {
   fi
 }
 
+# preflight_block <override-token> <bucket> <message>
+# Emit a block finding for <message>, UNLESS the override for <override-token> is
+# active (env/var PREFLIGHT_OVERRIDE_<token>=1), in which case demote it to an
+# advisory warn. The override is opt-in and never the default
+# (SPEC §spec:preflight-gate); this batch defines the hook, and Batch 4 wires the
+# actual --override-release-conflict FLAG that sets the token. <override-token>
+# uses underscores (e.g. release_conflict → flag --override-release-conflict).
+preflight_block() {
+  local token="$1" bucket="$2" message="$3"
+  local ovar="PREFLIGHT_OVERRIDE_${token}"
+  if [[ "${!ovar:-0}" -eq 1 ]]; then
+    finding "$bucket" warn "$message (overridden via --override-${token//_/-})"
+  else
+    finding "$bucket" block "$message"
+  fi
+}
+
+# preflight_gate — severity drives control flow. A block halts setup before any
+# prompt or file is written. Interactively the adopter must resolve it (or pass
+# an offered override flag) and re-run; non-interactively the run exits non-zero
+# with the reason. warn/info are advisory and never halt. Runs immediately after
+# preflight_run, before the version resolution / first prompt / first write.
+preflight_gate() {
+  [[ "$FINDINGS_BLOCK_COUNT" -gt 0 ]] || return 0
+  if [[ "$INTERACTIVE" -eq 1 ]]; then
+    printf '\n\033[31mPre-flight halted\033[0m — %d blocking problem(s) above. Resolve them (or pass an offered override flag) and re-run; no files were written.\n' "$FINDINGS_BLOCK_COUNT" >&2
+  else
+    printf '\n\033[31mPre-flight failed\033[0m — %d blocking problem(s) above. Non-interactive run; refusing to proceed on defaults. No files were written.\n' "$FINDINGS_BLOCK_COUNT" >&2
+  fi
+  exit 1
+}
+
 preflight_run
+preflight_gate
 
 # Templates contain `point-source/flywheel@__FLYWHEEL_VERSION__`; resolve
 # the placeholder to the latest released major (e.g. v3 from v3.2.1) so
