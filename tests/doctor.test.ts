@@ -13,6 +13,8 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { stripAnsi } from "./helpers/ansi.js";
+
 // End-to-end exercise of scripts/doctor.sh with a PATH-shadowed `gh` stub
 // (the back-merge.test.ts pattern) and the real git/jq/python3+PyYAML on
 // PATH. doctor sources scripts/lib/findings.sh and emits every check through
@@ -216,12 +218,6 @@ function runDoctor(binDir: string, cwd: string, extraArgs: string[] = []): RunRe
     encoding: "utf8",
   });
   return { exitCode: r.status ?? -1, stdout: r.stdout ?? "", stderr: r.stderr ?? "" };
-}
-
-// eslint-disable-next-line no-control-regex
-const ANSI = /\x1b\[[0-9;]*m/g;
-function stripAnsi(s: string): string {
-  return s.replace(ANSI, "");
 }
 
 describe.skipIf(!depsAvailable)("doctor.sh — pre-flight classification (end-to-end)", () => {

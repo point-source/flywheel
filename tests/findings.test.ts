@@ -3,6 +3,8 @@ import { spawnSync } from "node:child_process";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { stripAnsi } from "./helpers/ansi.js";
+
 // Unit coverage for scripts/lib/findings.sh — the shared pre-flight finding
 // vocabulary lib (SPEC.md §spec:preflight-classification). The lib is
 // sourceable (no shebang, defines functions only); we exercise it by sourcing
@@ -31,13 +33,6 @@ function runWithLib(snippet: string): RunResult {
   return { exitCode: r.status ?? -1, stdout: r.stdout ?? "", stderr: r.stderr ?? "" };
 }
 
-/** Strip ANSI SGR escape sequences (color codes, glyph styling) so text
- * assertions match the plain content. */
-// eslint-disable-next-line no-control-regex
-const ANSI = /\x1b\[[0-9;]*m/g;
-function stripAnsi(s: string): string {
-  return s.replace(ANSI, "");
-}
 
 describe("findings.sh — severity mappings", () => {
   it("block, warn, and info each render a distinct line with a distinct glyph", () => {
