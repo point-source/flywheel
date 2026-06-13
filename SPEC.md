@@ -1130,7 +1130,7 @@ rather than an already-superseded one. §req:setup-node-v5
 
 ## apply-rulesets self-provisions PyYAML ephemerally §spec:apply-rulesets-pyyaml
 
-*Status: not started*
+*Status: complete*
 
 `scripts/apply-rulesets.sh` is the one-shot setup step an adopter runs once
 per repository — documented in `docs/adopter/setup.md` (§5) as a
