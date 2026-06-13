@@ -1128,6 +1128,341 @@ rather than an already-superseded one. §req:setup-node-v5
 
 §req:setup-node-v5-constraints
 
+## Pre-flight finding classification §spec:preflight-classification
+
+*Status: complete*
+
+Setup tooling speaks one vocabulary for "what is wrong with my setup."
+Every finding emitted by `init.sh`'s pre-flight pass and by `doctor.sh`
+carries two independent labels: a **bucket** — one of `local-env`,
+`instance`, `config` — and a **severity** — one of `block`, `warn`,
+`info`. The bucket answers *whose problem this is and when it gets fixed*;
+the severity answers *how bad it is*. The two are orthogonal: a `block`
+may be `local-env` (`gh` not authenticated) or `instance` (the repo
+already runs release-please), and a `config` finding may be `warn`
+(`allow_auto_merge` disabled) or `info`. §req:preflight-detection
+§req:preflight-detection-constraints
+
+The buckets carry fixed meanings an adopter can act on without reading
+docs:
+
+- **`local-env`** — a condition on the adopter's own machine or account
+  (a missing or under-scoped `gh`), which they fix themselves before
+  setup can proceed. A pre-flight concern.
+- **`instance`** — a one-time fix to *this* repository made during
+  install (a conflicting release system to remove). An install-time
+  concern that does not recur once resolved.
+- **`config`** — an ongoing configuration setting that lives on past
+  install (`allow_auto_merge`, `delete_branch_on_merge`). A long-term
+  concern that can drift later.
+
+**Why two axes rather than one severity scale.** Before this change an
+adopter could read a finding's seriousness but never its ownership or
+lifetime — the same "`allow_auto_merge` disabled" message read
+identically whether it was theirs to fix on their machine, a one-shot
+repo edit, or a setting that would silently regress. Collapsing
+ownership-and-lifetime into the severity scale loses information the
+adopter needs to know *who* fixes a finding and *whether it comes back*.
+Keeping the axes independent lets every (bucket, severity) combination
+carry its own meaning. §req:preflight-detection-stories
+§req:preflight-detection-constraints
+
+**Why init and doctor share the vocabulary.** An adopter wiring up
+flywheel previously met two languages: init's ad-hoc `error:` / `warning:`
+prefixes and doctor's `FAIL` / `WARN` / `NOTE`. doctor's existing severity
+levels map onto the shared names (`FAIL`→`block`, `WARN`→`warn`,
+`NOTE`→`info`), and doctor additionally prints each finding's bucket
+label. Whether init and doctor share implementation code is a build-time
+decision deferred to ROADMAP; the spec requires only that the *vocabulary*
+— bucket names and severity names — is identical across the two tools.
+doctor stays read-only and keeps its exit contract: exit 1 when any
+`block`-severity finding is present, 0 otherwise. §req:preflight-detection
+§req:preflight-detection-criteria §req:preflight-detection-constraints
+
+**Criteria.**
+
+- Every finding emitted by init's pre-flight pass and by `doctor.sh` shall
+  carry exactly one bucket from {`local-env`, `instance`, `config`} and
+  exactly one severity from {`block`, `warn`, `info`}.
+- The bucket and severity names shall be identical between init's
+  pre-flight and `doctor.sh` — an adopter reads one vocabulary, not two.
+- `doctor.sh` shall print the bucket label on each finding it reports.
+- `doctor.sh` shall remain read-only — it probes state and prints
+  findings, and writes nothing to the repository.
+- `doctor.sh` shall exit 1 when any `block`-severity finding is present
+  and 0 otherwise, unchanged from its current contract.
+- When `gh` is unauthenticated the finding shall read `local-env` +
+  `block`; when the repo already runs an interfering release system the
+  finding shall read `instance` + `block`; when `allow_auto_merge` is
+  disabled the finding shall read `config` + `warn`.
+
+**Scope and alternatives.**
+
+- *A single combined severity-with-ownership scale* (e.g. five levels from
+  "fix-on-your-machine-now" to "advisory-config") was rejected: it forces
+  one ordering on two genuinely independent questions and produces a scale
+  no one can memorize.
+- *Sharing a finding-emitter implementation between init and doctor* is a
+  reasonable build choice but is left to ROADMAP; the spec constrains the
+  vocabulary, not the code path.
+
+## Pre-flight gate and control flow §spec:preflight-gate
+
+*Status: complete*
+
+`init.sh` runs a single pre-flight detection pass as the **first** thing
+it does — before it issues any prompt and before it writes any file
+(`.flywheel.yml`, the two workflow files, `.gitattributes`, merge-driver
+git config). An adopter whose environment or repository has a
+`block`-severity problem learns of it while nothing has been written yet;
+setup never leaves a half-laid scaffold behind a late-discovered blocker.
+§req:preflight-detection §req:preflight-detection-criteria
+§req:preflight-detection-constraints
+
+Severity drives control flow:
+
+- A **`block`** halts setup. **Interactively**, setup stops and does not
+  begin scaffolding until the adopter resolves the condition — or, where
+  an override is offered, passes it deliberately. **Non-interactively** (no
+  TTY, e.g. `curl … | bash` or CI), a `block` causes setup to exit
+  non-zero with the reason printed, rather than proceeding on defaults the
+  way init does today.
+- **`warn`** and **`info`** are advisory. They are reported in the
+  pre-flight summary and never halt setup, interactively or not.
+
+**Why detection precedes action.** Today init discovers the
+environment piecemeal and late — it prompts and writes, then probes for
+App credentials or account type partway through, and a missing
+prerequisite surfaces only after the scaffold is partly written or as a
+raw `gh` error in a later step. Moving the full detection pass ahead of
+the first prompt or write makes "before setup starts" literal: the
+pre-flight summary is the first thing the adopter sees, and a `block`
+stops setup before any repository state changes. §req:preflight-detection
+§req:preflight-detection-stories
+
+**Why non-interactive runs fail loudly.** A maintainer running setup in CI
+or via `curl … | bash` cannot answer a prompt; init's current behavior of
+printing a problem and continuing on defaults means an unattended setup
+can scaffold over a broken environment silently. Exiting non-zero with the
+reason makes the failure visible to the surrounding automation.
+§req:preflight-detection-stories §req:preflight-detection-constraints
+
+**Why the override is explicit and never default.** Setup never silently
+proceeds past a `block`. Where an override is offered (the existing
+release-system block, per §spec:preflight-release-conflict), it is an
+opt-in flag the adopter passes deliberately — a recorded decision, not
+a default that erodes the gate. §req:preflight-detection-constraints
+
+**Backward compatibility.** On a clean machine and a clean repository the
+pre-flight pass finds no blockers, prints a passing summary, and setup
+proceeds exactly as before. The pass is purely additive to a healthy
+setup's flow. Adopters consuming flywheel as a GitHub Action are
+unaffected — this is setup-time tooling only, adding no Action behavior
+and no GitHub App scope. §req:preflight-detection-criteria
+§req:preflight-detection-constraints
+
+**Criteria.**
+
+- When `init.sh` runs, the pre-flight detection pass shall complete before
+  any prompt is issued and before any file is written.
+- When a `block`-severity finding is present and the run is interactive,
+  setup shall not write any scaffold file until the adopter resolves the
+  condition or passes an offered override flag.
+- When a `block`-severity finding is present and the run is
+  non-interactive, setup shall exit non-zero and print the reason.
+- `warn`- and `info`-severity findings shall not halt setup in either
+  mode.
+- When the environment and repository are clean, the pre-flight pass shall
+  report no blockers, print a passing summary, and setup shall proceed
+  unchanged from its prior behavior.
+- Detection shall be read-only — it probes local tools, `gh` auth state,
+  and repo/remote state, and requests no privilege beyond what setup
+  already needs.
+
+**Scope and alternatives.**
+
+- *Keeping late probing and merely improving error messages* was rejected:
+  a clearer message after a half-written scaffold still leaves the adopter
+  to unwind partial state. The fix is ordering, not wording.
+- *Defaulting non-interactive runs past blocks for convenience* was
+  rejected: it reintroduces the silent-scaffold-over-broken-environment
+  failure the gate exists to prevent.
+
+## Pre-flight gh capability detection §spec:preflight-gh-capability
+
+*Status: complete*
+
+The pre-flight pass reports, up front, whether `gh` is installed,
+authenticated, and carries the **specific** scopes and permissions the
+path the adopter chose needs — and, for a missing one, names the later
+step it would block. A scope gap surfaces as a labelled finding before any
+write, not as a raw `gh` API error mid-run. These are `local-env` findings
+(the adopter fixes them on their own machine/account); a missing required
+scope is `block` severity. §req:preflight-detection
+§req:preflight-detection-criteria §req:preflight-detection-stories
+
+The scopes checked are tied to what the chosen path actually does:
+
+- **repo-admin** — needed to write the `FLYWHEEL_GH_APP_ID` variable and
+  the `FLYWHEEL_GH_APP_PRIVATE_KEY` secret and to apply rulesets.
+- **`admin:org`** — needed when credentials are scoped org-wide.
+- **GitHub-App creation permission** — needed when the adopter asks init
+  to create the App.
+
+**Why scope detection up front, tied to the blocked step.** init proceeds
+optimistically and dies at the first `gh` call that exceeds the token's
+grant, with an error naming the API call rather than the missing
+prerequisite — and today the credential/ruleset `gh` calls swallow scope
+failures with `|| true`, so setup re-prompts or silently does nothing
+instead of reporting the gap. Detecting the scopes the chosen path needs,
+before that path runs, lets setup say "this token lacks repo-admin, which
+the App-ID variable write in a later step needs" instead of surfacing an
+opaque API error after the adopter has already answered prompts.
+§req:preflight-detection §req:preflight-detection-stories
+§req:preflight-detection-constraints
+
+**Why the checks are path-specific.** The required scopes depend on the
+adopter's choices — repo- versus org-scoped credentials, whether init
+creates the App. Probing only the scopes the chosen path needs avoids
+blocking an adopter on a permission their path never exercises. (Threat
+note: scope detection only *reads* `gh` auth state; it grants nothing and
+requests no permission beyond what setup already needs — it exists partly
+to surface when those permissions are absent.) §req:preflight-detection
+§req:preflight-detection-constraints
+
+**Criteria.**
+
+- The pre-flight pass shall report whether `gh` is installed and
+  authenticated as `local-env` findings.
+- When the chosen path needs a scope the authenticated token lacks, the
+  pass shall report a `local-env` + `block` finding that names the missing
+  scope and the later step it would block.
+- A path writing repo-level credentials or applying rulesets shall check
+  for repo-admin; a path scoping credentials org-wide shall check for
+  `admin:org`; a path that asks init to create the App shall check for
+  GitHub-App creation permission.
+- A missing scope shall be reported before any prompt or write, not as a
+  raw `gh` API error during a later step.
+- Scope detection shall read `gh` auth state only and shall request no
+  additional privilege.
+
+**Scope and alternatives.**
+
+- *Requesting the union of all scopes regardless of path* was rejected: it
+  blocks adopters on permissions their chosen path never uses.
+- *Catching the `gh` API error at the call site and re-explaining it* was
+  rejected: by then prompts have been answered and scaffold may be
+  written; the value is in reporting before action.
+
+## Existing release-system detection §spec:preflight-release-conflict
+
+*Status: complete*
+
+The pre-flight pass detects whether the repository **already runs a
+release system that would race flywheel's releases** — another tag or
+release producer such as release-please, a separate semantic-release, or
+hand-rolled `gh release create` / `git tag` / `npm version` in a push or
+dispatch workflow — and reports it as an `instance` + `block` finding.
+Layering flywheel on top of such a system produces two pipelines racing to
+tag and publish, a conflict the adopter would otherwise discover only when
+releases start colliding. §req:preflight-detection
+§req:preflight-detection-criteria §req:preflight-detection-stories
+
+Interactive setup **halts** on this finding unless the adopter passes an
+explicit override flag; the override is a deliberate action, never a
+default (per §spec:preflight-gate). Non-interactively, the block exits
+non-zero like any other.
+
+**Why best-effort and minimal, biased toward false negatives.** The check
+covers the systems that would actually race flywheel's releases — not an
+exhaustive audit of every release tool in existence. It is deliberately
+tuned to tolerate a missed exotic system (a false negative) rather than
+block a clean repo on a false positive: a needless block on a healthy repo
+is friction every adopter might hit, whereas a missed exotic system is
+rare and still caught downstream when releases actually collide.
+§req:preflight-detection-criteria §req:preflight-detection-constraints
+
+**Why `instance` + `block`.** A conflicting release system is a one-time
+fix to *this* repository made during install — remove or disable the other
+producer — so it is bucketed `instance`. It is `block` because proceeding
+produces colliding releases, the most damaging silent outcome in the
+onboarding cluster; the adopter decides deliberately (resolve or
+override) before flywheel layers on top. §req:preflight-detection-stories
+§req:preflight-detection-constraints
+
+**Criteria.**
+
+- When the repository runs a known flywheel-interfering release producer
+  (release-please, a separate semantic-release, or hand-rolled
+  `gh release create` / `git tag` / `npm version` in a push or dispatch
+  workflow), the pass shall report an `instance` + `block` finding.
+- Interactive setup shall halt on this finding unless the adopter passes
+  an explicit override flag; the override shall never be the default.
+- The check shall be scoped to known interfering producers, not an
+  exhaustive release-tool scanner.
+- The check shall prefer a false negative (missing an exotic system) over
+  a false positive that blocks a clean repository.
+
+**Scope and alternatives.**
+
+- *An exhaustive release-tooling scanner* was rejected: the cost of false
+  positives — blocking clean repos — outweighs catching every exotic
+  system, which is caught downstream when releases collide.
+- *Auto-disabling the detected system* is out of scope: detection is
+  read-only and the adopter owns the one-time `instance` fix.
+
+## Pre-flight credentials and App detection §spec:preflight-credentials-app
+
+*Status: complete*
+
+The credentials detection — the `FLYWHEEL_GH_APP_ID` variable and the
+`FLYWHEEL_GH_APP_PRIVATE_KEY` secret, at both repo and org level — and the
+GitHub-App existence/installation detection run as part of the **same**
+pre-flight pass and are classified on the same two axes as every other
+finding. #232 ships the complete pre-flight pass; the sibling issues
+(#234–242) refine the prompts and messaging that *consume* these findings.
+§req:preflight-detection §req:preflight-detection-criteria
+§req:preflight-detection-constraints
+
+**Why these detections belong in the spine, not the siblings.** The
+credentials prompt (#234–242) and the GitHub-App detection both need the
+same environment-probing and classification capability. Building detection
+and vocabulary once here — and having the sibling issues refine only the
+prompts and messaging on top — avoids each feature reinventing detection or
+inventing a third vocabulary. The pre-flight pass is the shared spine of
+the setup-onboarding cluster; this section fixes the scope boundary
+between what #232 detects and what the siblings present.
+§req:preflight-detection §req:preflight-detection-stories
+§req:preflight-detection-constraints
+
+**Scope boundary.** In scope for #232: detecting whether the App-ID
+variable and private-key secret exist (repo- and org-level) and whether
+the GitHub App exists and is installed, and classifying each on the
+bucket × severity axes. Out of scope for #232 and deferred to the
+siblings: the wording and flow of the credentials prompt, the
+create-versus-reuse App choice presentation, and the install-confirmation
+messaging. §req:preflight-detection-constraints
+
+**Criteria.**
+
+- The credentials detection (the `FLYWHEEL_GH_APP_ID` variable and
+  `FLYWHEEL_GH_APP_PRIVATE_KEY` secret, at repo and org level) shall run as
+  part of the pre-flight pass and carry a bucket and severity.
+- The GitHub-App existence/installation detection shall run as part of the
+  same pre-flight pass and carry a bucket and severity.
+- The detection capability and the classification vocabulary shall be
+  reusable by the credentials and GitHub-App sibling work (#234–242)
+  without redefining either.
+- The prompts and messaging that consume these findings are out of scope
+  for this section and are refined by the sibling issues.
+
+**Scope and alternatives.**
+
+- *Letting each sibling issue probe credentials and App state on its own*
+  was rejected as the explicit anti-goal: it reinvents detection per
+  feature and risks a third severity vocabulary. Detection and vocabulary
+  are built once here and reused.
+
 ## apply-rulesets self-provisions PyYAML ephemerally §spec:apply-rulesets-pyyaml
 
 *Status: complete*

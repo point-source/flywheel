@@ -36,6 +36,10 @@ import { dirname, join } from "node:path";
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 const realInitSh = join(repoRoot, "scripts/init.sh");
 const realTemplates = join(repoRoot, "scripts/templates");
+// init.sh's pre-flight pass sources scripts/lib/findings.sh from $SCRIPT_DIR/lib
+// (§spec:preflight-gate); the copied scriptDir must ship it alongside init.sh,
+// mirroring real deployment, or init.sh hard-exits before doing anything.
+const realLib = join(repoRoot, "scripts/lib/findings.sh");
 const TEST_VERSION = "v9.99.0-rerun-test";
 
 // Stub differentiates repo-vs-org by scanning args for --org. Defaults
@@ -50,6 +54,9 @@ for arg in "$@"; do
   [[ "$arg" == "--org" ]] && is_org=1
 done
 case "$1 $2" in
+  "auth status")
+    printf '%s\\n' "  - Token scopes: 'repo', 'admin:org', 'read:org'"
+    ;;
   "repo view")
     echo "test-owner/test-repo"
     ;;
@@ -112,6 +119,10 @@ function setup(): Sandbox {
   for (const f of readdirSync(realTemplates)) {
     copyFileSync(join(realTemplates, f), join(scriptDir, "templates", f));
   }
+  // Ship the shared findings vocabulary lib so init.sh's pre-flight source
+  // (`$SCRIPT_DIR/lib/findings.sh`) resolves on disk instead of curl-fetching.
+  mkdirSync(join(scriptDir, "lib"));
+  copyFileSync(realLib, join(scriptDir, "lib", "findings.sh"));
   // No apply-rulesets.sh in scriptDir — non-interactive yn=N never invokes
   // it, and its absence makes the elif "apply-rulesets.sh not adjacent"
   // branch trigger if the test misroutes (loud failure beats silent miss).
@@ -218,7 +229,9 @@ describe("init.sh re-run resolves App ID via repo variable", () => {
   //   1) detect the creds via `gh {variable,secret} list --org $owner`
   //      and not double-prompt,
   //   2) recover the App ID via `gh variable get FLYWHEEL_GH_APP_ID --org`
-  //      after the repo-level get returns empty,
+  //      (the pre-flight probe reads the value once at the level where the
+  //      variable actually exists — org here, since the repo-level list missed —
+  //      and the --app-id readback reuses it rather than re-fetching),
   //   3) pass --app-id through to apply-rulesets.sh.
   it("recovers --app-id from org-level variable when owner is org and repo level missing", () => {
     const s = setup();
@@ -237,8 +250,10 @@ describe("init.sh re-run resolves App ID via repo variable", () => {
       // Existence-check fan-out: repo first, then org.
       expect(ghLog).toMatch(/^variable list --org test-owner/m);
       expect(ghLog).toMatch(/^secret list --org test-owner/m);
-      // App ID readback: repo miss → org hit.
-      expect(ghLog).toMatch(/^variable get FLYWHEEL_GH_APP_ID --repo test-owner\/test-repo$/m);
+      // App ID value is read once, at the level where the variable exists (org).
+      // The repo-level list missed, so no repo-level `variable get` is issued —
+      // the --app-id readback reuses the value the pre-flight probe captured.
+      expect(ghLog).not.toMatch(/^variable get FLYWHEEL_GH_APP_ID --repo/m);
       expect(ghLog).toMatch(/^variable get FLYWHEEL_GH_APP_ID --org test-owner$/m);
 
       expect(out).toContain("already set (org-level)");
