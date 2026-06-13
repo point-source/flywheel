@@ -133,6 +133,73 @@ if [[ -n "$SCRIPT_DIR" && -d "$SCRIPT_DIR/templates" ]]; then
   LOCAL_TEMPLATES="$SCRIPT_DIR/templates"
 fi
 
+# ---------------------------------------------------------------------------
+# Pre-flight detection pass (SPEC.md §spec:preflight-gate).
+#
+# A single READ-ONLY detection pass that runs as the FIRST substantive thing
+# init does — before the version is resolved, before any prompt, and before any
+# file is written (.flywheel.yml, the workflow files, .gitattributes, merge
+# drivers). It collects findings through the shared bucket × severity vocabulary
+# (scripts/lib/findings.sh) and renders a summary the adopter sees up front.
+# Batches 3–5 register their detectors at the seam in preflight_run; this batch
+# ships the harness and (in the gate below) the severity-driven control flow.
+# ---------------------------------------------------------------------------
+
+# Source the shared finding vocabulary, mirroring doctor.sh: locate it next to
+# this script, else fetch it from the same source. Without it the pre-flight
+# pass cannot emit findings — a hard error.
+# shellcheck source=scripts/lib/findings.sh
+if [[ -n "$SCRIPT_DIR" && -f "$SCRIPT_DIR/lib/findings.sh" ]]; then
+  # shellcheck disable=SC1091
+  . "$SCRIPT_DIR/lib/findings.sh"
+else
+  findings_tmp="$(mktemp)"
+  if curl -fsSL "https://raw.githubusercontent.com/point-source/flywheel/main/scripts/lib/findings.sh" -o "$findings_tmp" 2>/dev/null; then
+    # shellcheck disable=SC1090
+    . "$findings_tmp"
+  else
+    echo "error: could not locate or fetch scripts/lib/findings.sh — pre-flight cannot run without it." >&2
+    exit 1
+  fi
+fi
+
+# preflight_inject — test/debug hook. When FLYWHEEL_PREFLIGHT_INJECT is set,
+# emit each "bucket:severity:message" line (newline-separated) as a finding.
+# Read-only; never set in normal use. Lets the gate be exercised before the
+# real detectors (Batches 3–5) exist.
+preflight_inject() {
+  [[ -n "${FLYWHEEL_PREFLIGHT_INJECT:-}" ]] || return 0
+  local line bucket severity message rest
+  while IFS= read -r line; do
+    [[ -n "$line" ]] || continue
+    bucket="${line%%:*}"; rest="${line#*:}"
+    severity="${rest%%:*}"; message="${rest#*:}"
+    finding "$bucket" "$severity" "$message" || true
+  done <<< "${FLYWHEEL_PREFLIGHT_INJECT}"
+}
+
+# preflight_run — run every detector and print the pre-flight summary. Detectors
+# emit via the shared `finding` (and the preflight_block wrapper added with the
+# gate). The summary is the first thing the adopter sees; the gate acts on it
+# next.
+preflight_run() {
+  echo
+  echo "Pre-flight checks:"
+  # >>> detector seam — Batches 3–5 register their detectors here >>>
+  #   preflight_detect_gh_capability     # §spec:preflight-gh-capability (Batch 3)
+  #   preflight_detect_release_conflict  # §spec:preflight-release-conflict (Batch 4)
+  #   preflight_detect_credentials_app   # §spec:preflight-credentials-app (Batch 5)
+  preflight_inject
+  # <<< detector seam <<<
+  if [[ "$FINDINGS_BLOCK_COUNT" -gt 0 ]]; then
+    printf '  pre-flight: \033[31m%d blocker(s)\033[0m found.\n' "$FINDINGS_BLOCK_COUNT"
+  else
+    printf '  pre-flight: \033[32mno blockers\033[0m.\n'
+  fi
+}
+
+preflight_run
+
 # Templates contain `point-source/flywheel@__FLYWHEEL_VERSION__`; resolve
 # the placeholder to the latest released major (e.g. v3 from v3.2.1) so
 # adopters' workflows pin to a stable major. `--version` overrides for
