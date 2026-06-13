@@ -21,7 +21,10 @@
 #   curl -fsSL https://raw.githubusercontent.com/point-source/flywheel/main/scripts/apply-rulesets.sh | bash -s -- <owner/repo> [flags]
 #
 # When not run from a checkout, the four ruleset templates are fetched from
-# raw.githubusercontent.com (overridable via FLYWHEEL_RULESETS_BASE).
+# raw.githubusercontent.com at a single, deterministically chosen ref (default
+# `main` — the ref the documented one-liner publishes from). Override FLYWHEEL_REF
+# to pin a piped run to a tagged release, or FLYWHEEL_RULESETS_BASE to point at
+# an arbitrary template source.
 #
 # --config defaults to ./.flywheel.yml. Use it to apply rulesets that match
 # a config that hasn't been merged to the current working tree yet (e.g.
@@ -141,7 +144,11 @@ if [[ ! -f "$CONFIG_PATH" ]]; then
   exit 1
 fi
 
-RULESETS_BASE="${FLYWHEEL_RULESETS_BASE:-https://raw.githubusercontent.com/point-source/flywheel/main/scripts/rulesets}"
+# Single source of the ref a piped run fetches templates from, so this script's
+# logic and the ruleset shapes it applies never drift across versions. A
+# tag-pinned piped invocation can set FLYWHEEL_REF to match its own ref.
+FLYWHEEL_REF="${FLYWHEEL_REF:-main}"
+RULESETS_BASE="${FLYWHEEL_RULESETS_BASE:-https://raw.githubusercontent.com/point-source/flywheel/${FLYWHEEL_REF}/scripts/rulesets}"
 # When piped via `curl ... | bash`, BASH_SOURCE is unset and `set -u` would
 # trip; default to empty and skip local-rulesets detection in that case.
 SCRIPT_SRC="${BASH_SOURCE[0]:-}"
@@ -159,6 +166,9 @@ else
   # a temp dir BEFORE applying anything, so a failed fetch aborts before any
   # ruleset is created or any repo setting is flipped — never half-protected.
   RULESETS_DIR="$(mktemp -d)"
+  # Remove the throwaway template dir on any exit — success, error under
+  # `set -e`, or interrupt — so a piped run leaves nothing behind in $TMPDIR.
+  trap 'rm -rf "$RULESETS_DIR"' EXIT INT TERM
   needed_rulesets=(managed-branches.json managed-branches-review.json tag-namespace.json)
   if [[ -n "$RELEASE_REQUIRED_CHECKS" ]]; then
     needed_rulesets+=(release-gate.json)
