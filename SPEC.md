@@ -1208,7 +1208,7 @@ doctor stays read-only and keeps its exit contract: exit 1 when any
 
 ## Pre-flight gate and control flow §spec:preflight-gate
 
-*Status: not started*
+*Status: complete*
 
 `init.sh` runs a single pre-flight detection pass as the **first** thing
 it does — before it issues any prompt and before it writes any file
