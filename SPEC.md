@@ -1290,7 +1290,7 @@ and no GitHub App scope. §req:preflight-detection-criteria
 
 ## Pre-flight gh capability detection §spec:preflight-gh-capability
 
-*Status: not started*
+*Status: complete*
 
 The pre-flight pass reports, up front, whether `gh` is installed,
 authenticated, and carries the **specific** scopes and permissions the
