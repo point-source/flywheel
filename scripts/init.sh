@@ -194,25 +194,24 @@ preflight_detect_gh_capability() {
   # the classic OAuth token scopes from gh auth state.
   local scopes_line scopes
   # `|| true` is load-bearing: init.sh runs under `set -euo pipefail`, so without
-  # it a no-match grep (exit 1) would propagate through the pipe and abort the
-  # whole run on a fine-grained PAT / App token — the exact case we mean to skip.
-  scopes_line="$(printf '%s\n' "$auth_status" | grep -i 'Token scopes:' | head -n1 || true)"
+  # it a no-match grep (exit 1) would abort the whole run on a fine-grained PAT /
+  # App token — the exact case we mean to skip. `-m1` stops at the first match.
+  scopes_line="$(grep -im1 'Token scopes:' <<<"$auth_status" || true)"
   # If gh reports no classic scopes line (fine-grained PAT or App token), we
   # cannot determine classic scopes — skip the scope blocks rather than emit a
   # false positive; the de-swallowed gh calls remain the backstop.
   if [[ -n "$scopes_line" ]]; then
-    scopes="$(printf '%s' "$scopes_line" | tr -d "',")"
-    # repo-admin: needed unless BOTH credential writes and ruleset apply are skipped.
-    if [[ "$SKIP_SECRETS" -ne 1 || "$SKIP_RULESETS" -ne 1 ]]; then
-      if ! grep -qw 'repo' <<<"$scopes"; then
-        finding local-env block "gh token lacks the 'repo' scope (repo-admin) — required later to write the FLYWHEEL_GH_APP_ID variable and FLYWHEEL_GH_APP_PRIVATE_KEY secret and to apply rulesets. Re-auth with: gh auth refresh -s repo"
-      fi
+    # Strip the quotes and commas so the scope names are bare, space-separated
+    # words `grep -qw` can match (e.g. "'repo', 'read:org'" -> "repo read:org").
+    scopes="${scopes_line//[\',]/}"
+    # repo-admin: needed unless BOTH credential writes and ruleset apply are
+    # skipped (rulesets are repo-level even under --scope org).
+    if [[ "$SKIP_SECRETS" -ne 1 || "$SKIP_RULESETS" -ne 1 ]] && ! grep -qw 'repo' <<<"$scopes"; then
+      finding local-env block "gh token lacks the 'repo' scope (repo-admin) — required later to write the FLYWHEEL_GH_APP_ID variable and FLYWHEEL_GH_APP_PRIVATE_KEY secret and to apply rulesets. Re-auth with: gh auth refresh -s repo"
     fi
     # admin:org: needed only when credentials are scoped org-wide (--scope org).
-    if [[ "$SCOPE" == "org" ]]; then
-      if ! grep -qw 'admin:org' <<<"$scopes"; then
-        finding local-env block "gh token lacks 'admin:org' — required later to write org-wide (--scope org) credentials: the FLYWHEEL_GH_APP_ID variable and FLYWHEEL_GH_APP_PRIVATE_KEY secret at org level. Re-auth with: gh auth refresh -s admin:org"
-      fi
+    if [[ "$SCOPE" == "org" ]] && ! grep -qw 'admin:org' <<<"$scopes"; then
+      finding local-env block "gh token lacks 'admin:org' — required later to write org-wide (--scope org) credentials: the FLYWHEEL_GH_APP_ID variable and FLYWHEEL_GH_APP_PRIVATE_KEY secret at org level. Re-auth with: gh auth refresh -s admin:org"
     fi
     # GitHub-App creation permission: the create-vs-reuse-App choice is
     # interactive and not knowable from a flag at pre-flight time, so it cannot

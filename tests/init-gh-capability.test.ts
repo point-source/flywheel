@@ -93,8 +93,7 @@ function runInit(
   // Default stub: authenticated (`gh auth status` exits 0 with a classic Token
   // scopes line including 'repo') and answers `gh repo view`. Callers override
   // via `ghStub` to vary auth state and scopes.
-  const defaultGhStub = `#!/usr/bin/env bash\nif [[ "$1" == "auth" && "$2" == "status" ]]; then echo "  - Token scopes: 'repo', 'read:org'"; exit 0; fi\nif [[ "$1" == "repo" && "$2" == "view" ]]; then echo "acme/widget"; exit 0; fi\necho "stub gh: unhandled: $*" >&2; exit 1\n`;
-  writeFileSync(gh, opts.ghStub ?? defaultGhStub);
+  writeFileSync(gh, opts.ghStub ?? ghStubWithScopes("'repo', 'read:org'"));
   chmodSync(gh, 0o755);
   execFileSync("git", ["init", "-q"], { cwd: work });
   const r = spawnSync("bash", [initSh, ...(opts.args ?? [])], {
