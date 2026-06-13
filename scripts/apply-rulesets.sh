@@ -106,11 +106,10 @@ trap cleanup_pyyaml EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-if python3 -c "import yaml" 2>/dev/null; then
-  # Tier 0 (fast path): the invoking python3 already has PyYAML. Do nothing
-  # else — no temp dir, no provisioning, no added latency.
-  :
-else
+# Tier 0 (fast path): if the invoking python3 already has PyYAML, use it as-is
+# — no temp dir, no provisioning, no added latency. Only when the import fails
+# do we fall through to Tier 1.
+if ! python3 -c "import yaml" 2>/dev/null; then
   # Tier 1: provision PyYAML into a disposable, fully isolated venv.
   PYYAML_TMPDIR="$(mktemp -d)"
   echo "PyYAML not found in python3; provisioning it into a disposable virtualenv for this run..." >&2

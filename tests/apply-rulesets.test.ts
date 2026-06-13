@@ -347,7 +347,10 @@ describe("apply-rulesets.sh — PyYAML provisioning (#245)", () => {
         } catch {
           entries = [];
         }
-        if (entries.some((e) => e.startsWith("tmp."))) {
+        // $TMPDIR started empty and only the script's `mktemp -d` writes
+        // there, so any new entry is that throwaway dir — no need to couple to
+        // mktemp's naming (consistent with the name-agnostic cleanup oracle).
+        if (entries.length > 0) {
           resolve(true);
           return;
         }
