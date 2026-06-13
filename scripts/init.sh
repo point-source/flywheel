@@ -186,6 +186,124 @@ preflight_inject() {
   done <<< "${FLYWHEEL_PREFLIGHT_INJECT}"
 }
 
+# ---------------------------------------------------------------------------
+# Reusable pre-flight credential / GitHub-App state (§spec:preflight-credentials-app).
+#
+# These globals are the REUSE BOUNDARY for the App-credentials detector below:
+# sibling issues #234–242 read them instead of re-probing gh. They are set by
+# detect_credentials / detect_app_installation during the pre-flight pass and
+# are safe to consult anywhere after preflight_run.
+# ---------------------------------------------------------------------------
+PREFLIGHT_HAS_APP_ID=0              # 0|1
+PREFLIGHT_APP_ID_AT=""             # ""|repo|org
+PREFLIGHT_APP_ID_VALUE=""          # numeric App ID when readable
+PREFLIGHT_HAS_APP_KEY=0            # 0|1
+PREFLIGHT_APP_KEY_AT=""            # ""|repo|org
+PREFLIGHT_APP_INSTALLED="unknown"  # yes|no|unknown
+
+# detect_credentials — read-only probe for the App-ID variable and private-key
+# secret, repo level first (cheapest, no admin:org), then org level only when
+# missing AND the owner is an Organization. Mirrors the late credential idiom
+# (~line 507) but is purely informational: it sets the PREFLIGHT_* globals and
+# emits info-level findings only, so a clean greenfield repo yields zero blockers.
+# Every gh call swallows errors (2>/dev/null || true) so a missing permission or
+# a stub never aborts the run.
+detect_credentials() {
+  local repo_vars repo_secrets org_vars org_secrets
+
+  # App-ID variable — repo level.
+  repo_vars="$(gh variable list --json name -q '.[].name' 2>/dev/null || true)"
+  if echo "$repo_vars" | grep -qx "FLYWHEEL_GH_APP_ID"; then
+    PREFLIGHT_HAS_APP_ID=1
+    PREFLIGHT_APP_ID_AT="repo"
+    PREFLIGHT_APP_ID_VALUE="$(gh variable get FLYWHEEL_GH_APP_ID --repo "$REPO" 2>/dev/null || true)"
+  fi
+  # Private-key secret — repo level.
+  repo_secrets="$(gh secret list --json name -q '.[].name' 2>/dev/null || true)"
+  if echo "$repo_secrets" | grep -qx "FLYWHEEL_GH_APP_PRIVATE_KEY"; then
+    PREFLIGHT_HAS_APP_KEY=1
+    PREFLIGHT_APP_KEY_AT="repo"
+  fi
+
+  # Org level only when something is still missing and the owner is an org.
+  if [[ "$PREFLIGHT_HAS_APP_ID" -eq 0 || "$PREFLIGHT_HAS_APP_KEY" -eq 0 ]]; then
+    detect_owner_type
+    if [[ "$OWNER_TYPE" == "Organization" ]]; then
+      if [[ "$PREFLIGHT_HAS_APP_ID" -eq 0 ]]; then
+        org_vars="$(gh variable list --org "$OWNER" --json name -q '.[].name' 2>/dev/null || true)"
+        if echo "$org_vars" | grep -qx "FLYWHEEL_GH_APP_ID"; then
+          PREFLIGHT_HAS_APP_ID=1
+          PREFLIGHT_APP_ID_AT="org"
+          PREFLIGHT_APP_ID_VALUE="$(gh variable get FLYWHEEL_GH_APP_ID --org "$OWNER" 2>/dev/null || true)"
+        fi
+      fi
+      if [[ "$PREFLIGHT_HAS_APP_KEY" -eq 0 ]]; then
+        org_secrets="$(gh secret list --org "$OWNER" --json name -q '.[].name' 2>/dev/null || true)"
+        if echo "$org_secrets" | grep -qx "FLYWHEEL_GH_APP_PRIVATE_KEY"; then
+          PREFLIGHT_HAS_APP_KEY=1
+          PREFLIGHT_APP_KEY_AT="org"
+        fi
+      fi
+    fi
+  fi
+
+  if [[ "$PREFLIGHT_HAS_APP_ID" -eq 1 ]]; then
+    finding config info "FLYWHEEL_GH_APP_ID variable found (${PREFLIGHT_APP_ID_AT}-level)"
+  else
+    finding config info "FLYWHEEL_GH_APP_ID variable not set (setup will provision it)"
+  fi
+  if [[ "$PREFLIGHT_HAS_APP_KEY" -eq 1 ]]; then
+    finding config info "FLYWHEEL_GH_APP_PRIVATE_KEY secret found (${PREFLIGHT_APP_KEY_AT}-level)"
+  else
+    finding config info "FLYWHEEL_GH_APP_PRIVATE_KEY secret not set (setup will provision it)"
+  fi
+}
+
+# detect_app_installation — best-effort, false-negative-tolerant check that the
+# GitHub App is installed on the owner. The only reliable read-only signal is the
+# org installations list, which needs an org owner + admin:org; anything else
+# leaves PREFLIGHT_APP_INSTALLED=unknown (we'll confirm during install rather than
+# block on a probe we can't trust). Read-only; errors degrade to "unknown".
+detect_app_installation() {
+  if [[ "$PREFLIGHT_HAS_APP_ID" -eq 0 || -z "$PREFLIGHT_APP_ID_VALUE" ]]; then
+    finding instance info "GitHub App installation: no App ID configured yet (setup will create or prompt for the App)"
+    return 0
+  fi
+  detect_owner_type
+  if [[ "$OWNER_TYPE" != "Organization" ]]; then
+    finding instance info "GitHub App installation: could not verify (best-effort; will confirm during install)"
+    return 0
+  fi
+  local installed_ids
+  installed_ids="$(gh api "orgs/$OWNER/installations" --jq '.installations[].app_id' 2>/dev/null || true)"
+  if [[ -z "$installed_ids" ]]; then
+    # Empty could mean none installed OR the call failed (no admin:org). We can't
+    # tell the two apart from a read-only probe, so stay conservative: unknown.
+    finding instance info "GitHub App installation: could not verify (best-effort; will confirm during install)"
+    return 0
+  fi
+  # PREFLIGHT_APP_INSTALLED is read only by sibling issues #234–242 (the reuse
+  # boundary), not within init — hence the SC2034 suppressions.
+  if echo "$installed_ids" | grep -qx "$PREFLIGHT_APP_ID_VALUE"; then
+    # shellcheck disable=SC2034
+    PREFLIGHT_APP_INSTALLED="yes"
+    finding instance info "GitHub App (id ${PREFLIGHT_APP_ID_VALUE}) installed on ${OWNER}"
+  else
+    # shellcheck disable=SC2034
+    PREFLIGHT_APP_INSTALLED="no"
+    finding instance warn "GitHub App (id ${PREFLIGHT_APP_ID_VALUE}) not installed on ${OWNER} — install it so installation-token minting works"
+  fi
+}
+
+# preflight_detect_credentials_app — seam entry point (§spec:preflight-credentials-app).
+# Probes App credentials then App installation, setting the reusable PREFLIGHT_*
+# globals consumed by sibling issues #234–242. Read-only and ADDITIVE: it runs in
+# the pre-flight pass and leaves the late credential/prompt logic untouched.
+preflight_detect_credentials_app() {
+  detect_credentials
+  detect_app_installation
+}
+
 # preflight_run — run every detector and print the pre-flight summary. Detectors
 # emit via the shared `finding` (and the preflight_block wrapper added with the
 # gate). The summary is the first thing the adopter sees; the gate acts on it
@@ -196,7 +314,7 @@ preflight_run() {
   # >>> detector seam — Batches 3–5 register their detectors here >>>
   #   preflight_detect_gh_capability     # §spec:preflight-gh-capability (Batch 3)
   #   preflight_detect_release_conflict  # §spec:preflight-release-conflict (Batch 4)
-  #   preflight_detect_credentials_app   # §spec:preflight-credentials-app (Batch 5)
+  preflight_detect_credentials_app     # §spec:preflight-credentials-app (Batch 5)
   preflight_inject
   # <<< detector seam <<<
   if [[ "$FINDINGS_BLOCK_COUNT" -gt 0 ]]; then
