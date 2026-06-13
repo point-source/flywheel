@@ -36,6 +36,10 @@ import { dirname, join } from "node:path";
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 const realInitSh = join(repoRoot, "scripts/init.sh");
 const realTemplates = join(repoRoot, "scripts/templates");
+// init.sh's pre-flight pass sources scripts/lib/findings.sh from $SCRIPT_DIR/lib
+// (§spec:preflight-gate); the copied scriptDir must ship it alongside init.sh,
+// mirroring real deployment, or init.sh hard-exits before doing anything.
+const realLib = join(repoRoot, "scripts/lib/findings.sh");
 const TEST_VERSION = "v9.99.0-rerun-test";
 
 // Stub differentiates repo-vs-org by scanning args for --org. Defaults
@@ -112,6 +116,10 @@ function setup(): Sandbox {
   for (const f of readdirSync(realTemplates)) {
     copyFileSync(join(realTemplates, f), join(scriptDir, "templates", f));
   }
+  // Ship the shared findings vocabulary lib so init.sh's pre-flight source
+  // (`$SCRIPT_DIR/lib/findings.sh`) resolves on disk instead of curl-fetching.
+  mkdirSync(join(scriptDir, "lib"));
+  copyFileSync(realLib, join(scriptDir, "lib", "findings.sh"));
   // No apply-rulesets.sh in scriptDir — non-interactive yn=N never invokes
   // it, and its absence makes the elif "apply-rulesets.sh not adjacent"
   // branch trigger if the test misroutes (loud failure beats silent miss).
