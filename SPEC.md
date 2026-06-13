@@ -1347,7 +1347,7 @@ one-liner, so the class is closed rather than patched at one site.
 
 ## Stdin-path ruleset regression test §spec:apply-rulesets-stdin-test
 
-*Status: not started*
+*Status: complete*
 
 A test in Flywheel's cheap suite — unit / per-PR CI, not the rate-limited
 e2e sandbox — runs `apply-rulesets.sh` the way an adopter pipes it: read
