@@ -67,7 +67,7 @@ function runInit(
   const gh = join(binDir, "gh");
   writeFileSync(
     gh,
-    `#!/usr/bin/env bash\nif [[ "$1" == "repo" && "$2" == "view" ]]; then echo "acme/widget"; exit 0; fi\necho "stub gh: unhandled: $*" >&2; exit 1\n`,
+    `#!/usr/bin/env bash\nif [[ "$1" == "auth" && "$2" == "status" ]]; then echo "  - Token scopes: 'repo', 'read:org'"; exit 0; fi\nif [[ "$1" == "repo" && "$2" == "view" ]]; then echo "acme/widget"; exit 0; fi\necho "stub gh: unhandled: $*" >&2; exit 1\n`,
   );
   chmodSync(gh, 0o755);
   execFileSync("git", ["init", "-q"], { cwd: work });

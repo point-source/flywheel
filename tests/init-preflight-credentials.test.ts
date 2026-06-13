@@ -69,6 +69,11 @@ emit_or_fail() { # $1 = value; print non-empty value (exit 0) else exit 1
   exit 1
 }
 
+# gh auth status (pre-flight gh-capability probe — authenticated, repo scope)
+if [[ "\${1:-}" == "auth" && "\${2:-}" == "status" ]]; then
+  echo "  - Token scopes: 'repo', 'read:org'"; exit 0
+fi
+
 # gh repo view --json nameWithOwner -q .nameWithOwner
 if [[ "\${1:-}" == "repo" && "\${2:-}" == "view" ]]; then
   echo "acme/widget"; exit 0

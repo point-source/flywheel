@@ -54,6 +54,9 @@ for arg in "$@"; do
   [[ "$arg" == "--org" ]] && is_org=1
 done
 case "$1 $2" in
+  "auth status")
+    printf '%s\\n' "  - Token scopes: 'repo', 'admin:org', 'read:org'"
+    ;;
   "repo view")
     echo "test-owner/test-repo"
     ;;
