@@ -68,15 +68,18 @@ interface RunResult {
  * that answers only `gh repo view` (the sole gh call left in the
  * skip-secrets/skip-rulesets path before the gate). Returns raw streams + the
  * work dir so callers can assert on which scaffold files were (not) written. */
-function runInit(opts: { args?: string[]; env?: Record<string, string> } = {}): RunResult {
+function runInit(
+  opts: { args?: string[]; env?: Record<string, string>; ghStub?: string } = {},
+): RunResult {
   const work = mkdtempSync(join(tmpdir(), "flywheel-preflight-"));
   const binDir = join(work, "bin");
   mkdirSync(binDir);
   const gh = join(binDir, "gh");
-  writeFileSync(
-    gh,
-    `#!/usr/bin/env bash\nif [[ "$1" == "repo" && "$2" == "view" ]]; then echo "acme/widget"; exit 0; fi\necho "stub gh: unhandled: $*" >&2; exit 1\n`,
-  );
+  // Default stub: authenticated (`gh auth status` exits 0 with a realistic
+  // Token scopes line including 'repo') and answers `gh repo view`. Callers
+  // override via `ghStub` to exercise the unauthenticated/uninstalled paths.
+  const defaultGhStub = `#!/usr/bin/env bash\nif [[ "$1" == "auth" && "$2" == "status" ]]; then echo "  - Token scopes: 'repo', 'read:org'"; exit 0; fi\nif [[ "$1" == "repo" && "$2" == "view" ]]; then echo "acme/widget"; exit 0; fi\necho "stub gh: unhandled: $*" >&2; exit 1\n`;
+  writeFileSync(gh, opts.ghStub ?? defaultGhStub);
   chmodSync(gh, 0o755);
   execFileSync("git", ["init", "-q"], { cwd: work });
   const r = spawnSync("bash", [initSh, ...(opts.args ?? [])], {
@@ -152,6 +155,27 @@ describe("init.sh — pre-flight gate (end-to-end)", () => {
       expect(r.status, `combined:\n${combined}`).not.toBe(0);
       expect(combined).toContain("gh not authenticated (test)");
       expect(combined).toContain("Pre-flight halted");
+      for (const f of SCAFFOLD_FILES) {
+        expect(existsSync(join(r.work, f)), `expected ${f} NOT to be written`).toBe(false);
+      }
+    } finally {
+      rmSync(r.work, { recursive: true, force: true });
+    }
+  });
+
+  it("unauthenticated gh blocks (local-env), halts non-zero, and writes nothing", () => {
+    // gh is installed but `gh auth status` exits non-zero — the install/auth
+    // half of §spec:preflight-gh-capability must surface this as a local-env
+    // block before any write, halting the run.
+    const r = runInit({
+      args: SCAFFOLD_ARGS,
+      ghStub: `#!/usr/bin/env bash\nif [[ "$1" == "auth" && "$2" == "status" ]]; then echo "not logged in" >&2; exit 1; fi\necho "stub gh: unhandled: $*" >&2; exit 1\n`,
+    });
+    try {
+      const combined = stripAnsi(r.stdout + r.stderr);
+      expect(r.status, `combined:\n${combined}`).not.toBe(0);
+      expect(combined).toMatch(/gh is not authenticated/i);
+      expect(combined).toMatch(/pre-flight (failed|halted)/i);
       for (const f of SCAFFOLD_FILES) {
         expect(existsSync(join(r.work, f)), `expected ${f} NOT to be written`).toBe(false);
       }

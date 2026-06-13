@@ -74,12 +74,14 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-for tool in git gh; do
-  command -v "$tool" >/dev/null 2>&1 || {
-    echo "error: '$tool' is required but not installed." >&2
-    exit 1
-  }
-done
+# Only git is needed immediately (for `git rev-parse` below). gh's install +
+# auth state is probed by the pre-flight pass (preflight_detect_gh_capability),
+# so a missing/unauthenticated gh surfaces as a finding rather than a hard exit
+# here — and the gh-dependent REPO resolution is deferred until after the gate.
+command -v git >/dev/null 2>&1 || {
+  echo "error: 'git' is required but not installed." >&2
+  exit 1
+}
 
 if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   echo "error: not inside a git repo. Run from your repo root." >&2
@@ -88,23 +90,6 @@ fi
 
 REPO_ROOT="$(git rev-parse --show-toplevel)"
 cd "$REPO_ROOT"
-
-if ! REPO="$(gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null)"; then
-  echo "error: could not resolve owner/repo via 'gh repo view'. Are you authenticated ('gh auth login') and does this repo have a GitHub remote?" >&2
-  exit 1
-fi
-OWNER="${REPO%%/*}"
-# Lazy: only paid for when SCOPE resolution / org detection actually needs it.
-# Empty string ≠ "User"; check OWNER_TYPE_RESOLVED before reading OWNER_TYPE.
-OWNER_TYPE=""
-OWNER_TYPE_RESOLVED=0
-detect_owner_type() {
-  if [[ "$OWNER_TYPE_RESOLVED" -eq 0 ]]; then
-    OWNER_TYPE="$(gh api "users/$OWNER" --jq .type 2>/dev/null || true)"
-    OWNER_TYPE_RESOLVED=1
-  fi
-}
-echo "Wiring Flywheel into $REPO..."
 
 # When run via `curl ... | bash`, stdin is the curl pipe, so `[[ -t 0 ]]`
 # is false even though the user is sitting at a real terminal. Open
@@ -186,6 +171,27 @@ preflight_inject() {
   done <<< "${FLYWHEEL_PREFLIGHT_INJECT}"
 }
 
+# preflight_detect_gh_capability — §spec:preflight-gh-capability.
+# READ-ONLY probe of gh install + auth state. Grants/requests nothing.
+# Workstream 2 appends path-specific scope checks after the auth check, reusing
+# the captured `auth_status`.
+preflight_detect_gh_capability() {
+  if ! command -v gh >/dev/null 2>&1; then
+    finding local-env block "gh (GitHub CLI) is not installed — required to resolve the repository, write App credentials, and apply rulesets (install: https://cli.github.com)"
+    return 0
+  fi
+  # auth_status is captured for Workstream 2's scope checks (it parses the
+  # "Token scopes:" line); unused until then.
+  local auth_status
+  # shellcheck disable=SC2034
+  if ! auth_status="$(gh auth status 2>&1)"; then
+    finding local-env block "gh is not authenticated — run 'gh auth login' (setup needs it to resolve the repository and write App credentials)"
+    return 0
+  fi
+  finding local-env info "gh installed and authenticated"
+  # >>> Workstream 2 scope checks go here (reuse $auth_status) >>>
+}
+
 # preflight_run — run every detector and print the pre-flight summary. Detectors
 # emit via the shared `finding` (and the preflight_block wrapper added with the
 # gate). The summary is the first thing the adopter sees; the gate acts on it
@@ -194,7 +200,7 @@ preflight_run() {
   echo
   echo "Pre-flight checks:"
   # >>> detector seam — Batches 3–5 register their detectors here >>>
-  #   preflight_detect_gh_capability     # §spec:preflight-gh-capability (Batch 3)
+  preflight_detect_gh_capability       # §spec:preflight-gh-capability (Batch 3)
   #   preflight_detect_release_conflict  # §spec:preflight-release-conflict (Batch 4)
   #   preflight_detect_credentials_app   # §spec:preflight-credentials-app (Batch 5)
   preflight_inject
@@ -240,6 +246,26 @@ preflight_gate() {
 
 preflight_run
 preflight_gate
+
+# Resolve owner/repo via gh. Deferred until after the pre-flight gate so that a
+# missing/unauthenticated gh surfaces as a pre-flight finding (above) rather than
+# a hard exit here — the gate has now confirmed gh is installed + authenticated.
+if ! REPO="$(gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null)"; then
+  echo "error: could not resolve owner/repo via 'gh repo view'. Are you authenticated ('gh auth login') and does this repo have a GitHub remote?" >&2
+  exit 1
+fi
+OWNER="${REPO%%/*}"
+# Lazy: only paid for when SCOPE resolution / org detection actually needs it.
+# Empty string ≠ "User"; check OWNER_TYPE_RESOLVED before reading OWNER_TYPE.
+OWNER_TYPE=""
+OWNER_TYPE_RESOLVED=0
+detect_owner_type() {
+  if [[ "$OWNER_TYPE_RESOLVED" -eq 0 ]]; then
+    OWNER_TYPE="$(gh api "users/$OWNER" --jq .type 2>/dev/null || true)"
+    OWNER_TYPE_RESOLVED=1
+  fi
+}
+echo "Wiring Flywheel into $REPO..."
 
 # Templates contain `point-source/flywheel@__FLYWHEEL_VERSION__`; resolve
 # the placeholder to the latest released major (e.g. v3 from v3.2.1) so
