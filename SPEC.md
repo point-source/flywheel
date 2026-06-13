@@ -1243,7 +1243,7 @@ index but no persistent footprint and no new credential surface.
 §req:apply-rulesets-pyyaml-constraints §req:apply-rulesets-pyyaml-stories
 ## Stdin-safe ruleset application §spec:apply-rulesets-stdin
 
-*Status: not started*
+*Status: complete*
 
 The `apply-rulesets.sh` one-liner documented in `docs/adopter/setup.md` §5
 — `curl -fsSL …/apply-rulesets.sh | bash -s -- <owner/repo>` — applies the
