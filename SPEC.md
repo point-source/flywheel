@@ -1127,3 +1127,592 @@ rather than an already-superseded one. §req:setup-node-v5
   decision, not part of this bump; the steps remain cache-free.
 
 §req:setup-node-v5-constraints
+
+## Pre-flight finding classification §spec:preflight-classification
+
+*Status: complete*
+
+Setup tooling speaks one vocabulary for "what is wrong with my setup."
+Every finding emitted by `init.sh`'s pre-flight pass and by `doctor.sh`
+carries two independent labels: a **bucket** — one of `local-env`,
+`instance`, `config` — and a **severity** — one of `block`, `warn`,
+`info`. The bucket answers *whose problem this is and when it gets fixed*;
+the severity answers *how bad it is*. The two are orthogonal: a `block`
+may be `local-env` (`gh` not authenticated) or `instance` (the repo
+already runs release-please), and a `config` finding may be `warn`
+(`allow_auto_merge` disabled) or `info`. §req:preflight-detection
+§req:preflight-detection-constraints
+
+The buckets carry fixed meanings an adopter can act on without reading
+docs:
+
+- **`local-env`** — a condition on the adopter's own machine or account
+  (a missing or under-scoped `gh`), which they fix themselves before
+  setup can proceed. A pre-flight concern.
+- **`instance`** — a one-time fix to *this* repository made during
+  install (a conflicting release system to remove). An install-time
+  concern that does not recur once resolved.
+- **`config`** — an ongoing configuration setting that lives on past
+  install (`allow_auto_merge`, `delete_branch_on_merge`). A long-term
+  concern that can drift later.
+
+**Why two axes rather than one severity scale.** Before this change an
+adopter could read a finding's seriousness but never its ownership or
+lifetime — the same "`allow_auto_merge` disabled" message read
+identically whether it was theirs to fix on their machine, a one-shot
+repo edit, or a setting that would silently regress. Collapsing
+ownership-and-lifetime into the severity scale loses information the
+adopter needs to know *who* fixes a finding and *whether it comes back*.
+Keeping the axes independent lets every (bucket, severity) combination
+carry its own meaning. §req:preflight-detection-stories
+§req:preflight-detection-constraints
+
+**Why init and doctor share the vocabulary.** An adopter wiring up
+flywheel previously met two languages: init's ad-hoc `error:` / `warning:`
+prefixes and doctor's `FAIL` / `WARN` / `NOTE`. doctor's existing severity
+levels map onto the shared names (`FAIL`→`block`, `WARN`→`warn`,
+`NOTE`→`info`), and doctor additionally prints each finding's bucket
+label. Whether init and doctor share implementation code is a build-time
+decision deferred to ROADMAP; the spec requires only that the *vocabulary*
+— bucket names and severity names — is identical across the two tools.
+doctor stays read-only and keeps its exit contract: exit 1 when any
+`block`-severity finding is present, 0 otherwise. §req:preflight-detection
+§req:preflight-detection-criteria §req:preflight-detection-constraints
+
+**Criteria.**
+
+- Every finding emitted by init's pre-flight pass and by `doctor.sh` shall
+  carry exactly one bucket from {`local-env`, `instance`, `config`} and
+  exactly one severity from {`block`, `warn`, `info`}.
+- The bucket and severity names shall be identical between init's
+  pre-flight and `doctor.sh` — an adopter reads one vocabulary, not two.
+- `doctor.sh` shall print the bucket label on each finding it reports.
+- `doctor.sh` shall remain read-only — it probes state and prints
+  findings, and writes nothing to the repository.
+- `doctor.sh` shall exit 1 when any `block`-severity finding is present
+  and 0 otherwise, unchanged from its current contract.
+- When `gh` is unauthenticated the finding shall read `local-env` +
+  `block`; when the repo already runs an interfering release system the
+  finding shall read `instance` + `block`; when `allow_auto_merge` is
+  disabled the finding shall read `config` + `warn`.
+
+**Scope and alternatives.**
+
+- *A single combined severity-with-ownership scale* (e.g. five levels from
+  "fix-on-your-machine-now" to "advisory-config") was rejected: it forces
+  one ordering on two genuinely independent questions and produces a scale
+  no one can memorize.
+- *Sharing a finding-emitter implementation between init and doctor* is a
+  reasonable build choice but is left to ROADMAP; the spec constrains the
+  vocabulary, not the code path.
+
+## Pre-flight gate and control flow §spec:preflight-gate
+
+*Status: complete*
+
+`init.sh` runs a single pre-flight detection pass as the **first** thing
+it does — before it issues any prompt and before it writes any file
+(`.flywheel.yml`, the two workflow files, `.gitattributes`, merge-driver
+git config). An adopter whose environment or repository has a
+`block`-severity problem learns of it while nothing has been written yet;
+setup never leaves a half-laid scaffold behind a late-discovered blocker.
+§req:preflight-detection §req:preflight-detection-criteria
+§req:preflight-detection-constraints
+
+Severity drives control flow:
+
+- A **`block`** halts setup. **Interactively**, setup stops and does not
+  begin scaffolding until the adopter resolves the condition — or, where
+  an override is offered, passes it deliberately. **Non-interactively** (no
+  TTY, e.g. `curl … | bash` or CI), a `block` causes setup to exit
+  non-zero with the reason printed, rather than proceeding on defaults the
+  way init does today.
+- **`warn`** and **`info`** are advisory. They are reported in the
+  pre-flight summary and never halt setup, interactively or not.
+
+**Why detection precedes action.** Today init discovers the
+environment piecemeal and late — it prompts and writes, then probes for
+App credentials or account type partway through, and a missing
+prerequisite surfaces only after the scaffold is partly written or as a
+raw `gh` error in a later step. Moving the full detection pass ahead of
+the first prompt or write makes "before setup starts" literal: the
+pre-flight summary is the first thing the adopter sees, and a `block`
+stops setup before any repository state changes. §req:preflight-detection
+§req:preflight-detection-stories
+
+**Why non-interactive runs fail loudly.** A maintainer running setup in CI
+or via `curl … | bash` cannot answer a prompt; init's current behavior of
+printing a problem and continuing on defaults means an unattended setup
+can scaffold over a broken environment silently. Exiting non-zero with the
+reason makes the failure visible to the surrounding automation.
+§req:preflight-detection-stories §req:preflight-detection-constraints
+
+**Why the override is explicit and never default.** Setup never silently
+proceeds past a `block`. Where an override is offered (the existing
+release-system block, per §spec:preflight-release-conflict), it is an
+opt-in flag the adopter passes deliberately — a recorded decision, not
+a default that erodes the gate. §req:preflight-detection-constraints
+
+**Backward compatibility.** On a clean machine and a clean repository the
+pre-flight pass finds no blockers, prints a passing summary, and setup
+proceeds exactly as before. The pass is purely additive to a healthy
+setup's flow. Adopters consuming flywheel as a GitHub Action are
+unaffected — this is setup-time tooling only, adding no Action behavior
+and no GitHub App scope. §req:preflight-detection-criteria
+§req:preflight-detection-constraints
+
+**Criteria.**
+
+- When `init.sh` runs, the pre-flight detection pass shall complete before
+  any prompt is issued and before any file is written.
+- When a `block`-severity finding is present and the run is interactive,
+  setup shall not write any scaffold file until the adopter resolves the
+  condition or passes an offered override flag.
+- When a `block`-severity finding is present and the run is
+  non-interactive, setup shall exit non-zero and print the reason.
+- `warn`- and `info`-severity findings shall not halt setup in either
+  mode.
+- When the environment and repository are clean, the pre-flight pass shall
+  report no blockers, print a passing summary, and setup shall proceed
+  unchanged from its prior behavior.
+- Detection shall be read-only — it probes local tools, `gh` auth state,
+  and repo/remote state, and requests no privilege beyond what setup
+  already needs.
+
+**Scope and alternatives.**
+
+- *Keeping late probing and merely improving error messages* was rejected:
+  a clearer message after a half-written scaffold still leaves the adopter
+  to unwind partial state. The fix is ordering, not wording.
+- *Defaulting non-interactive runs past blocks for convenience* was
+  rejected: it reintroduces the silent-scaffold-over-broken-environment
+  failure the gate exists to prevent.
+
+## Pre-flight gh capability detection §spec:preflight-gh-capability
+
+*Status: complete*
+
+The pre-flight pass reports, up front, whether `gh` is installed,
+authenticated, and carries the **specific** scopes and permissions the
+path the adopter chose needs — and, for a missing one, names the later
+step it would block. A scope gap surfaces as a labelled finding before any
+write, not as a raw `gh` API error mid-run. These are `local-env` findings
+(the adopter fixes them on their own machine/account); a missing required
+scope is `block` severity. §req:preflight-detection
+§req:preflight-detection-criteria §req:preflight-detection-stories
+
+The scopes checked are tied to what the chosen path actually does:
+
+- **repo-admin** — needed to write the `FLYWHEEL_GH_APP_ID` variable and
+  the `FLYWHEEL_GH_APP_PRIVATE_KEY` secret and to apply rulesets.
+- **`admin:org`** — needed when credentials are scoped org-wide.
+- **GitHub-App creation permission** — needed when the adopter asks init
+  to create the App.
+
+**Why scope detection up front, tied to the blocked step.** init proceeds
+optimistically and dies at the first `gh` call that exceeds the token's
+grant, with an error naming the API call rather than the missing
+prerequisite — and today the credential/ruleset `gh` calls swallow scope
+failures with `|| true`, so setup re-prompts or silently does nothing
+instead of reporting the gap. Detecting the scopes the chosen path needs,
+before that path runs, lets setup say "this token lacks repo-admin, which
+the App-ID variable write in a later step needs" instead of surfacing an
+opaque API error after the adopter has already answered prompts.
+§req:preflight-detection §req:preflight-detection-stories
+§req:preflight-detection-constraints
+
+**Why the checks are path-specific.** The required scopes depend on the
+adopter's choices — repo- versus org-scoped credentials, whether init
+creates the App. Probing only the scopes the chosen path needs avoids
+blocking an adopter on a permission their path never exercises. (Threat
+note: scope detection only *reads* `gh` auth state; it grants nothing and
+requests no permission beyond what setup already needs — it exists partly
+to surface when those permissions are absent.) §req:preflight-detection
+§req:preflight-detection-constraints
+
+**Criteria.**
+
+- The pre-flight pass shall report whether `gh` is installed and
+  authenticated as `local-env` findings.
+- When the chosen path needs a scope the authenticated token lacks, the
+  pass shall report a `local-env` + `block` finding that names the missing
+  scope and the later step it would block.
+- A path writing repo-level credentials or applying rulesets shall check
+  for repo-admin; a path scoping credentials org-wide shall check for
+  `admin:org`; a path that asks init to create the App shall check for
+  GitHub-App creation permission.
+- A missing scope shall be reported before any prompt or write, not as a
+  raw `gh` API error during a later step.
+- Scope detection shall read `gh` auth state only and shall request no
+  additional privilege.
+
+**Scope and alternatives.**
+
+- *Requesting the union of all scopes regardless of path* was rejected: it
+  blocks adopters on permissions their chosen path never uses.
+- *Catching the `gh` API error at the call site and re-explaining it* was
+  rejected: by then prompts have been answered and scaffold may be
+  written; the value is in reporting before action.
+
+## Existing release-system detection §spec:preflight-release-conflict
+
+*Status: complete*
+
+The pre-flight pass detects whether the repository **already runs a
+release system that would race flywheel's releases** — another tag or
+release producer such as release-please, a separate semantic-release, or
+hand-rolled `gh release create` / `git tag` / `npm version` in a push or
+dispatch workflow — and reports it as an `instance` + `block` finding.
+Layering flywheel on top of such a system produces two pipelines racing to
+tag and publish, a conflict the adopter would otherwise discover only when
+releases start colliding. §req:preflight-detection
+§req:preflight-detection-criteria §req:preflight-detection-stories
+
+Interactive setup **halts** on this finding unless the adopter passes an
+explicit override flag; the override is a deliberate action, never a
+default (per §spec:preflight-gate). Non-interactively, the block exits
+non-zero like any other.
+
+**Why best-effort and minimal, biased toward false negatives.** The check
+covers the systems that would actually race flywheel's releases — not an
+exhaustive audit of every release tool in existence. It is deliberately
+tuned to tolerate a missed exotic system (a false negative) rather than
+block a clean repo on a false positive: a needless block on a healthy repo
+is friction every adopter might hit, whereas a missed exotic system is
+rare and still caught downstream when releases actually collide.
+§req:preflight-detection-criteria §req:preflight-detection-constraints
+
+**Why `instance` + `block`.** A conflicting release system is a one-time
+fix to *this* repository made during install — remove or disable the other
+producer — so it is bucketed `instance`. It is `block` because proceeding
+produces colliding releases, the most damaging silent outcome in the
+onboarding cluster; the adopter decides deliberately (resolve or
+override) before flywheel layers on top. §req:preflight-detection-stories
+§req:preflight-detection-constraints
+
+**Criteria.**
+
+- When the repository runs a known flywheel-interfering release producer
+  (release-please, a separate semantic-release, or hand-rolled
+  `gh release create` / `git tag` / `npm version` in a push or dispatch
+  workflow), the pass shall report an `instance` + `block` finding.
+- Interactive setup shall halt on this finding unless the adopter passes
+  an explicit override flag; the override shall never be the default.
+- The check shall be scoped to known interfering producers, not an
+  exhaustive release-tool scanner.
+- The check shall prefer a false negative (missing an exotic system) over
+  a false positive that blocks a clean repository.
+
+**Scope and alternatives.**
+
+- *An exhaustive release-tooling scanner* was rejected: the cost of false
+  positives — blocking clean repos — outweighs catching every exotic
+  system, which is caught downstream when releases collide.
+- *Auto-disabling the detected system* is out of scope: detection is
+  read-only and the adopter owns the one-time `instance` fix.
+
+## Pre-flight credentials and App detection §spec:preflight-credentials-app
+
+*Status: complete*
+
+The credentials detection — the `FLYWHEEL_GH_APP_ID` variable and the
+`FLYWHEEL_GH_APP_PRIVATE_KEY` secret, at both repo and org level — and the
+GitHub-App existence/installation detection run as part of the **same**
+pre-flight pass and are classified on the same two axes as every other
+finding. #232 ships the complete pre-flight pass; the sibling issues
+(#234–242) refine the prompts and messaging that *consume* these findings.
+§req:preflight-detection §req:preflight-detection-criteria
+§req:preflight-detection-constraints
+
+**Why these detections belong in the spine, not the siblings.** The
+credentials prompt (#234–242) and the GitHub-App detection both need the
+same environment-probing and classification capability. Building detection
+and vocabulary once here — and having the sibling issues refine only the
+prompts and messaging on top — avoids each feature reinventing detection or
+inventing a third vocabulary. The pre-flight pass is the shared spine of
+the setup-onboarding cluster; this section fixes the scope boundary
+between what #232 detects and what the siblings present.
+§req:preflight-detection §req:preflight-detection-stories
+§req:preflight-detection-constraints
+
+**Scope boundary.** In scope for #232: detecting whether the App-ID
+variable and private-key secret exist (repo- and org-level) and whether
+the GitHub App exists and is installed, and classifying each on the
+bucket × severity axes. Out of scope for #232 and deferred to the
+siblings: the wording and flow of the credentials prompt, the
+create-versus-reuse App choice presentation, and the install-confirmation
+messaging. §req:preflight-detection-constraints
+
+**Criteria.**
+
+- The credentials detection (the `FLYWHEEL_GH_APP_ID` variable and
+  `FLYWHEEL_GH_APP_PRIVATE_KEY` secret, at repo and org level) shall run as
+  part of the pre-flight pass and carry a bucket and severity.
+- The GitHub-App existence/installation detection shall run as part of the
+  same pre-flight pass and carry a bucket and severity.
+- The detection capability and the classification vocabulary shall be
+  reusable by the credentials and GitHub-App sibling work (#234–242)
+  without redefining either.
+- The prompts and messaging that consume these findings are out of scope
+  for this section and are refined by the sibling issues.
+
+**Scope and alternatives.**
+
+- *Letting each sibling issue probe credentials and App state on its own*
+  was rejected as the explicit anti-goal: it reinvents detection per
+  feature and risks a third severity vocabulary. Detection and vocabulary
+  are built once here and reused.
+
+## apply-rulesets self-provisions PyYAML ephemerally §spec:apply-rulesets-pyyaml
+
+*Status: complete*
+
+`scripts/apply-rulesets.sh` is the one-shot setup step an adopter runs once
+per repository — documented in `docs/adopter/setup.md` (§5) as a
+`curl -fsSL … | bash -s -- <owner/repo>` one-liner — to apply Flywheel's
+branch- and tag-protection rulesets. To enumerate the managed branches it
+runs two small Python snippets that load `.flywheel.yml` with PyYAML: one
+emits every managed branch ref, the other the subset with
+`release: production`. The script never asks the adopter to install PyYAML
+and never leaves anything installed on their machine. When PyYAML is missing,
+the script provisions it for itself in a throwaway location, uses it for the
+two parses, and removes it before exiting. §req:apply-rulesets-pyyaml
+§req:apply-rulesets-pyyaml-criteria
+
+**The behavior is ephemeral because the need is ephemeral.** The script runs a
+single time per repository, so a dependency it needs only for that run leaves
+no trace afterward. On stock macOS — the common case — the Xcode Command Line
+Tools `python3` (3.9.x) adopters actually have does not ship PyYAML, so a
+first-time adopter following the documented setup would otherwise hit a hard
+stop on the very first Flywheel action they take. Rather than instruct them to
+*permanently* mutate their user site-packages for a one-shot script (the prior
+`pip3 install --user pyyaml` message), the script automates exactly the
+workaround the reporter of #245 performed by hand: stand up a disposable
+PyYAML, use it, tear it down. §req:apply-rulesets-pyyaml
+§req:apply-rulesets-pyyaml-stories
+
+**Why keep PyYAML rather than drop it.** The two reads must stay byte-for-byte
+equivalent to today's output — the same complete list of managed branch refs
+and the same `release: production` subset, feeding the same ruleset behavior.
+PyYAML is what computes that result now; continuing to parse `.flywheel.yml`
+with PyYAML is the surest guarantee of parse parity. Hand-rolling a YAML parser
+in shell/`awk`, or swapping in a different YAML tool, would re-implement the
+parse and risk diverging on quoting, anchors, or block structure for no
+adopter-visible gain. The change is to *how the dependency is satisfied*, not
+to *what the parses compute*. §req:apply-rulesets-pyyaml-criteria
+§req:apply-rulesets-pyyaml-constraints
+
+**Tiered satisfaction, fast path preserved.** When the invoking `python3`
+can already `import yaml`, the script uses it directly — no provisioning, no
+added latency, no extra steps. An adopter who already has PyYAML sees no
+change. Only when the import fails does the script provision an ephemeral,
+isolated environment (a throwaway interpreter context that exists for the
+duration of the run and nowhere in the adopter's persistent Python install),
+satisfy PyYAML there, and run the two parses against it. The provisioning
+installs PyYAML and nothing else, into an isolated throwaway location, so it
+cannot alter the adopter's interpreter or global/user packages. The cleanup is
+unconditional — it runs whether the script succeeds, fails, or is interrupted —
+so a partial run leaves nothing behind. §req:apply-rulesets-pyyaml
+§req:apply-rulesets-pyyaml-criteria §req:apply-rulesets-pyyaml-constraints
+
+**Graceful degradation, not a cryptic stop.** Where self-provisioning
+genuinely cannot work in a given environment — for example an interpreter with
+`ensurepip` stripped (some Debian/Ubuntu builds) and no alternative provisioner
+available, or no network to fetch the package — the script exits with a clear,
+copy-pasteable, actionable message naming the precise remedy for that
+environment, rather than the bare `PyYAML is required` import error. The
+failure path is the exception, reached only after auto-provisioning has been
+attempted and ruled out. §req:apply-rulesets-pyyaml-criteria
+§req:apply-rulesets-pyyaml-constraints
+
+**Documentation matches reality.** The script's header comment no longer
+claims PyYAML is `preinstalled on macOS` — true only of the retired system
+Python 2, not the Xcode CLT `python3` adopters have. Its stated dependencies
+describe what adopters actually run and how the script obtains PyYAML when it
+is absent. §req:apply-rulesets-pyyaml §req:apply-rulesets-pyyaml-stories
+
+**Blast radius.** The change is confined to `apply-rulesets.sh` — its
+dependency-resolution preamble and header comment — and to the matching
+dependency note in `docs/adopter/setup.md`. The ruleset-application logic (the
+`gh api` calls, payload assembly, idempotent create-or-replace) is untouched.
+Because the script runs unauthenticated-input-free over an `owner/repo`
+argument the adopter supplies and fetches only PyYAML into a disposable
+location, auto-provisioning adds a runtime network dependency on the package
+index but no persistent footprint and no new credential surface.
+§req:apply-rulesets-pyyaml-constraints
+
+**Criteria.**
+
+- When an adopter on stock macOS (Xcode CLT `python3`, no PyYAML) runs the
+  script as documented, the script shall complete end-to-end without any
+  manual dependency install and without prompting the adopter to install
+  anything.
+- After the script exits — on success, failure, or interruption — the
+  adopter's Python environment and user site-packages shall be exactly as
+  they were before; nothing PyYAML-related shall remain installed.
+- When the invoking `python3` can already `import yaml`, the script shall use
+  it directly, adding no provisioning step and no latency.
+- The two `.flywheel.yml` reads shall produce results identical to today: the
+  complete list of managed branch refs, and the `release: production` subset,
+  with the same downstream ruleset behavior.
+- When self-provisioning genuinely cannot succeed in the environment, the
+  script shall exit with a clear, copy-pasteable, actionable message naming
+  the remedy — not a bare import error.
+- The script's header comment shall not claim PyYAML is preinstalled on
+  macOS; the stated dependencies shall match what adopters actually have and
+  how the script obtains PyYAML when it is missing.
+
+**Scope and alternatives.**
+
+- *Instructing a persistent `pip install`* (the prior behavior) is rejected:
+  it leaves a lasting change on the adopter's machine for a script run once —
+  the core grievance of #245.
+- *Dropping PyYAML for a hand-rolled or alternate-tool YAML parse* is rejected:
+  it risks parse divergence against a hard parse-parity requirement for no
+  adopter-visible benefit, and a different tool (`yq`) is no more likely to be
+  present on stock macOS than PyYAML.
+- *Requiring a project checkout or a pre-existing virtualenv* is rejected: the
+  script must stay `curl … | bash`-friendly and safe to re-run, with no
+  assumption of local project tooling.
+
+§req:apply-rulesets-pyyaml-constraints §req:apply-rulesets-pyyaml-stories
+## Stdin-safe ruleset application §spec:apply-rulesets-stdin
+
+*Status: complete*
+
+The `apply-rulesets.sh` one-liner documented in `docs/adopter/setup.md` §5
+— `curl -fsSL …/apply-rulesets.sh | bash -s -- <owner/repo>` — applies the
+full set of branch and tag protection rulesets end to end for an adopter
+who has no Flywheel checkout. The piped run resolves its four ruleset
+templates (`managed-branches.json`, `managed-branches-review.json`,
+`tag-namespace.json`, `release-gate.json`) regardless of the working
+directory the adopter happens to be in — `$HOME`, an unrelated repository,
+or an empty `mktemp -d` all produce the same applied rulesets. No run dies
+with exit 2 or "Could not open file" before the first GitHub API call.
+§req:apply-rulesets-stdin §req:apply-rulesets-stdin-criteria
+
+**The problem this fixes.** A script piped through `bash` has no file on
+disk, so `BASH_SOURCE[0]` is unset. `apply-rulesets.sh` located its
+templates with `SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"`
+and read `"$SCRIPT_DIR/rulesets/<name>.json"` — a self-location that only
+resolves when the script's own file is present. Under the piped form, with
+`set -u` active, the unbound `BASH_SOURCE[0]` degrades `SCRIPT_DIR` to the
+caller's working directory; the subsequent `jq … "$SCRIPT_DIR/rulesets/…"`
+read fails unless the caller already stands inside a Flywheel checkout —
+exactly the situation the piped form exists to avoid. The documented first
+protection step of the quick path therefore never applied anything for an
+adopter taking the piped route. §req:apply-rulesets-stdin
+
+**The resolution rule — local first, then fetch, mirroring the sibling
+scripts.** The fix adopts the self-location idiom the other stdin-safe
+quick-start scripts already use (`init.sh`, `doctor.sh`): guard
+`BASH_SOURCE[0]` under strict mode (`${BASH_SOURCE[0]:-}`), use the bundled
+`rulesets/` directory when the script runs from a checkout, and otherwise
+fetch the four templates over the network — the same `raw.githubusercontent.com`
+source the run was itself piped from, and the same source `init.sh` fetches
+its `templates/` from. This was chosen over inventing a new mechanism
+because (a) it is the proven idiom already in this script family, (b) it
+keeps the `rulesets/*.json` files the single source of truth rather than
+duplicating them, and (c) it makes the invocation contract uniform across
+`init.sh`, `doctor.sh`, and `apply-rulesets.sh` — a consistency the
+requirement calls for in its own right. §req:apply-rulesets-stdin-constraints
+
+**Version-consistent templates without self-location.** Because a piped
+script cannot read its own file, it cannot derive from the runner which
+Flywheel ref it was fetched from. The templates a piped run applies shall
+nonetheless match the logic of the script applying them, never a silent
+script-from-one-version / shapes-from-another mismatch. The fetch therefore
+draws from a deterministically chosen ref — the same ref the documented
+`curl` URL publishes from — rather than from anything inferred at runtime,
+and the ruleset JSON shapes the script's `jq`/`gh` logic depends on stay
+stable across versions. A checkout run is inherently consistent because it
+reads the templates shipped alongside it. §req:apply-rulesets-stdin-constraints
+
+**Docs present only invocation forms that work.** `docs/adopter/setup.md`
+(and the README, where it documents one-liners) shows a piped form for
+`apply-rulesets.sh` only because the piped form now works; the checkout
+form is documented alongside as before. Every script the docs present as a
+`curl … | bash` one-liner is verified stdin-safe — none carries a latent
+`BASH_SOURCE`/`SCRIPT_DIR` self-location failure. Where a script shall run
+from a checkout, the docs do not show a piped form for it. The maintainer
+learns of any such latent failure from this audit rather than from an
+adopter's bug report. §req:apply-rulesets-stdin-criteria §req:apply-rulesets-stdin-stories
+
+**Fail clean, idempotent, strict, no new dependencies — all preserved.** A
+run that cannot obtain valid templates (e.g. no network on a piped run)
+still aborts before creating any ruleset, flipping `delete_branch_on_merge`,
+or changing any repository setting — the adopter's repository is left
+exactly as it was found, never half-protected. The create-or-replace-by-name
+behaviour is untouched: re-running (piped or from a checkout) updates
+existing rulesets in place rather than stacking duplicates. The fix coexists
+with `set -u` and the script's other strict-mode guards rather than relaxing
+them to paper over the unbound variable. It imposes no tool or privilege on
+the adopter beyond what the script already requires (`gh`, `jq`,
+`python3`/PyYAML, and network — a piped run is itself network-fetched and
+calls the GitHub API). §req:apply-rulesets-stdin-criteria §req:apply-rulesets-stdin-constraints
+
+**Same shape as the composite-action-path defect.** This is the
+§req:composite-action-path failure mode (§spec:composite-self-reference) in
+a second place: a code path only the real adopter exercises — consuming a
+Flywheel script without Flywheel's source already on disk — that the
+project's own runs, which always have the checkout present, never modelled.
+The fix is to make that path work and to widen the audit to every documented
+one-liner, so the class is closed rather than patched at one site.
+§req:apply-rulesets-stdin
+
+**Alternatives considered.**
+
+- *Embed the four ruleset JSONs inline in the script* (heredocs), so a
+  piped run carries its own templates and there is zero script/template
+  version skew by construction. This is the strongest version-consistency
+  guarantee, but it duplicates the `rulesets/*.json` files into the script
+  (a new drift surface needing its own parity guard) and diverges from the
+  local-first/fetch idiom the sibling scripts use — losing the uniform
+  invocation contract the requirement asks for. Rejected in favour of the
+  sibling-script idiom plus stable, deterministically-sourced templates.
+- *Relax `set -u` or default `SCRIPT_DIR` to a hardcoded path.* Papers over
+  the unbound `BASH_SOURCE[0]` without making the piped path actually find
+  its templates, and weakens the strict-mode guard the script relies on to
+  fail fast. Rejected.
+- *Document the piped form away — show only the checkout invocation.* Keeps
+  the docs honest at the cost of the quick-path capability the piped form
+  exists to provide, and leaves the adopter who pipes `init.sh`/`doctor.sh`
+  successfully to wonder why this one script is special. Rejected: the
+  decided outcome is to make the documented command work, not to retract it.
+
+## Stdin-path ruleset regression test §spec:apply-rulesets-stdin-test
+
+*Status: complete*
+
+A test in Flywheel's cheap suite — unit / per-PR CI, not the rate-limited
+e2e sandbox — runs `apply-rulesets.sh` the way an adopter pipes it: read
+from stdin, with no Flywheel checkout in the working directory. It fails
+when the script cannot resolve its four ruleset templates and passes once
+the script resolves them. This class of break — a Flywheel script unable to
+find its own bundled assets when run without a workspace that already holds
+Flywheel's source — is caught before a release is built, not only by the
+e2e gate or by an adopter. §req:apply-rulesets-stdin-criteria §req:apply-rulesets-stdin-stories
+
+**Why the cheap suite, and why e2e was not enough.** The defect shipped
+because every-PR suites always invoked the script from a checkout, where
+`SCRIPT_DIR` resolves and the templates are found; only the adopter path,
+which the cheap suites never modelled, exercises the stdin self-location.
+A cheap test moves first detection of this class to every PR. The test
+reproduces the failure at template resolution — before any `gh` API call —
+so it needs no live GitHub access and adds no load to the rate-limited
+sandbox installation the e2e suite already strains (§spec:sandbox-test-budget,
+§req:sandbox-ci-budget). This mirrors the cheap adopter-style guard added
+for the composite-action-path defect (§spec:adopter-resolution-test).
+§req:apply-rulesets-stdin §req:apply-rulesets-stdin-constraints
+
+**What the test asserts.** The guard models the resolution outcome, not a
+literal code shape: piped from stdin in a directory containing no Flywheel
+source, the script obtains all four ruleset templates rather than aborting
+on a missing `SCRIPT_DIR/rulesets/…` read. A reviewer can state the property
+in one sentence — "piped with no checkout, the script still finds its
+templates" — and it stays true after the underlying resolution mechanism
+changes. §req:apply-rulesets-stdin-criteria
+
+**Backstop unchanged.** The e2e suite keeps exercising the full adopter
+path as a backstop; it is no longer the first line of defence for this bug
+class. §req:apply-rulesets-stdin-criteria

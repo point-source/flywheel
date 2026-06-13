@@ -32,6 +32,12 @@
 #                         is installed org-wide. Requires an admin:org gh
 #                         token. Defaults to prompting interactively when
 #                         the owner is an Organization, otherwise `repo`.
+#   --override-release-conflict
+#                         proceed past a detected existing release system
+#                         (release-please / semantic-release / a hand-rolled
+#                         tag/release step in a workflow). Opt-in and
+#                         deliberate; never the default. Interactive only — a
+#                         non-interactive run still exits non-zero on the block.
 #
 # Dependencies: git, gh. (apply-rulesets.sh additionally needs jq + python3
 # with PyYAML.)
@@ -53,6 +59,10 @@ SCOPE=""
 # rulesets this script applies, otherwise semantic-release tag pushes are
 # rejected).
 CREATED_APP_ID=""
+# Opt-in only: set solely by --override-release-conflict. When 1, preflight_block
+# demotes the release_conflict block to an advisory warn (never inferred). Read
+# via indirect expansion (${!ovar}), so export to mark it used for shellcheck.
+export PREFLIGHT_OVERRIDE_release_conflict=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -61,6 +71,7 @@ while [[ $# -gt 0 ]]; do
     --skip-rulesets) SKIP_RULESETS=1; shift ;;
     --required-checks) REQUIRED_CHECKS="$2"; shift 2 ;;
     --force) FORCE=1; shift ;;
+    --override-release-conflict) PREFLIGHT_OVERRIDE_release_conflict=1; shift ;;
     --version) FLYWHEEL_VERSION="$2"; shift 2 ;;
     --scope)
       case "$2" in
@@ -69,17 +80,19 @@ while [[ $# -gt 0 ]]; do
       esac
       shift 2
       ;;
-    -h|--help) sed -n '2,37p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,43p' "$0"; exit 0 ;;
     *) echo "Unknown argument: $1" >&2; exit 2 ;;
   esac
 done
 
-for tool in git gh; do
-  command -v "$tool" >/dev/null 2>&1 || {
-    echo "error: '$tool' is required but not installed." >&2
-    exit 1
-  }
-done
+# Only git is needed immediately (for `git rev-parse` below). gh's install +
+# auth state is probed by the pre-flight pass (preflight_detect_gh_capability),
+# so a missing/unauthenticated gh surfaces as a finding rather than a hard exit
+# here — and the gh-dependent REPO resolution is deferred until after the gate.
+command -v git >/dev/null 2>&1 || {
+  echo "error: 'git' is required but not installed." >&2
+  exit 1
+}
 
 if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   echo "error: not inside a git repo. Run from your repo root." >&2
@@ -88,23 +101,6 @@ fi
 
 REPO_ROOT="$(git rev-parse --show-toplevel)"
 cd "$REPO_ROOT"
-
-if ! REPO="$(gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null)"; then
-  echo "error: could not resolve owner/repo via 'gh repo view'. Are you authenticated ('gh auth login') and does this repo have a GitHub remote?" >&2
-  exit 1
-fi
-OWNER="${REPO%%/*}"
-# Lazy: only paid for when SCOPE resolution / org detection actually needs it.
-# Empty string ≠ "User"; check OWNER_TYPE_RESOLVED before reading OWNER_TYPE.
-OWNER_TYPE=""
-OWNER_TYPE_RESOLVED=0
-detect_owner_type() {
-  if [[ "$OWNER_TYPE_RESOLVED" -eq 0 ]]; then
-    OWNER_TYPE="$(gh api "users/$OWNER" --jq .type 2>/dev/null || true)"
-    OWNER_TYPE_RESOLVED=1
-  fi
-}
-echo "Wiring Flywheel into $REPO..."
 
 # When run via `curl ... | bash`, stdin is the curl pipe, so `[[ -t 0 ]]`
 # is false even though the user is sitting at a real terminal. Open
@@ -120,6 +116,21 @@ elif { exec 3</dev/tty; } 2>/dev/null; then
   INTERACTIVE=1
 fi
 
+# Test hooks (FLYWHEEL_ASSUME_INTERACTIVE, FLYWHEEL_PREFLIGHT_INJECT) are INERT
+# unless FLYWHEEL_TEST_HOOKS=1 is explicitly set. This keeps them usable by the
+# test suite while ensuring a stray or maliciously-injected env var in a real
+# adopter run can neither fake a TTY nor forge/suppress pre-flight findings.
+FLYWHEEL_TEST_HOOKS="${FLYWHEEL_TEST_HOOKS:-0}"
+
+# Test-only override: force the interactive gate branch without a real TTY. Used
+# by the pre-flight test suite to exercise the interactive halt path; never
+# honored in normal use (gated on FLYWHEEL_TEST_HOOKS). It does NOT open fd 3, so
+# it is only safe on paths that exit before any `read -u 3` — which the pre-flight
+# gate (below) does.
+if [[ "$FLYWHEEL_TEST_HOOKS" == "1" && "${FLYWHEEL_ASSUME_INTERACTIVE:-0}" == "1" ]]; then
+  INTERACTIVE=1
+fi
+
 TEMPLATES_BASE="${FLYWHEEL_TEMPLATES_BASE:-https://raw.githubusercontent.com/point-source/flywheel/main/scripts/templates}"
 # When piped via `curl ... | bash`, BASH_SOURCE is unset and `set -u` would
 # trip; default to empty and skip local-templates detection in that case.
@@ -132,6 +143,388 @@ LOCAL_TEMPLATES=""
 if [[ -n "$SCRIPT_DIR" && -d "$SCRIPT_DIR/templates" ]]; then
   LOCAL_TEMPLATES="$SCRIPT_DIR/templates"
 fi
+
+# ---------------------------------------------------------------------------
+# Pre-flight detection pass (SPEC.md §spec:preflight-gate).
+#
+# A single READ-ONLY detection pass that runs as the FIRST substantive thing
+# init does — before the version is resolved, before any prompt, and before any
+# file is written (.flywheel.yml, the workflow files, .gitattributes, merge
+# drivers). It collects findings through the shared bucket × severity vocabulary
+# (scripts/lib/findings.sh) and renders a summary the adopter sees up front.
+# The detectors register at the seam in preflight_run; the gate below enforces
+# the severity-driven control flow.
+# ---------------------------------------------------------------------------
+
+# Source the shared finding vocabulary, mirroring doctor.sh: locate it next to
+# this script, else fetch it. The fetch URL is derived from TEMPLATES_BASE so the
+# vocabulary tracks the SAME ref as the workflow templates (overridable via
+# FLYWHEEL_TEMPLATES_BASE) — a curl|bash run pinned to a tag fetches that tag's
+# findings.sh, not main, so the gate's contract cannot silently skew. Without the
+# library the pre-flight pass cannot emit findings — a hard error.
+# shellcheck source=scripts/lib/findings.sh
+if [[ -n "$SCRIPT_DIR" && -f "$SCRIPT_DIR/lib/findings.sh" ]]; then
+  # shellcheck disable=SC1091
+  . "$SCRIPT_DIR/lib/findings.sh"
+else
+  findings_tmp="$(mktemp)"
+  if curl -fsSL "${TEMPLATES_BASE%/templates}/lib/findings.sh" -o "$findings_tmp" 2>/dev/null; then
+    # shellcheck disable=SC1090
+    . "$findings_tmp"
+    rm -f "$findings_tmp"
+  else
+    rm -f "$findings_tmp"
+    echo "error: could not locate or fetch scripts/lib/findings.sh — pre-flight cannot run without it." >&2
+    exit 1
+  fi
+fi
+
+# Resolve owner/repo via gh, NON-FATALLY: a missing/unauthenticated gh leaves
+# REPO/OWNER empty and surfaces as a pre-flight finding (preflight_detect_gh_capability)
+# plus the gate, rather than a hard exit here. The credentials/App detectors
+# consult these during the pass; their gh calls all swallow errors, so empty
+# values are safe. A still-empty REPO after the gate (gh confirmed good) is a
+# hard error below.
+REPO="$(gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null || true)"
+OWNER="${REPO%%/*}"
+# Lazy: only paid for when SCOPE resolution / org detection actually needs it.
+# Empty string ≠ "User"; check OWNER_TYPE_RESOLVED before reading OWNER_TYPE.
+OWNER_TYPE=""
+OWNER_TYPE_RESOLVED=0
+detect_owner_type() {
+  if [[ "$OWNER_TYPE_RESOLVED" -eq 0 ]]; then
+    OWNER_TYPE="$(gh api "users/$OWNER" --jq .type 2>/dev/null || true)"
+    OWNER_TYPE_RESOLVED=1
+  fi
+}
+
+# preflight_inject — test/debug hook, INERT unless FLYWHEEL_TEST_HOOKS=1 (so it
+# cannot forge or suppress findings in a real adopter run). When enabled and
+# FLYWHEEL_PREFLIGHT_INJECT is set, emit each "bucket:severity:message" line
+# (newline-separated) as a finding. Read-only; used by the pre-flight test suite
+# to drive the gate with synthetic findings.
+preflight_inject() {
+  [[ "$FLYWHEEL_TEST_HOOKS" == "1" ]] || return 0
+  [[ -n "${FLYWHEEL_PREFLIGHT_INJECT:-}" ]] || return 0
+  local line bucket severity message rest
+  while IFS= read -r line; do
+    [[ -n "$line" ]] || continue
+    bucket="${line%%:*}"; rest="${line#*:}"
+    severity="${rest%%:*}"; message="${rest#*:}"
+    finding "$bucket" "$severity" "$message" || true
+  done <<< "${FLYWHEEL_PREFLIGHT_INJECT}"
+}
+
+# ---------------------------------------------------------------------------
+# Reusable pre-flight credential / GitHub-App state (§spec:preflight-credentials-app).
+#
+# These globals are the REUSE BOUNDARY for the App-credentials detector below:
+# sibling issues #234–242 read them instead of re-probing gh. They are set by
+# detect_credentials / detect_app_installation during the pre-flight pass and
+# are safe to consult anywhere after preflight_run.
+# ---------------------------------------------------------------------------
+PREFLIGHT_HAS_APP_ID=0              # 0|1
+PREFLIGHT_APP_ID_AT=""             # ""|repo|org
+PREFLIGHT_APP_ID_VALUE=""          # numeric App ID when readable
+PREFLIGHT_HAS_APP_KEY=0            # 0|1
+PREFLIGHT_APP_KEY_AT=""            # ""|repo|org
+PREFLIGHT_APP_INSTALLED="unknown"  # yes|no|unknown
+
+# detect_credentials — read-only probe for the App-ID variable and private-key
+# secret, repo level first (cheapest, no admin:org), then org level only when
+# missing AND the owner is an Organization. This is the single credential probe:
+# it populates the PREFLIGHT_* globals that the late credential/ruleset logic
+# consumes (so neither re-lists via gh), and emits info-level findings only, so a
+# clean greenfield repo yields zero blockers.
+# Every gh call swallows errors (2>/dev/null || true) so a missing permission or
+# a stub never aborts the run.
+detect_credentials() {
+  local repo_vars repo_secrets org_vars org_secrets
+
+  # App-ID variable — repo level.
+  repo_vars="$(gh variable list --json name -q '.[].name' 2>/dev/null || true)"
+  if echo "$repo_vars" | grep -qx "FLYWHEEL_GH_APP_ID"; then
+    PREFLIGHT_HAS_APP_ID=1
+    PREFLIGHT_APP_ID_AT="repo"
+    PREFLIGHT_APP_ID_VALUE="$(gh variable get FLYWHEEL_GH_APP_ID --repo "$REPO" 2>/dev/null || true)"
+  fi
+  # Private-key secret — repo level.
+  repo_secrets="$(gh secret list --json name -q '.[].name' 2>/dev/null || true)"
+  if echo "$repo_secrets" | grep -qx "FLYWHEEL_GH_APP_PRIVATE_KEY"; then
+    PREFLIGHT_HAS_APP_KEY=1
+    PREFLIGHT_APP_KEY_AT="repo"
+  fi
+
+  # Org level only when something is still missing and the owner is an org.
+  if [[ "$PREFLIGHT_HAS_APP_ID" -eq 0 || "$PREFLIGHT_HAS_APP_KEY" -eq 0 ]]; then
+    detect_owner_type
+    if [[ "$OWNER_TYPE" == "Organization" ]]; then
+      if [[ "$PREFLIGHT_HAS_APP_ID" -eq 0 ]]; then
+        org_vars="$(gh variable list --org "$OWNER" --json name -q '.[].name' 2>/dev/null || true)"
+        if echo "$org_vars" | grep -qx "FLYWHEEL_GH_APP_ID"; then
+          PREFLIGHT_HAS_APP_ID=1
+          PREFLIGHT_APP_ID_AT="org"
+          PREFLIGHT_APP_ID_VALUE="$(gh variable get FLYWHEEL_GH_APP_ID --org "$OWNER" 2>/dev/null || true)"
+        fi
+      fi
+      if [[ "$PREFLIGHT_HAS_APP_KEY" -eq 0 ]]; then
+        org_secrets="$(gh secret list --org "$OWNER" --json name -q '.[].name' 2>/dev/null || true)"
+        if echo "$org_secrets" | grep -qx "FLYWHEEL_GH_APP_PRIVATE_KEY"; then
+          PREFLIGHT_HAS_APP_KEY=1
+          PREFLIGHT_APP_KEY_AT="org"
+        fi
+      fi
+    fi
+  fi
+
+  if [[ "$PREFLIGHT_HAS_APP_ID" -eq 1 ]]; then
+    finding config info "FLYWHEEL_GH_APP_ID variable found (${PREFLIGHT_APP_ID_AT}-level)"
+  else
+    finding config info "FLYWHEEL_GH_APP_ID variable not set (setup will provision it)"
+  fi
+  if [[ "$PREFLIGHT_HAS_APP_KEY" -eq 1 ]]; then
+    finding config info "FLYWHEEL_GH_APP_PRIVATE_KEY secret found (${PREFLIGHT_APP_KEY_AT}-level)"
+  else
+    finding config info "FLYWHEEL_GH_APP_PRIVATE_KEY secret not set (setup will provision it)"
+  fi
+}
+
+# detect_app_installation — best-effort, false-negative-tolerant check that the
+# GitHub App is installed on the owner. The only reliable read-only signal is the
+# org installations list, which needs an org owner + admin:org; anything else
+# leaves PREFLIGHT_APP_INSTALLED=unknown (we'll confirm during install rather than
+# block on a probe we can't trust). Read-only; errors degrade to "unknown".
+detect_app_installation() {
+  if [[ "$PREFLIGHT_HAS_APP_ID" -eq 0 || -z "$PREFLIGHT_APP_ID_VALUE" ]]; then
+    finding instance info "GitHub App installation: no App ID configured yet (setup will create or prompt for the App)"
+    return 0
+  fi
+  detect_owner_type
+  if [[ "$OWNER_TYPE" != "Organization" ]]; then
+    finding instance info "GitHub App installation: could not verify (best-effort; will confirm during install)"
+    return 0
+  fi
+  local installed_ids
+  installed_ids="$(gh api "orgs/$OWNER/installations" --jq '.installations[].app_id' 2>/dev/null || true)"
+  if [[ -z "$installed_ids" ]]; then
+    # Empty could mean none installed OR the call failed (no admin:org). We can't
+    # tell the two apart from a read-only probe, so stay conservative: unknown.
+    finding instance info "GitHub App installation: could not verify (best-effort; will confirm during install)"
+    return 0
+  fi
+  # PREFLIGHT_APP_INSTALLED is read only by sibling issues #234–242 (the reuse
+  # boundary), not within init — hence the SC2034 suppressions.
+  if echo "$installed_ids" | grep -qx "$PREFLIGHT_APP_ID_VALUE"; then
+    # shellcheck disable=SC2034
+    PREFLIGHT_APP_INSTALLED="yes"
+    finding instance info "GitHub App (id ${PREFLIGHT_APP_ID_VALUE}) installed on ${OWNER}"
+  else
+    # shellcheck disable=SC2034
+    PREFLIGHT_APP_INSTALLED="no"
+    finding instance warn "GitHub App (id ${PREFLIGHT_APP_ID_VALUE}) not installed on ${OWNER} — install it so installation-token minting works"
+  fi
+}
+
+# preflight_detect_credentials_app — seam entry point (§spec:preflight-credentials-app).
+# Probes App credentials then App installation, setting the reusable PREFLIGHT_*
+# globals consumed by sibling issues #234–242. Read-only and ADDITIVE: it runs in
+# the pre-flight pass and leaves the late credential/prompt logic untouched.
+preflight_detect_credentials_app() {
+  detect_credentials
+  detect_app_installation
+}
+
+# preflight_detect_release_conflict — read-only scan for an existing release
+# system that would race flywheel's tag/release creation (SPEC.md
+# §spec:preflight-release-conflict). Iterates the adopter's own workflow files
+# (skipping flywheel's scaffold and anything referencing point-source/flywheel)
+# and emits an instance + block per (file, producer-kind) match via
+# preflight_block. Deliberately minimal and biased to FALSE NEGATIVES: it covers
+# the systems that actually race flywheel (release-please, a separate
+# semantic-release, hand-rolled gh/git/npm producers in push/dispatch workflows)
+# rather than auditing every release tool — a missed exotic system is rare and
+# caught downstream, whereas a false positive blocks a clean repo for everyone.
+#
+# _release_conflict_block <producers> <path> — emit the one standard instance +
+# block for a file's detected producer(s); all matches in a file share one block,
+# since a single conflicting file is one thing for the adopter to fix.
+_release_conflict_block() {
+  preflight_block release_conflict instance \
+    "$1 detected in $2 — it races Flywheel's tag/release creation. Remove or disable it, or re-run with --override-release-conflict."
+}
+preflight_detect_release_conflict() {
+  local path base producers
+  for path in .github/workflows/*.yml .github/workflows/*.yaml; do
+    [[ -f "$path" ]] || continue
+    base="$(basename "$path")"
+    # Skip flywheel's own scaffold workflows.
+    case "$base" in flywheel-*.yml|flywheel-*.yaml) continue ;; esac
+    # Defensive self-exclusion: any workflow wiring up flywheel itself is ours.
+    if grep -qiF 'point-source/flywheel' "$path"; then
+      continue
+    fi
+
+    # Accumulate every producer this file matches, then emit ONE block per file
+    # (one finding per file to fix, not one per regex hit).
+    producers=""
+    # release-please — googleapis/release-please-action or release-please-action.
+    grep -qi 'release-please' "$path" && producers+="release-please, "
+    # A separate semantic-release (cycjimmy/semantic-release-action or
+    # npx semantic-release). flywheel's own files are already excluded above.
+    grep -qi 'semantic-release' "$path" && producers+="semantic-release, "
+    # Hand-rolled producers only count when the workflow runs on push or
+    # workflow_dispatch — the triggers that publish releases on merge/manual run.
+    if grep -qE '^[[:space:]]*push:' "$path" || grep -qE '^[[:space:]]*workflow_dispatch:' "$path"; then
+      grep -qE 'gh release create' "$path" && producers+="gh release create, "
+      # `git tag` only when it CREATES a tag: require a creation flag (-a/-s/-f/-m)
+      # or a following tag-name token, so read-only forms (git tag -l / --list /
+      # --contains / -n …) don't false-positive — the spec biases to false
+      # negatives over blocking a clean repo. `git push --tags|--follow-tags` also
+      # publishes tags created elsewhere.
+      grep -qE "git tag[[:space:]]+(-[asfm]|[A-Za-z0-9_.\"'\$])|git push[[:space:]]+--(follow-)?tags" "$path" \
+        && producers+="git tag, "
+      grep -qE 'npm version' "$path" && producers+="npm version, "
+    fi
+
+    [[ -n "$producers" ]] && _release_conflict_block "${producers%, }" "$path"
+  done
+  # A trailing unmatched `grep ... &&` would leave a non-zero status; the gate
+  # reads FINDINGS_BLOCK_COUNT, not this return, so end deterministically at 0.
+  return 0
+}
+
+# preflight_detect_gh_capability — §spec:preflight-gh-capability.
+# READ-ONLY probe of gh install + auth state, then the path-specific scope checks
+# (which parse the captured `auth_status`). Grants/requests nothing.
+preflight_detect_gh_capability() {
+  if ! command -v gh >/dev/null 2>&1; then
+    finding local-env block "gh (GitHub CLI) is not installed — required to resolve the repository, write App credentials, and apply rulesets (install: https://cli.github.com)"
+    return 0
+  fi
+  # auth_status is captured here and reused below for the path-specific scope
+  # checks (which parse its "Token scopes:" line).
+  local auth_status
+  if ! auth_status="$(gh auth status 2>&1)"; then
+    finding local-env block "gh is not authenticated — run 'gh auth login' (setup needs it to resolve the repository and write App credentials)"
+    return 0
+  fi
+  finding local-env info "gh installed and authenticated"
+
+  # Path-specific scope checks (§spec:preflight-gh-capability): probe only the
+  # scopes the CHOSEN path (resolved from flags up front) will exercise. Read
+  # the classic OAuth token scopes from gh auth state.
+  local scopes_line scopes
+  # `|| true` is load-bearing: init.sh runs under `set -euo pipefail`, so without
+  # it a no-match grep (exit 1) would abort the whole run on a fine-grained PAT /
+  # App token — the case handled below. `-m1` stops at the first match.
+  scopes_line="$(grep -im1 'Token scopes:' <<<"$auth_status" || true)"
+  if [[ -z "$scopes_line" ]]; then
+    # No classic "Token scopes:" line means a fine-grained PAT or App token,
+    # whose grants aren't expressible as classic scopes. We can't pre-check them,
+    # so surface that explicitly (rather than silently skipping) — the credential
+    # WRITE helpers fail loudly later if the token's grant is insufficient.
+    finding local-env info "gh token scopes could not be read (fine-grained PAT or GitHub App token) — required permissions can't be pre-checked; setup will surface any gap when it writes credentials"
+    return 0
+  fi
+  # Normalize the scope names into a padded, space-delimited set for EXACT-token
+  # matching: "Token scopes: 'repo', 'read:org'" -> " repo read:org ". Exact
+  # matching is required because ':' is a grep word boundary, so `grep -w 'repo'`
+  # would wrongly accept a token carrying only the narrower 'repo:status' scope.
+  scopes=" ${scopes_line#*scopes:} "
+  scopes="${scopes//[\',]/ }"
+  # repo-admin: needed unless BOTH credential writes and ruleset apply are
+  # skipped (rulesets are repo-level even under --scope org).
+  if [[ "$SKIP_SECRETS" -ne 1 || "$SKIP_RULESETS" -ne 1 ]] && [[ "$scopes" != *" repo "* ]]; then
+    finding local-env block "gh token lacks the 'repo' scope (repo-admin) — required later to write the FLYWHEEL_GH_APP_ID variable and FLYWHEEL_GH_APP_PRIVATE_KEY secret and to apply rulesets. Re-auth with: gh auth refresh -s repo"
+  fi
+  # admin:org: needed when credentials are scoped org-wide. With an explicit
+  # --scope org the org write is certain, so a missing admin:org is a block. When
+  # the scope is still unresolved (interactive runs pick repo-vs-org at a later
+  # prompt) and the owner is an Organization, org is only POSSIBLE — so warn
+  # rather than block, to avoid halting an adopter who will choose repo scope.
+  if [[ "$scopes" != *" admin:org "* ]]; then
+    if [[ "$SCOPE" == "org" ]]; then
+      finding local-env block "gh token lacks 'admin:org' — required later to write org-wide (--scope org) credentials: the FLYWHEEL_GH_APP_ID variable and FLYWHEEL_GH_APP_PRIVATE_KEY secret at org level. Re-auth with: gh auth refresh -s admin:org"
+    elif [[ -z "$SCOPE" && "$SKIP_SECRETS" -ne 1 ]]; then
+      detect_owner_type
+      if [[ "$OWNER_TYPE" == "Organization" ]]; then
+        finding local-env warn "gh token lacks 'admin:org' — only needed if you choose org-wide credentials at the upcoming prompt (repo-scoped credentials don't need it). If so, re-auth with: gh auth refresh -s admin:org"
+      fi
+    fi
+  fi
+  # GitHub-App creation permission: the create-vs-reuse-App choice is interactive
+  # and not knowable from a flag at pre-flight time, so it cannot be definitively
+  # pre-checked. We deliberately do NOT invent a flag or block speculatively.
+  # Creating an App under an Organization effectively requires org-owner /
+  # 'admin:org' (covered above); under a User account no extra scope is needed.
+  # The de-swallowed credential WRITE (write_app_id_var/write_app_key_secret) is
+  # the backstop if the chosen App-creation path exceeds the token's grant.
+}
+
+# preflight_run — run every detector and print the pre-flight summary. Detectors
+# emit via the shared `finding` (and the preflight_block wrapper added with the
+# gate). The summary is the first thing the adopter sees; the gate acts on it
+# next.
+preflight_run() {
+  echo
+  echo "Pre-flight checks:"
+  # >>> detector seam — add new detectors here >>>
+  preflight_detect_gh_capability       # §spec:preflight-gh-capability
+  preflight_detect_release_conflict    # §spec:preflight-release-conflict
+  preflight_detect_credentials_app     # §spec:preflight-credentials-app
+  preflight_inject                     # test-only hook (inert unless FLYWHEEL_TEST_HOOKS=1)
+  # <<< detector seam <<<
+  if [[ "$FINDINGS_BLOCK_COUNT" -gt 0 ]]; then
+    printf '  pre-flight: \033[31m%d blocker(s)\033[0m found.\n' "$FINDINGS_BLOCK_COUNT"
+  else
+    printf '  pre-flight: \033[32mno blockers\033[0m.\n'
+  fi
+}
+
+# preflight_block <override-token> <bucket> <message>
+# Emit a block finding for <message>, UNLESS the override for <override-token> is
+# active (env/var PREFLIGHT_OVERRIDE_<token>=1), in which case demote it to an
+# advisory warn. The override is opt-in and never the default
+# (SPEC §spec:preflight-gate). The --override-release-conflict flag sets the
+# token PREFLIGHT_OVERRIDE_release_conflict. <override-token> uses underscores
+# (e.g. release_conflict → flag --override-release-conflict).
+preflight_block() {
+  local token="$1" bucket="$2" message="$3"
+  local ovar="PREFLIGHT_OVERRIDE_${token}"
+  if [[ "${!ovar:-0}" -eq 1 ]]; then
+    finding "$bucket" warn "$message (overridden via --override-${token//_/-})"
+  else
+    finding "$bucket" block "$message"
+  fi
+}
+
+# preflight_gate — severity drives control flow. A block halts setup before any
+# prompt or file is written. Interactively the adopter must resolve it (or pass
+# an offered override flag) and re-run; non-interactively the run exits non-zero
+# with the reason. warn/info are advisory and never halt. Runs immediately after
+# preflight_run, before the version resolution / first prompt / first write.
+preflight_gate() {
+  [[ "$FINDINGS_BLOCK_COUNT" -gt 0 ]] || return 0
+  if [[ "$INTERACTIVE" -eq 1 ]]; then
+    printf '\n\033[31mPre-flight halted\033[0m — %d blocking problem(s) above. Resolve them (or pass an offered override flag) and re-run; no files were written.\n' "$FINDINGS_BLOCK_COUNT" >&2
+  else
+    printf '\n\033[31mPre-flight failed\033[0m — %d blocking problem(s) above. Non-interactive run; refusing to proceed on defaults. No files were written.\n' "$FINDINGS_BLOCK_COUNT" >&2
+  fi
+  exit 1
+}
+
+preflight_run
+preflight_gate
+
+# gh is confirmed installed + authenticated by the gate above. REPO/OWNER and
+# detect_owner_type were resolved non-fatally before the pass (so the
+# credentials/App detectors could consult them); a still-empty REPO now means the
+# repo has no GitHub remote, or gh repo view failed — a hard error.
+if [[ -z "$REPO" ]]; then
+  echo "error: could not resolve owner/repo via 'gh repo view'. Are you authenticated ('gh auth login') and does this repo have a GitHub remote?" >&2
+  exit 1
+fi
+echo "Wiring Flywheel into $REPO..."
 
 # Templates contain `point-source/flywheel@__FLYWHEEL_VERSION__`; resolve
 # the placeholder to the latest released major (e.g. v3 from v3.2.1) so
@@ -399,33 +792,13 @@ EOF
 if [[ "$SKIP_SECRETS" -eq 1 ]]; then
   echo "  --skip-secrets set; not touching App credentials."
 else
-  # Repo-level lookup first (cheapest — no admin:org needed). If anything is
-  # missing AND the owner is an Organization, also probe org-level so a
-  # re-run from a repo whose creds live on the org doesn't double-prompt.
-  existing_vars="$(gh variable list --json name -q '.[].name' 2>/dev/null || true)"
-  existing_secrets="$(gh secret list --json name -q '.[].name' 2>/dev/null || true)"
-  has_app_id=0; has_app_key=0
-  app_id_found_at=""; app_key_found_at=""
-  if echo "$existing_vars" | grep -qx "FLYWHEEL_GH_APP_ID"; then
-    has_app_id=1; app_id_found_at="repo"
-  fi
-  if echo "$existing_secrets" | grep -qx "FLYWHEEL_GH_APP_PRIVATE_KEY"; then
-    has_app_key=1; app_key_found_at="repo"
-  fi
-
-  if [[ "$has_app_id" -eq 0 || "$has_app_key" -eq 0 ]]; then
-    detect_owner_type
-    if [[ "$OWNER_TYPE" == "Organization" ]]; then
-      org_vars="$(gh variable list --org "$OWNER" --json name -q '.[].name' 2>/dev/null || true)"
-      org_secrets="$(gh secret list --org "$OWNER" --json name -q '.[].name' 2>/dev/null || true)"
-      if [[ "$has_app_id" -eq 0 ]] && echo "$org_vars" | grep -qx "FLYWHEEL_GH_APP_ID"; then
-        has_app_id=1; app_id_found_at="org"
-      fi
-      if [[ "$has_app_key" -eq 0 ]] && echo "$org_secrets" | grep -qx "FLYWHEEL_GH_APP_PRIVATE_KEY"; then
-        has_app_key=1; app_key_found_at="org"
-      fi
-    fi
-  fi
+  # Reuse the pre-flight credential probe (detect_credentials) instead of
+  # re-listing variables/secrets: the pass already ran the repo-then-org lookup
+  # and stored the result in PREFLIGHT_*, so consuming it here avoids 2–6
+  # redundant gh API round-trips per run (this is the reuse boundary
+  # detect_credentials documents).
+  has_app_id="$PREFLIGHT_HAS_APP_ID"; has_app_key="$PREFLIGHT_HAS_APP_KEY"
+  app_id_found_at="$PREFLIGHT_APP_ID_AT"; app_key_found_at="$PREFLIGHT_APP_KEY_AT"
 
   if [[ "$has_app_id" -eq 1 && "$has_app_key" -eq 1 ]]; then
     if [[ "$app_id_found_at" == "$app_key_found_at" ]]; then
@@ -507,13 +880,12 @@ if [[ "$SKIP_RULESETS" -eq 0 && -x "${SCRIPT_DIR:-}/apply-rulesets.sh" ]]; then
   # the historical default); fall back to org-level if the owner is an
   # Organization, so re-runs on an org-scoped install still find the value.
   if [[ -z "${CREATED_APP_ID:-}" ]]; then
-    CREATED_APP_ID="$(gh variable get FLYWHEEL_GH_APP_ID --repo "$REPO" 2>/dev/null || true)"
-    if [[ -z "$CREATED_APP_ID" ]]; then
-      detect_owner_type
-      if [[ "$OWNER_TYPE" == "Organization" ]]; then
-        CREATED_APP_ID="$(gh variable get FLYWHEEL_GH_APP_ID --org "$OWNER" 2>/dev/null || true)"
-      fi
-    fi
+    # Reuse the App-ID value the pre-flight probe already read (repo- or
+    # org-level) instead of re-fetching it with another gh call. Absence is
+    # legitimately non-fatal (the variable is expected to be missing on a first
+    # run); a real scope gap is surfaced up front by the pre-flight scope block
+    # and loudly by the credential WRITE helpers, never hidden here.
+    CREATED_APP_ID="$PREFLIGHT_APP_ID_VALUE"
   fi
   if [[ "$INTERACTIVE" -eq 1 ]]; then
     read -r -u 3 -p "  Apply branch + tag protection rulesets now? [y/N] " yn
@@ -558,7 +930,14 @@ if [[ "$SKIP_RULESETS" -eq 0 && -x "${SCRIPT_DIR:-}/apply-rulesets.sh" ]]; then
         # Cache for next-run readback. Use SCOPE if resolved earlier in this
         # run, otherwise default to repo-level (safe for User-owned repos).
         [[ -z "$SCOPE" ]] && SCOPE="repo"
-        write_app_id_var "$CREATED_APP_ID" >/dev/null 2>&1 || true
+        # De-swallowed credential WRITE (§spec:preflight-gh-capability): a
+        # scope/permission failure here must surface, not vanish behind
+        # `|| true`. The cache-write is non-essential to this run (the App ID is
+        # still passed via --app-id below), so we warn rather than abort — but
+        # we no longer hide the gh error.
+        if ! write_app_id_var "$CREATED_APP_ID"; then
+          echo "  warning: could not cache FLYWHEEL_GH_APP_ID variable (check 'repo'/'admin:org' scope) — continuing with --app-id only." >&2
+        fi
       fi
     fi
     if [[ -z "${CREATED_APP_ID:-}" ]]; then

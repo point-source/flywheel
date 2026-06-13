@@ -1,3 +1,24 @@
+# [2.1.0-dev.3](https://github.com/point-source/flywheel/compare/v2.1.0-dev.2...v2.1.0-dev.3) (2026-06-13)
+
+
+### Features
+
+* pre-flight environment detection before setup starts ([#250](https://github.com/point-source/flywheel/issues/250)) ([418255b](https://github.com/point-source/flywheel/commit/418255b5caf1ed0af4e8ca0ba82fd1244e8a8502)), closes [#232](https://github.com/point-source/flywheel/issues/232) [#232](https://github.com/point-source/flywheel/issues/232) [#232](https://github.com/point-source/flywheel/issues/232) [#232](https://github.com/point-source/flywheel/issues/232) [preflight-#capability](https://github.com/preflight-/issues/capability) [preflight-#capability](https://github.com/preflight-/issues/capability) [#232](https://github.com/point-source/flywheel/issues/232) [#capability](https://github.com/point-source/flywheel/issues/capability) [preflight-#capability](https://github.com/preflight-/issues/capability) [preflight-#capability](https://github.com/preflight-/issues/capability) [#capability](https://github.com/point-source/flywheel/issues/capability) [preflight-#capability](https://github.com/preflight-/issues/capability) [preflight-#capability](https://github.com/preflight-/issues/capability) [preflight-#capability](https://github.com/preflight-/issues/capability) [#232](https://github.com/point-source/flywheel/issues/232)
+
+# [2.1.0-dev.2](https://github.com/point-source/flywheel/compare/v2.1.0-dev.1...v2.1.0-dev.2) (2026-06-13)
+
+
+### Features
+
+* stdin-safe ruleset application for piped apply-rulesets.sh ([#249](https://github.com/point-source/flywheel/issues/249)) ([4b67490](https://github.com/point-source/flywheel/commit/4b67490830ca4a0f21a80ff69e6932e6a6214f23)), closes [#244](https://github.com/point-source/flywheel/issues/244) [#244](https://github.com/point-source/flywheel/issues/244) [#244](https://github.com/point-source/flywheel/issues/244) [#244](https://github.com/point-source/flywheel/issues/244) [#244](https://github.com/point-source/flywheel/issues/244) [#244](https://github.com/point-source/flywheel/issues/244) [#245](https://github.com/point-source/flywheel/issues/245) [#244](https://github.com/point-source/flywheel/issues/244)
+
+# [2.1.0-dev.1](https://github.com/point-source/flywheel/compare/v2.0.1...v2.1.0-dev.1) (2026-06-13)
+
+
+### Features
+
+* apply-rulesets self-provisions PyYAML ephemerally ([#247](https://github.com/point-source/flywheel/issues/247)) ([d363a2f](https://github.com/point-source/flywheel/commit/d363a2f90a6de6d31ad1ffed6d24e67cf4e597ec)), closes [#245](https://github.com/point-source/flywheel/issues/245) [#245](https://github.com/point-source/flywheel/issues/245) [#245](https://github.com/point-source/flywheel/issues/245) [#245](https://github.com/point-source/flywheel/issues/245) [#245](https://github.com/point-source/flywheel/issues/245) [#245](https://github.com/point-source/flywheel/issues/245) [#245](https://github.com/point-source/flywheel/issues/245)
+
 ## [2.0.1](https://github.com/point-source/flywheel/compare/v2.0.0...v2.0.1) (2026-06-08)
 
 
