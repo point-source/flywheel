@@ -207,6 +207,13 @@ preflight_inject() {
 # semantic-release, hand-rolled gh/git/npm producers in push/dispatch workflows)
 # rather than auditing every release tool — a missed exotic system is rare and
 # caught downstream, whereas a false positive blocks a clean repo for everyone.
+#
+# _release_conflict_block <producer> <path> — emit the one standard instance +
+# block for a detected producer; every match shares this message shape.
+_release_conflict_block() {
+  preflight_block release_conflict instance \
+    "$1 detected in $2 — it races Flywheel's tag/release creation. Remove or disable it, or re-run with --override-release-conflict."
+}
 preflight_detect_release_conflict() {
   local path base
   for path in .github/workflows/*.yml .github/workflows/*.yaml; do
@@ -220,35 +227,23 @@ preflight_detect_release_conflict() {
     fi
 
     # release-please — googleapis/release-please-action or release-please-action.
-    if grep -qi 'release-please' "$path"; then
-      preflight_block release_conflict instance \
-        "release-please detected in $path — it races Flywheel's tag/release creation. Remove or disable it, or re-run with --override-release-conflict."
-    fi
+    grep -qi 'release-please' "$path" && _release_conflict_block "release-please" "$path"
 
     # A separate semantic-release (cycjimmy/semantic-release-action or
     # npx semantic-release). flywheel's own files are already excluded above.
-    if grep -qi 'semantic-release' "$path"; then
-      preflight_block release_conflict instance \
-        "semantic-release detected in $path — it races Flywheel's tag/release creation. Remove or disable it, or re-run with --override-release-conflict."
-    fi
+    grep -qi 'semantic-release' "$path" && _release_conflict_block "semantic-release" "$path"
 
     # Hand-rolled producers only count when the workflow runs on push or
     # workflow_dispatch — the triggers that publish releases on merge/manual run.
     if grep -qE '^[[:space:]]*push:' "$path" || grep -qE '^[[:space:]]*workflow_dispatch:' "$path"; then
-      if grep -qE 'gh release create' "$path"; then
-        preflight_block release_conflict instance \
-          "gh release create detected in $path — it races Flywheel's tag/release creation. Remove or disable it, or re-run with --override-release-conflict."
-      fi
-      if grep -qE 'git tag|git push --tags|git push --follow-tags' "$path"; then
-        preflight_block release_conflict instance \
-          "git tag detected in $path — it races Flywheel's tag/release creation. Remove or disable it, or re-run with --override-release-conflict."
-      fi
-      if grep -qE 'npm version' "$path"; then
-        preflight_block release_conflict instance \
-          "npm version detected in $path — it races Flywheel's tag/release creation. Remove or disable it, or re-run with --override-release-conflict."
-      fi
+      grep -qE 'gh release create' "$path" && _release_conflict_block "gh release create" "$path"
+      grep -qE 'git tag|git push --tags|git push --follow-tags' "$path" && _release_conflict_block "git tag" "$path"
+      grep -qE 'npm version' "$path" && _release_conflict_block "npm version" "$path"
     fi
   done
+  # A trailing unmatched `grep ... &&` would leave a non-zero status; the gate
+  # reads FINDINGS_BLOCK_COUNT, not this return, so end deterministically at 0.
+  return 0
 }
 
 # preflight_run — run every detector and print the pre-flight summary. Detectors

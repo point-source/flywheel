@@ -174,76 +174,45 @@ jobs:
 
 const RELEASE_CONFLICT_BLOCK = /release[- ]conflict|release-please|semantic-release|gh release create|git tag|npm version/i;
 
+/** Drive init against a single workflow fixture and assert it produces an
+ * instance + block that halts the (non-interactive) run before any scaffold
+ * file is written. `producer` is the text or pattern the finding must name. */
+function expectConflictBlocks(workflow: string, producer: string | RegExp) {
+  const r = runInit({
+    args: SCAFFOLD_ARGS,
+    files: { ".github/workflows/release.yml": workflow },
+  });
+  try {
+    const combined = stripAnsi(r.stdout + r.stderr);
+    expect(r.status, `combined:\n${combined}`).not.toBe(0);
+    expect(combined).toMatch(/pre-flight (failed|halted)/i);
+    if (typeof producer === "string") expect(combined).toContain(producer);
+    else expect(combined).toMatch(producer);
+    expect(combined).toContain("[instance]");
+    for (const f of SCAFFOLD_FILES) {
+      expect(existsSync(join(r.work, f)), `expected ${f} NOT to be written`).toBe(false);
+    }
+  } finally {
+    rmSync(r.work, { recursive: true, force: true });
+  }
+}
+
 describe("init.sh — existing release-system detection (end-to-end)", () => {
   it("release-please ⇒ instance+block; non-interactive exits non-zero and writes nothing", () => {
-    const r = runInit({
-      args: SCAFFOLD_ARGS,
-      files: { ".github/workflows/release.yml": RELEASE_PLEASE_WF },
-    });
-    try {
-      const combined = stripAnsi(r.stdout + r.stderr);
-      expect(r.status, `combined:\n${combined}`).not.toBe(0);
-      expect(combined).toMatch(/pre-flight (failed|halted)/i);
-      expect(combined).toContain("release-please");
-      expect(combined).toContain("[instance]");
-      for (const f of SCAFFOLD_FILES) {
-        expect(existsSync(join(r.work, f)), `expected ${f} NOT to be written`).toBe(false);
-      }
-    } finally {
-      rmSync(r.work, { recursive: true, force: true });
-    }
+    expectConflictBlocks(RELEASE_PLEASE_WF, "release-please");
   });
 
   it("separate semantic-release ⇒ block (non-interactive, writes nothing)", () => {
-    const r = runInit({
-      args: SCAFFOLD_ARGS,
-      files: { ".github/workflows/release.yml": SEMANTIC_RELEASE_WF },
-    });
-    try {
-      const combined = stripAnsi(r.stdout + r.stderr);
-      expect(r.status, `combined:\n${combined}`).not.toBe(0);
-      expect(combined).toMatch(/pre-flight (failed|halted)/i);
-      expect(combined).toContain("semantic-release");
-      expect(combined).toContain("[instance]");
-      expect(existsSync(join(r.work, ".flywheel.yml"))).toBe(false);
-    } finally {
-      rmSync(r.work, { recursive: true, force: true });
-    }
+    expectConflictBlocks(SEMANTIC_RELEASE_WF, "semantic-release");
   });
 
   it("hand-rolled `gh release create` in a push workflow ⇒ block", () => {
-    const r = runInit({
-      args: SCAFFOLD_ARGS,
-      files: { ".github/workflows/release.yml": GH_RELEASE_CREATE_WF },
-    });
-    try {
-      const combined = stripAnsi(r.stdout + r.stderr);
-      expect(r.status, `combined:\n${combined}`).not.toBe(0);
-      expect(combined).toMatch(/pre-flight (failed|halted)/i);
-      expect(combined).toContain("gh release create");
-      expect(combined).toContain("[instance]");
-      expect(existsSync(join(r.work, ".flywheel.yml"))).toBe(false);
-    } finally {
-      rmSync(r.work, { recursive: true, force: true });
-    }
+    expectConflictBlocks(GH_RELEASE_CREATE_WF, "gh release create");
   });
 
   it("hand-rolled `git tag` / `npm version` in a workflow_dispatch workflow ⇒ block", () => {
-    const r = runInit({
-      args: SCAFFOLD_ARGS,
-      files: { ".github/workflows/release.yml": GIT_TAG_NPM_VERSION_WF },
-    });
-    try {
-      const combined = stripAnsi(r.stdout + r.stderr);
-      expect(r.status, `combined:\n${combined}`).not.toBe(0);
-      expect(combined).toMatch(/pre-flight (failed|halted)/i);
-      // Either of the hand-rolled producers is enough to block.
-      expect(combined).toMatch(/git tag|npm version/);
-      expect(combined).toContain("[instance]");
-      expect(existsSync(join(r.work, ".flywheel.yml"))).toBe(false);
-    } finally {
-      rmSync(r.work, { recursive: true, force: true });
-    }
+    // Either of the hand-rolled producers is enough to block.
+    expectConflictBlocks(GIT_TAG_NPM_VERSION_WF, /git tag|npm version/);
   });
 
   it("CLEAN repo (ordinary ci.yml on pull_request) ⇒ no block, proceeds and writes .flywheel.yml", () => {
@@ -293,38 +262,32 @@ describe("init.sh — existing release-system detection (end-to-end)", () => {
     }
   });
 
-  it("without --override-release-conflict, release-please blocks in BOTH TTY modes", () => {
-    // Non-interactive.
-    const nonInt = runInit({
-      args: SCAFFOLD_ARGS,
-      files: { ".github/workflows/release.yml": RELEASE_PLEASE_WF },
-    });
-    try {
-      const combined = stripAnsi(nonInt.stdout + nonInt.stderr);
-      expect(nonInt.status, `combined:\n${combined}`).not.toBe(0);
-      expect(combined).toMatch(/pre-flight failed/i);
-      expect(combined).not.toContain("overridden via --override-release-conflict");
-      expect(existsSync(join(nonInt.work, ".flywheel.yml"))).toBe(false);
-    } finally {
-      rmSync(nonInt.work, { recursive: true, force: true });
-    }
-
-    // Interactive.
-    const inter = runInit({
-      args: SCAFFOLD_ARGS,
-      env: { FLYWHEEL_ASSUME_INTERACTIVE: "1" },
-      files: { ".github/workflows/release.yml": RELEASE_PLEASE_WF },
-    });
-    try {
-      const combined = stripAnsi(inter.stdout + inter.stderr);
-      expect(inter.status, `combined:\n${combined}`).not.toBe(0);
-      expect(combined).toContain("Pre-flight halted");
-      expect(combined).not.toContain("overridden via --override-release-conflict");
-      expect(existsSync(join(inter.work, ".flywheel.yml"))).toBe(false);
-    } finally {
-      rmSync(inter.work, { recursive: true, force: true });
-    }
-  });
+  // Without the flag the block stands in BOTH TTY modes — only the wording
+  // differs (non-interactive "failed" vs interactive "halted"), and neither
+  // shows the override demotion. This is the "override is never the default"
+  // guarantee.
+  it.each([
+    ["non-interactive", {}, /pre-flight failed/i],
+    ["interactive", { FLYWHEEL_ASSUME_INTERACTIVE: "1" }, /Pre-flight halted/],
+  ] as const)(
+    "without --override-release-conflict, release-please blocks (%s)",
+    (_label, env, haltText) => {
+      const r = runInit({
+        args: SCAFFOLD_ARGS,
+        env,
+        files: { ".github/workflows/release.yml": RELEASE_PLEASE_WF },
+      });
+      try {
+        const combined = stripAnsi(r.stdout + r.stderr);
+        expect(r.status, `combined:\n${combined}`).not.toBe(0);
+        expect(combined).toMatch(haltText);
+        expect(combined).not.toContain("overridden via --override-release-conflict");
+        expect(existsSync(join(r.work, ".flywheel.yml"))).toBe(false);
+      } finally {
+        rmSync(r.work, { recursive: true, force: true });
+      }
+    },
+  );
 
   it("--override-release-conflict demotes the block to a warn and proceeds (interactive)", () => {
     const r = runInit({
