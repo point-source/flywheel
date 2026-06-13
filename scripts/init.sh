@@ -186,6 +186,60 @@ preflight_inject() {
   done <<< "${FLYWHEEL_PREFLIGHT_INJECT}"
 }
 
+# preflight_detect_release_conflict — read-only scan for an existing release
+# system that would race flywheel's tag/release creation (SPEC.md
+# §spec:preflight-release-conflict). Iterates the adopter's own workflow files
+# (skipping flywheel's scaffold and anything referencing point-source/flywheel)
+# and emits an instance + block per (file, producer-kind) match via
+# preflight_block. Deliberately minimal and biased to FALSE NEGATIVES: it covers
+# the systems that actually race flywheel (release-please, a separate
+# semantic-release, hand-rolled gh/git/npm producers in push/dispatch workflows)
+# rather than auditing every release tool — a missed exotic system is rare and
+# caught downstream, whereas a false positive blocks a clean repo for everyone.
+preflight_detect_release_conflict() {
+  local path base
+  for path in .github/workflows/*.yml .github/workflows/*.yaml; do
+    [[ -f "$path" ]] || continue
+    base="$(basename "$path")"
+    # Skip flywheel's own scaffold workflows.
+    case "$base" in flywheel-*.yml|flywheel-*.yaml) continue ;; esac
+    # Defensive self-exclusion: any workflow wiring up flywheel itself is ours.
+    if grep -qiF 'point-source/flywheel' "$path"; then
+      continue
+    fi
+
+    # release-please — googleapis/release-please-action or release-please-action.
+    if grep -qi 'release-please' "$path"; then
+      preflight_block release_conflict instance \
+        "release-please detected in $path — it races Flywheel's tag/release creation. Remove or disable it, or re-run with --override-release-conflict."
+    fi
+
+    # A separate semantic-release (cycjimmy/semantic-release-action or
+    # npx semantic-release). flywheel's own files are already excluded above.
+    if grep -qi 'semantic-release' "$path"; then
+      preflight_block release_conflict instance \
+        "semantic-release detected in $path — it races Flywheel's tag/release creation. Remove or disable it, or re-run with --override-release-conflict."
+    fi
+
+    # Hand-rolled producers only count when the workflow runs on push or
+    # workflow_dispatch — the triggers that publish releases on merge/manual run.
+    if grep -qE '^[[:space:]]*push:' "$path" || grep -qE '^[[:space:]]*workflow_dispatch:' "$path"; then
+      if grep -qE 'gh release create' "$path"; then
+        preflight_block release_conflict instance \
+          "gh release create detected in $path — it races Flywheel's tag/release creation. Remove or disable it, or re-run with --override-release-conflict."
+      fi
+      if grep -qE 'git tag|git push --tags|git push --follow-tags' "$path"; then
+        preflight_block release_conflict instance \
+          "git tag detected in $path — it races Flywheel's tag/release creation. Remove or disable it, or re-run with --override-release-conflict."
+      fi
+      if grep -qE 'npm version' "$path"; then
+        preflight_block release_conflict instance \
+          "npm version detected in $path — it races Flywheel's tag/release creation. Remove or disable it, or re-run with --override-release-conflict."
+      fi
+    fi
+  done
+}
+
 # preflight_run — run every detector and print the pre-flight summary. Detectors
 # emit via the shared `finding` (and the preflight_block wrapper added with the
 # gate). The summary is the first thing the adopter sees; the gate acts on it
@@ -195,7 +249,7 @@ preflight_run() {
   echo "Pre-flight checks:"
   # >>> detector seam — Batches 3–5 register their detectors here >>>
   #   preflight_detect_gh_capability     # §spec:preflight-gh-capability (Batch 3)
-  #   preflight_detect_release_conflict  # §spec:preflight-release-conflict (Batch 4)
+  preflight_detect_release_conflict  # §spec:preflight-release-conflict (Batch 4)
   #   preflight_detect_credentials_app   # §spec:preflight-credentials-app (Batch 5)
   preflight_inject
   # <<< detector seam <<<
