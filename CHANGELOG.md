@@ -1,3 +1,10 @@
+# [2.1.0-dev.3](https://github.com/point-source/flywheel/compare/v2.1.0-dev.2...v2.1.0-dev.3) (2026-06-13)
+
+
+### Features
+
+* pre-flight environment detection before setup starts ([#250](https://github.com/point-source/flywheel/issues/250)) ([418255b](https://github.com/point-source/flywheel/commit/418255b5caf1ed0af4e8ca0ba82fd1244e8a8502)), closes [#232](https://github.com/point-source/flywheel/issues/232) [#232](https://github.com/point-source/flywheel/issues/232) [#232](https://github.com/point-source/flywheel/issues/232) [#232](https://github.com/point-source/flywheel/issues/232) [preflight-#capability](https://github.com/preflight-/issues/capability) [preflight-#capability](https://github.com/preflight-/issues/capability) [#232](https://github.com/point-source/flywheel/issues/232) [#capability](https://github.com/point-source/flywheel/issues/capability) [preflight-#capability](https://github.com/preflight-/issues/capability) [preflight-#capability](https://github.com/preflight-/issues/capability) [#capability](https://github.com/point-source/flywheel/issues/capability) [preflight-#capability](https://github.com/preflight-/issues/capability) [preflight-#capability](https://github.com/preflight-/issues/capability) [preflight-#capability](https://github.com/preflight-/issues/capability) [#232](https://github.com/point-source/flywheel/issues/232)
+
 # [2.1.0-dev.2](https://github.com/point-source/flywheel/compare/v2.1.0-dev.1...v2.1.0-dev.2) (2026-06-13)
 
 
