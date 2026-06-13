@@ -180,16 +180,46 @@ preflight_detect_gh_capability() {
     finding local-env block "gh (GitHub CLI) is not installed — required to resolve the repository, write App credentials, and apply rulesets (install: https://cli.github.com)"
     return 0
   fi
-  # auth_status is captured for Workstream 2's scope checks (it parses the
-  # "Token scopes:" line); unused until then.
+  # auth_status is captured here and reused below for the path-specific scope
+  # checks (which parse its "Token scopes:" line).
   local auth_status
-  # shellcheck disable=SC2034
   if ! auth_status="$(gh auth status 2>&1)"; then
     finding local-env block "gh is not authenticated — run 'gh auth login' (setup needs it to resolve the repository and write App credentials)"
     return 0
   fi
   finding local-env info "gh installed and authenticated"
-  # >>> Workstream 2 scope checks go here (reuse $auth_status) >>>
+
+  # Path-specific scope checks (§spec:preflight-gh-capability): probe only the
+  # scopes the CHOSEN path (resolved from flags up front) will exercise. Read
+  # the classic OAuth token scopes from gh auth state.
+  local scopes_line scopes
+  scopes_line="$(printf '%s\n' "$auth_status" | grep -i 'Token scopes:' | head -n1)"
+  # If gh reports no classic scopes line (fine-grained PAT or App token), we
+  # cannot determine classic scopes — skip the scope blocks rather than emit a
+  # false positive; the de-swallowed gh calls remain the backstop.
+  if [[ -n "$scopes_line" ]]; then
+    scopes="$(printf '%s' "$scopes_line" | tr -d "',")"
+    # repo-admin: needed unless BOTH credential writes and ruleset apply are skipped.
+    if [[ "$SKIP_SECRETS" -ne 1 || "$SKIP_RULESETS" -ne 1 ]]; then
+      if ! grep -qw 'repo' <<<"$scopes"; then
+        finding local-env block "gh token lacks the 'repo' scope (repo-admin) — required later to write the FLYWHEEL_GH_APP_ID variable and FLYWHEEL_GH_APP_PRIVATE_KEY secret and to apply rulesets. Re-auth with: gh auth refresh -s repo"
+      fi
+    fi
+    # admin:org: needed only when credentials are scoped org-wide (--scope org).
+    if [[ "$SCOPE" == "org" ]]; then
+      if ! grep -qw 'admin:org' <<<"$scopes"; then
+        finding local-env block "gh token lacks 'admin:org' — required later to write org-wide (--scope org) credentials: the FLYWHEEL_GH_APP_ID variable and FLYWHEEL_GH_APP_PRIVATE_KEY secret at org level. Re-auth with: gh auth refresh -s admin:org"
+      fi
+    fi
+    # GitHub-App creation permission: the create-vs-reuse-App choice is
+    # interactive and not knowable from a flag at pre-flight time, so it cannot
+    # be definitively pre-checked here. We deliberately do NOT invent a flag or
+    # block speculatively. Creating an App under an Organization effectively
+    # requires org-owner / 'admin:org' (already covered by the --scope org check
+    # above); under a User account no extra scope is needed. The de-swallowed
+    # credential WRITE (in write_app_id_var/write_app_key_secret) is the backstop
+    # if the chosen App-creation path turns out to exceed the token's grant.
+  fi
 }
 
 # preflight_run — run every detector and print the pre-flight summary. Detectors
@@ -641,6 +671,12 @@ if [[ "$SKIP_RULESETS" -eq 0 && -x "${SCRIPT_DIR:-}/apply-rulesets.sh" ]]; then
   # the historical default); fall back to org-level if the owner is an
   # Organization, so re-runs on an org-scoped install still find the value.
   if [[ -z "${CREATED_APP_ID:-}" ]]; then
+    # The `|| true` here is intentional and is NOT a scope-failure swallow:
+    # this is a best-effort cache READBACK where absence is legitimately
+    # non-fatal (the variable is expected to be missing on a first run). Scope
+    # gaps are surfaced up front by the pre-flight scope block and loudly by the
+    # credential WRITE helpers (write_app_id_var/write_app_key_secret), which do
+    # not swallow — so a permission failure never hides behind this read.
     CREATED_APP_ID="$(gh variable get FLYWHEEL_GH_APP_ID --repo "$REPO" 2>/dev/null || true)"
     if [[ -z "$CREATED_APP_ID" ]]; then
       detect_owner_type
@@ -692,7 +728,14 @@ if [[ "$SKIP_RULESETS" -eq 0 && -x "${SCRIPT_DIR:-}/apply-rulesets.sh" ]]; then
         # Cache for next-run readback. Use SCOPE if resolved earlier in this
         # run, otherwise default to repo-level (safe for User-owned repos).
         [[ -z "$SCOPE" ]] && SCOPE="repo"
-        write_app_id_var "$CREATED_APP_ID" >/dev/null 2>&1 || true
+        # De-swallowed credential WRITE (§spec:preflight-gh-capability): a
+        # scope/permission failure here must surface, not vanish behind
+        # `|| true`. The cache-write is non-essential to this run (the App ID is
+        # still passed via --app-id below), so we warn rather than abort — but
+        # we no longer hide the gh error.
+        if ! write_app_id_var "$CREATED_APP_ID"; then
+          echo "  warning: could not cache FLYWHEEL_GH_APP_ID variable (check 'repo'/'admin:org' scope) — continuing with --app-id only." >&2
+        fi
       fi
     fi
     if [[ -z "${CREATED_APP_ID:-}" ]]; then
