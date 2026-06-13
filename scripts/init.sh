@@ -32,6 +32,12 @@
 #                         is installed org-wide. Requires an admin:org gh
 #                         token. Defaults to prompting interactively when
 #                         the owner is an Organization, otherwise `repo`.
+#   --override-release-conflict
+#                         proceed past a detected existing release system
+#                         (release-please / semantic-release / a hand-rolled
+#                         tag/release step in a workflow). Opt-in and
+#                         deliberate; never the default. Interactive only — a
+#                         non-interactive run still exits non-zero on the block.
 #
 # Dependencies: git, gh. (apply-rulesets.sh additionally needs jq + python3
 # with PyYAML.)
@@ -53,6 +59,10 @@ SCOPE=""
 # rulesets this script applies, otherwise semantic-release tag pushes are
 # rejected).
 CREATED_APP_ID=""
+# Opt-in only: set solely by --override-release-conflict. When 1, preflight_block
+# demotes the release_conflict block to an advisory warn (never inferred). Read
+# via indirect expansion (${!ovar}), so export to mark it used for shellcheck.
+export PREFLIGHT_OVERRIDE_release_conflict=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -61,6 +71,7 @@ while [[ $# -gt 0 ]]; do
     --skip-rulesets) SKIP_RULESETS=1; shift ;;
     --required-checks) REQUIRED_CHECKS="$2"; shift 2 ;;
     --force) FORCE=1; shift ;;
+    --override-release-conflict) PREFLIGHT_OVERRIDE_release_conflict=1; shift ;;
     --version) FLYWHEEL_VERSION="$2"; shift 2 ;;
     --scope)
       case "$2" in
@@ -69,7 +80,7 @@ while [[ $# -gt 0 ]]; do
       esac
       shift 2
       ;;
-    -h|--help) sed -n '2,37p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,43p' "$0"; exit 0 ;;
     *) echo "Unknown argument: $1" >&2; exit 2 ;;
   esac
 done
