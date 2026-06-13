@@ -511,13 +511,19 @@ Flywheel is designed for repos where agent swarms produce dozens or hundreds of 
 - **Don't subscribe heavy workflows to `pull_request: synchronize` if you can avoid it.** Lint and unit tests are fine — they're seconds, not minutes. Reserve full integration / e2e suites for `merge_group:` only. Adopters who put expensive workflows on both triggers pay double.
 - **Use `concurrency: cancel-in-progress: true` on PR-triggered workflows** so rapid edits collapse to one surviving run per PR. The Flywheel templates already do this; mirror it for your own workflows.
 
-The first and third rulesets can be applied in one command. **Pass `--app-id` — it's mandatory**, not optional:
+The first and third rulesets can be applied in one command. **Pass `--app-id` — it's mandatory**, not optional. Both forms below are equivalent and take the same flags (add `--release-required-checks "<check>"` to gate release branches too):
+
+From a Flywheel checkout:
 
 ```bash
 scripts/apply-rulesets.sh <owner/repo> --required-checks "quality" --app-id <your-app-id>
 ```
 
-(Or via `curl -fsSL https://raw.githubusercontent.com/point-source/flywheel/main/scripts/apply-rulesets.sh | bash -s -- <owner/repo>` if you don't have the Flywheel repo checked out.)
+Piped, with no checkout (the script fetches its ruleset templates over the network):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/point-source/flywheel/main/scripts/apply-rulesets.sh | bash -s -- <owner/repo> --required-checks "quality" --app-id <your-app-id>
+```
 
 > **PyYAML is auto-provisioned.** `apply-rulesets.sh` needs PyYAML to read `.flywheel.yml`. When your `python3` can't `import yaml` (e.g. stock macOS, where PyYAML isn't preinstalled), the script provisions it into a throwaway virtualenv for that single run and removes it on exit — nothing is left installed. You don't need to `pip install` anything first (#245).
 

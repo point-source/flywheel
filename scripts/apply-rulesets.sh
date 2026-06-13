@@ -17,6 +17,14 @@
 #
 # Usage:
 #   ./scripts/apply-rulesets.sh <owner/repo> [--config <path>] [--required-checks "quality,build"] [--release-required-checks "e2e"] [--app-id 12345]
+#   # or piped, with no Flywheel checkout:
+#   curl -fsSL https://raw.githubusercontent.com/point-source/flywheel/main/scripts/apply-rulesets.sh | bash -s -- <owner/repo> [flags]
+#
+# When not run from a checkout, the four ruleset templates are fetched from
+# raw.githubusercontent.com at a single, deterministically chosen ref (default
+# `main` — the ref the documented one-liner publishes from). Override FLYWHEEL_REF
+# to pin a piped run to a tagged release, or FLYWHEEL_RULESETS_BASE to point at
+# an arbitrary template source.
 #
 # --config defaults to ./.flywheel.yml. Use it to apply rulesets that match
 # a config that hasn't been merged to the current working tree yet (e.g.
@@ -101,8 +109,18 @@ done
 # interrupt mid-provision still removes the throwaway dir.
 PYYAML_PYTHON="python3"
 PYYAML_TMPDIR=""
-cleanup_pyyaml() { [[ -n "$PYYAML_TMPDIR" ]] && rm -rf "$PYYAML_TMPDIR"; return 0; }
-trap cleanup_pyyaml EXIT
+# Set when a piped run (no checkout) fetches ruleset templates into a throwaway
+# dir, below. Declared here so the shared cleanup trap can see it under `set -u`.
+RULESETS_TMPDIR=""
+# A single EXIT handler removes every throwaway dir this run created — the PyYAML
+# venv and the fetched-templates dir — so nothing is left behind on success,
+# error under `set -e`, or interrupt. INT/TERM `exit` so they funnel through it.
+cleanup_tmpdirs() {
+  [[ -n "$PYYAML_TMPDIR" ]] && rm -rf "$PYYAML_TMPDIR"
+  [[ -n "$RULESETS_TMPDIR" ]] && rm -rf "$RULESETS_TMPDIR"
+  return 0
+}
+trap cleanup_tmpdirs EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
@@ -136,7 +154,44 @@ if [[ ! -f "$CONFIG_PATH" ]]; then
   exit 1
 fi
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Single source of the ref a piped run fetches templates from, so this script's
+# logic and the ruleset shapes it applies never drift across versions. A
+# tag-pinned piped invocation can set FLYWHEEL_REF to match its own ref.
+FLYWHEEL_REF="${FLYWHEEL_REF:-main}"
+RULESETS_BASE="${FLYWHEEL_RULESETS_BASE:-https://raw.githubusercontent.com/point-source/flywheel/${FLYWHEEL_REF}/scripts/rulesets}"
+# When piped via `curl ... | bash`, BASH_SOURCE is unset and `set -u` would
+# trip; default to empty and skip local-rulesets detection in that case.
+SCRIPT_SRC="${BASH_SOURCE[0]:-}"
+SCRIPT_DIR=""
+if [[ -n "$SCRIPT_SRC" ]]; then
+  SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_SRC")" 2>/dev/null && pwd || true)"
+fi
+
+# Resolve where the ruleset templates live. From a checkout this is the
+# bundled sibling dir (byte-for-byte the old behavior).
+if [[ -n "$SCRIPT_DIR" && -d "$SCRIPT_DIR/rulesets" ]]; then
+  RULESETS_DIR="$SCRIPT_DIR/rulesets"
+else
+  # Piped (no checkout on disk): fetch every ruleset template we'll need into
+  # a temp dir BEFORE applying anything, so a failed fetch aborts before any
+  # ruleset is created or any repo setting is flipped — never half-protected.
+  # Templates land in a throwaway dir cleaned up by the shared EXIT trap above
+  # (cleanup_tmpdirs) — no second trap here, which would clobber that handler
+  # and leak the PyYAML venv.
+  RULESETS_TMPDIR="$(mktemp -d)"
+  RULESETS_DIR="$RULESETS_TMPDIR"
+  needed_rulesets=(managed-branches.json managed-branches-review.json tag-namespace.json)
+  if [[ -n "$RELEASE_REQUIRED_CHECKS" ]]; then
+    needed_rulesets+=(release-gate.json)
+  fi
+  for rs in "${needed_rulesets[@]}"; do
+    if ! curl -fsSL "$RULESETS_BASE/$rs" -o "$RULESETS_DIR/$rs"; then
+      echo "error: could not fetch ruleset template '$rs' from $RULESETS_BASE" >&2
+      echo "  A piped run needs network access to fetch its templates; no rulesets were applied." >&2
+      exit 1
+    fi
+  done
+fi
 
 branch_refs_json="$(CONFIG_PATH="$CONFIG_PATH" "$PYYAML_PYTHON" - <<'PYEOF'
 import json, os, yaml
@@ -200,7 +255,7 @@ echo "Applying destruction-protection ruleset to $branch_count branch(es) in $RE
 destruction_payload="$(jq \
   --argjson branches "$branch_refs_json" \
   '.conditions.ref_name.include = $branches' \
-  "$SCRIPT_DIR/rulesets/managed-branches.json")"
+  "$RULESETS_DIR/managed-branches.json")"
 
 apply_ruleset "$destruction_payload"
 
@@ -232,7 +287,7 @@ echo "Applying review ruleset to $branch_count branch(es) in $REPO..."
 review_payload="$(jq \
   --argjson branches "$branch_refs_json" \
   '.conditions.ref_name.include = $branches' \
-  "$SCRIPT_DIR/rulesets/managed-branches-review.json")"
+  "$RULESETS_DIR/managed-branches-review.json")"
 
 if [[ -n "$REQUIRED_CHECKS" ]]; then
   checks_json="$(echo "$REQUIRED_CHECKS" | jq -R 'split(",") | map({context: .})')"
@@ -255,7 +310,7 @@ apply_ruleset "$review_payload"
 
 echo "Applying tag-namespace ruleset to $REPO..."
 
-tag_payload="$(cat "$SCRIPT_DIR/rulesets/tag-namespace.json")"
+tag_payload="$(cat "$RULESETS_DIR/tag-namespace.json")"
 if [[ -n "$APP_ID" ]]; then
   tag_payload="$(echo "$tag_payload" | jq \
     --arg app_id "$APP_ID" \
@@ -284,7 +339,7 @@ if [[ -n "$RELEASE_REQUIRED_CHECKS" ]]; then
       --argjson checks "$release_checks_json" \
       '.conditions.ref_name.include = $branches
        | .rules += [{"type":"required_status_checks","parameters":{"required_status_checks":$checks,"strict_required_status_checks_policy":false}}]' \
-      "$SCRIPT_DIR/rulesets/release-gate.json")"
+      "$RULESETS_DIR/release-gate.json")"
 
     # App bypass on the release-gate ruleset too. semantic-release pushes
     # the chore(release) commit and tag directly to the production branch

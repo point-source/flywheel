@@ -1241,3 +1241,143 @@ index but no persistent footprint and no new credential surface.
   assumption of local project tooling.
 
 §req:apply-rulesets-pyyaml-constraints §req:apply-rulesets-pyyaml-stories
+## Stdin-safe ruleset application §spec:apply-rulesets-stdin
+
+*Status: complete*
+
+The `apply-rulesets.sh` one-liner documented in `docs/adopter/setup.md` §5
+— `curl -fsSL …/apply-rulesets.sh | bash -s -- <owner/repo>` — applies the
+full set of branch and tag protection rulesets end to end for an adopter
+who has no Flywheel checkout. The piped run resolves its four ruleset
+templates (`managed-branches.json`, `managed-branches-review.json`,
+`tag-namespace.json`, `release-gate.json`) regardless of the working
+directory the adopter happens to be in — `$HOME`, an unrelated repository,
+or an empty `mktemp -d` all produce the same applied rulesets. No run dies
+with exit 2 or "Could not open file" before the first GitHub API call.
+§req:apply-rulesets-stdin §req:apply-rulesets-stdin-criteria
+
+**The problem this fixes.** A script piped through `bash` has no file on
+disk, so `BASH_SOURCE[0]` is unset. `apply-rulesets.sh` located its
+templates with `SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"`
+and read `"$SCRIPT_DIR/rulesets/<name>.json"` — a self-location that only
+resolves when the script's own file is present. Under the piped form, with
+`set -u` active, the unbound `BASH_SOURCE[0]` degrades `SCRIPT_DIR` to the
+caller's working directory; the subsequent `jq … "$SCRIPT_DIR/rulesets/…"`
+read fails unless the caller already stands inside a Flywheel checkout —
+exactly the situation the piped form exists to avoid. The documented first
+protection step of the quick path therefore never applied anything for an
+adopter taking the piped route. §req:apply-rulesets-stdin
+
+**The resolution rule — local first, then fetch, mirroring the sibling
+scripts.** The fix adopts the self-location idiom the other stdin-safe
+quick-start scripts already use (`init.sh`, `doctor.sh`): guard
+`BASH_SOURCE[0]` under strict mode (`${BASH_SOURCE[0]:-}`), use the bundled
+`rulesets/` directory when the script runs from a checkout, and otherwise
+fetch the four templates over the network — the same `raw.githubusercontent.com`
+source the run was itself piped from, and the same source `init.sh` fetches
+its `templates/` from. This was chosen over inventing a new mechanism
+because (a) it is the proven idiom already in this script family, (b) it
+keeps the `rulesets/*.json` files the single source of truth rather than
+duplicating them, and (c) it makes the invocation contract uniform across
+`init.sh`, `doctor.sh`, and `apply-rulesets.sh` — a consistency the
+requirement calls for in its own right. §req:apply-rulesets-stdin-constraints
+
+**Version-consistent templates without self-location.** Because a piped
+script cannot read its own file, it cannot derive from the runner which
+Flywheel ref it was fetched from. The templates a piped run applies shall
+nonetheless match the logic of the script applying them, never a silent
+script-from-one-version / shapes-from-another mismatch. The fetch therefore
+draws from a deterministically chosen ref — the same ref the documented
+`curl` URL publishes from — rather than from anything inferred at runtime,
+and the ruleset JSON shapes the script's `jq`/`gh` logic depends on stay
+stable across versions. A checkout run is inherently consistent because it
+reads the templates shipped alongside it. §req:apply-rulesets-stdin-constraints
+
+**Docs present only invocation forms that work.** `docs/adopter/setup.md`
+(and the README, where it documents one-liners) shows a piped form for
+`apply-rulesets.sh` only because the piped form now works; the checkout
+form is documented alongside as before. Every script the docs present as a
+`curl … | bash` one-liner is verified stdin-safe — none carries a latent
+`BASH_SOURCE`/`SCRIPT_DIR` self-location failure. Where a script shall run
+from a checkout, the docs do not show a piped form for it. The maintainer
+learns of any such latent failure from this audit rather than from an
+adopter's bug report. §req:apply-rulesets-stdin-criteria §req:apply-rulesets-stdin-stories
+
+**Fail clean, idempotent, strict, no new dependencies — all preserved.** A
+run that cannot obtain valid templates (e.g. no network on a piped run)
+still aborts before creating any ruleset, flipping `delete_branch_on_merge`,
+or changing any repository setting — the adopter's repository is left
+exactly as it was found, never half-protected. The create-or-replace-by-name
+behaviour is untouched: re-running (piped or from a checkout) updates
+existing rulesets in place rather than stacking duplicates. The fix coexists
+with `set -u` and the script's other strict-mode guards rather than relaxing
+them to paper over the unbound variable. It imposes no tool or privilege on
+the adopter beyond what the script already requires (`gh`, `jq`,
+`python3`/PyYAML, and network — a piped run is itself network-fetched and
+calls the GitHub API). §req:apply-rulesets-stdin-criteria §req:apply-rulesets-stdin-constraints
+
+**Same shape as the composite-action-path defect.** This is the
+§req:composite-action-path failure mode (§spec:composite-self-reference) in
+a second place: a code path only the real adopter exercises — consuming a
+Flywheel script without Flywheel's source already on disk — that the
+project's own runs, which always have the checkout present, never modelled.
+The fix is to make that path work and to widen the audit to every documented
+one-liner, so the class is closed rather than patched at one site.
+§req:apply-rulesets-stdin
+
+**Alternatives considered.**
+
+- *Embed the four ruleset JSONs inline in the script* (heredocs), so a
+  piped run carries its own templates and there is zero script/template
+  version skew by construction. This is the strongest version-consistency
+  guarantee, but it duplicates the `rulesets/*.json` files into the script
+  (a new drift surface needing its own parity guard) and diverges from the
+  local-first/fetch idiom the sibling scripts use — losing the uniform
+  invocation contract the requirement asks for. Rejected in favour of the
+  sibling-script idiom plus stable, deterministically-sourced templates.
+- *Relax `set -u` or default `SCRIPT_DIR` to a hardcoded path.* Papers over
+  the unbound `BASH_SOURCE[0]` without making the piped path actually find
+  its templates, and weakens the strict-mode guard the script relies on to
+  fail fast. Rejected.
+- *Document the piped form away — show only the checkout invocation.* Keeps
+  the docs honest at the cost of the quick-path capability the piped form
+  exists to provide, and leaves the adopter who pipes `init.sh`/`doctor.sh`
+  successfully to wonder why this one script is special. Rejected: the
+  decided outcome is to make the documented command work, not to retract it.
+
+## Stdin-path ruleset regression test §spec:apply-rulesets-stdin-test
+
+*Status: complete*
+
+A test in Flywheel's cheap suite — unit / per-PR CI, not the rate-limited
+e2e sandbox — runs `apply-rulesets.sh` the way an adopter pipes it: read
+from stdin, with no Flywheel checkout in the working directory. It fails
+when the script cannot resolve its four ruleset templates and passes once
+the script resolves them. This class of break — a Flywheel script unable to
+find its own bundled assets when run without a workspace that already holds
+Flywheel's source — is caught before a release is built, not only by the
+e2e gate or by an adopter. §req:apply-rulesets-stdin-criteria §req:apply-rulesets-stdin-stories
+
+**Why the cheap suite, and why e2e was not enough.** The defect shipped
+because every-PR suites always invoked the script from a checkout, where
+`SCRIPT_DIR` resolves and the templates are found; only the adopter path,
+which the cheap suites never modelled, exercises the stdin self-location.
+A cheap test moves first detection of this class to every PR. The test
+reproduces the failure at template resolution — before any `gh` API call —
+so it needs no live GitHub access and adds no load to the rate-limited
+sandbox installation the e2e suite already strains (§spec:sandbox-test-budget,
+§req:sandbox-ci-budget). This mirrors the cheap adopter-style guard added
+for the composite-action-path defect (§spec:adopter-resolution-test).
+§req:apply-rulesets-stdin §req:apply-rulesets-stdin-constraints
+
+**What the test asserts.** The guard models the resolution outcome, not a
+literal code shape: piped from stdin in a directory containing no Flywheel
+source, the script obtains all four ruleset templates rather than aborting
+on a missing `SCRIPT_DIR/rulesets/…` read. A reviewer can state the property
+in one sentence — "piped with no checkout, the script still finds its
+templates" — and it stays true after the underlying resolution mechanism
+changes. §req:apply-rulesets-stdin-criteria
+
+**Backstop unchanged.** The e2e suite keeps exercising the full adopter
+path as a backstop; it is no longer the first line of defence for this bug
+class. §req:apply-rulesets-stdin-criteria
