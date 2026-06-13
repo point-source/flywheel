@@ -1,3 +1,10 @@
+# [2.1.0-dev.2](https://github.com/point-source/flywheel/compare/v2.1.0-dev.1...v2.1.0-dev.2) (2026-06-13)
+
+
+### Features
+
+* stdin-safe ruleset application for piped apply-rulesets.sh ([#249](https://github.com/point-source/flywheel/issues/249)) ([4b67490](https://github.com/point-source/flywheel/commit/4b67490830ca4a0f21a80ff69e6932e6a6214f23)), closes [#244](https://github.com/point-source/flywheel/issues/244) [#244](https://github.com/point-source/flywheel/issues/244) [#244](https://github.com/point-source/flywheel/issues/244) [#244](https://github.com/point-source/flywheel/issues/244) [#244](https://github.com/point-source/flywheel/issues/244) [#244](https://github.com/point-source/flywheel/issues/244) [#245](https://github.com/point-source/flywheel/issues/245) [#244](https://github.com/point-source/flywheel/issues/244)
+
 # [2.1.0-dev.1](https://github.com/point-source/flywheel/compare/v2.0.1...v2.1.0-dev.1) (2026-06-13)
 
 
