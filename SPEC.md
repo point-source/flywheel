@@ -1130,7 +1130,7 @@ rather than an already-superseded one. §req:setup-node-v5
 
 ## Pre-flight finding classification §spec:preflight-classification
 
-*Status: not started*
+*Status: complete*
 
 Setup tooling speaks one vocabulary for "what is wrong with my setup."
 Every finding emitted by `init.sh`'s pre-flight pass and by `doctor.sh`
