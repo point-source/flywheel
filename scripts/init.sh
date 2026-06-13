@@ -193,7 +193,10 @@ preflight_detect_gh_capability() {
   # scopes the CHOSEN path (resolved from flags up front) will exercise. Read
   # the classic OAuth token scopes from gh auth state.
   local scopes_line scopes
-  scopes_line="$(printf '%s\n' "$auth_status" | grep -i 'Token scopes:' | head -n1)"
+  # `|| true` is load-bearing: init.sh runs under `set -euo pipefail`, so without
+  # it a no-match grep (exit 1) would propagate through the pipe and abort the
+  # whole run on a fine-grained PAT / App token — the exact case we mean to skip.
+  scopes_line="$(printf '%s\n' "$auth_status" | grep -i 'Token scopes:' | head -n1 || true)"
   # If gh reports no classic scopes line (fine-grained PAT or App token), we
   # cannot determine classic scopes — skip the scope blocks rather than emit a
   # false positive; the de-swallowed gh calls remain the backstop.

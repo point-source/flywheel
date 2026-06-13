@@ -37,11 +37,10 @@ import { stripAnsi } from "./helpers/ansi.js";
 // without a TTY. Block tests halt at the gate before REPO resolution; we still
 // answer `gh repo view` in the stub for safety.
 //
-// KNOWN BUG surfaced by this suite (init.sh NOT modified per the workstream
-// brief): on the no-`Token scopes:`-line path the scopes-line extraction's `grep`
-// exits non-zero and, under init.sh's `set -euo pipefail`, aborts the whole run.
-// See the `it.fails` case below for the spec-intended behavior and the companion
-// case pinning today's actual behavior.
+// A fine-grained PAT / App token reports no classic `Token scopes:` line; the
+// detector skips the scope blocks in that case (no false positive) and the run
+// passes cleanly. The `grep … || true` guard in init.sh makes that skip safe
+// under `set -euo pipefail`; the case below pins that behavior.
 //
 // The gh-not-installed branch is covered behaviorally only: shadowing `gh` to
 // "not found" via PATH would also starve every other gh call init makes, so
@@ -234,51 +233,12 @@ describe("init.sh — gh-capability pre-flight detection (§spec:preflight-gh-ca
     }
   });
 
-  // KNOWN BUG (reported to the workstream, init.sh NOT modified): a fine-grained
-  // PAT / App token reports no classic `Token scopes:` line. The detector intends
-  // to skip the scope blocks in that case (no false positive). But it extracts the
-  // line with
-  //     scopes_line="$(printf … | grep -i 'Token scopes:' | head -n1)"
-  // and init.sh runs under `set -euo pipefail`. When grep matches nothing it exits
-  // 1; `pipefail` propagates that as the pipeline's status, and `set -e` aborts the
-  // ENTIRE run at that assignment — before the pre-flight summary is printed and
-  // before any file is written. So instead of a clean pass, init dies non-zero with
-  // a partial pre-flight block and writes nothing.
-  //
-  // This test is marked `it.fails`: it asserts the SPEC-INTENDED behavior (clean
-  // pass, no scope block), which currently does NOT hold, so the assertions fail
-  // and `it.fails` records a pass — keeping the suite green while pinning the bug.
-  // When the detector is fixed (e.g. `grep … || true`, or `|| scopes_line=""`),
-  // these assertions will start passing, `it.fails` will flip the test RED, and
-  // the `.fails` marker should be removed. See the run report for the fix sketch.
-  it.fails(
-    "fine-grained token (no 'Token scopes:' line) does NOT produce a scope block [KNOWN BUG: set -e abort]",
-    () => {
-      const r = runInit({
-        args: SCAFFOLD_ARGS,
-        ghStub: ghStubWithScopes(null),
-        env: { ...INTERACTIVE },
-      });
-      try {
-        const out = stripAnsi(r.stdout);
-        const combined = stripAnsi(r.stdout + r.stderr);
-        // Spec intent: skipping the scope checks is a clean pass.
-        expect(r.status, `combined:\n${combined}`).toBe(0);
-        expect(out).toContain("gh installed and authenticated");
-        expect(out).toContain("pre-flight: no blockers.");
-        expect(combined).not.toMatch(/'repo' scope/);
-        expect(combined).not.toMatch(/admin:org/);
-        expect(existsSync(join(r.work, ".flywheel.yml"))).toBe(true);
-      } finally {
-        rmSync(r.work, { recursive: true, force: true });
-      }
-    },
-  );
-
-  // Companion to the KNOWN BUG above: pin the CURRENT (buggy) observed behavior so
-  // the suite documents exactly what happens today and stays green regardless. When
-  // the bug is fixed this test will need updating alongside removal of `it.fails`.
-  it("fine-grained token currently aborts the run (documents the set -e bug)", () => {
+  // False-positive avoidance: a fine-grained PAT / App token reports no classic
+  // `Token scopes:` line, so the detector cannot determine classic scopes and must
+  // SKIP the scope blocks rather than block a token that may well be sufficient.
+  // The `grep … || true` guard in init.sh makes that skip safe under
+  // `set -euo pipefail` (a no-match grep would otherwise abort the whole run).
+  it("fine-grained token (no 'Token scopes:' line) does NOT produce a scope block", () => {
     const r = runInit({
       args: SCAFFOLD_ARGS,
       ghStub: ghStubWithScopes(null),
@@ -287,16 +247,13 @@ describe("init.sh — gh-capability pre-flight detection (§spec:preflight-gh-ca
     try {
       const out = stripAnsi(r.stdout);
       const combined = stripAnsi(r.stdout + r.stderr);
-      // The detector got as far as the authenticated info finding...
+      // Skipping the scope checks is a clean pass.
+      expect(r.status, `combined:\n${combined}`).toBe(0);
       expect(out).toContain("gh installed and authenticated");
-      // ...then `set -euo pipefail` aborted at the empty-grep scopes line: the run
-      // exits non-zero, never prints the summary, and writes nothing.
-      expect(r.status, `combined:\n${combined}`).not.toBe(0);
-      expect(out).not.toContain("pre-flight: no blockers.");
-      // No scope block text is emitted (the abort happens before the checks), and
-      // nothing is scaffolded.
+      expect(out).toContain("pre-flight: no blockers.");
       expect(combined).not.toMatch(/'repo' scope/);
-      expect(existsSync(join(r.work, ".flywheel.yml"))).toBe(false);
+      expect(combined).not.toMatch(/admin:org/);
+      expect(existsSync(join(r.work, ".flywheel.yml"))).toBe(true);
     } finally {
       rmSync(r.work, { recursive: true, force: true });
     }
