@@ -1356,7 +1356,7 @@ to surface when those permissions are absent.) §req:preflight-detection
 
 ## Existing release-system detection §spec:preflight-release-conflict
 
-*Status: not started*
+*Status: complete*
 
 The pre-flight pass detects whether the repository **already runs a
 release system that would race flywheel's releases** — another tag or
