@@ -1127,3 +1127,117 @@ rather than an already-superseded one. §req:setup-node-v5
   decision, not part of this bump; the steps remain cache-free.
 
 §req:setup-node-v5-constraints
+
+## apply-rulesets self-provisions PyYAML ephemerally §spec:apply-rulesets-pyyaml
+
+*Status: complete*
+
+`scripts/apply-rulesets.sh` is the one-shot setup step an adopter runs once
+per repository — documented in `docs/adopter/setup.md` (§5) as a
+`curl -fsSL … | bash -s -- <owner/repo>` one-liner — to apply Flywheel's
+branch- and tag-protection rulesets. To enumerate the managed branches it
+runs two small Python snippets that load `.flywheel.yml` with PyYAML: one
+emits every managed branch ref, the other the subset with
+`release: production`. The script never asks the adopter to install PyYAML
+and never leaves anything installed on their machine. When PyYAML is missing,
+the script provisions it for itself in a throwaway location, uses it for the
+two parses, and removes it before exiting. §req:apply-rulesets-pyyaml
+§req:apply-rulesets-pyyaml-criteria
+
+**The behavior is ephemeral because the need is ephemeral.** The script runs a
+single time per repository, so a dependency it needs only for that run leaves
+no trace afterward. On stock macOS — the common case — the Xcode Command Line
+Tools `python3` (3.9.x) adopters actually have does not ship PyYAML, so a
+first-time adopter following the documented setup would otherwise hit a hard
+stop on the very first Flywheel action they take. Rather than instruct them to
+*permanently* mutate their user site-packages for a one-shot script (the prior
+`pip3 install --user pyyaml` message), the script automates exactly the
+workaround the reporter of #245 performed by hand: stand up a disposable
+PyYAML, use it, tear it down. §req:apply-rulesets-pyyaml
+§req:apply-rulesets-pyyaml-stories
+
+**Why keep PyYAML rather than drop it.** The two reads must stay byte-for-byte
+equivalent to today's output — the same complete list of managed branch refs
+and the same `release: production` subset, feeding the same ruleset behavior.
+PyYAML is what computes that result now; continuing to parse `.flywheel.yml`
+with PyYAML is the surest guarantee of parse parity. Hand-rolling a YAML parser
+in shell/`awk`, or swapping in a different YAML tool, would re-implement the
+parse and risk diverging on quoting, anchors, or block structure for no
+adopter-visible gain. The change is to *how the dependency is satisfied*, not
+to *what the parses compute*. §req:apply-rulesets-pyyaml-criteria
+§req:apply-rulesets-pyyaml-constraints
+
+**Tiered satisfaction, fast path preserved.** When the invoking `python3`
+can already `import yaml`, the script uses it directly — no provisioning, no
+added latency, no extra steps. An adopter who already has PyYAML sees no
+change. Only when the import fails does the script provision an ephemeral,
+isolated environment (a throwaway interpreter context that exists for the
+duration of the run and nowhere in the adopter's persistent Python install),
+satisfy PyYAML there, and run the two parses against it. The provisioning
+installs PyYAML and nothing else, into an isolated throwaway location, so it
+cannot alter the adopter's interpreter or global/user packages. The cleanup is
+unconditional — it runs whether the script succeeds, fails, or is interrupted —
+so a partial run leaves nothing behind. §req:apply-rulesets-pyyaml
+§req:apply-rulesets-pyyaml-criteria §req:apply-rulesets-pyyaml-constraints
+
+**Graceful degradation, not a cryptic stop.** Where self-provisioning
+genuinely cannot work in a given environment — for example an interpreter with
+`ensurepip` stripped (some Debian/Ubuntu builds) and no alternative provisioner
+available, or no network to fetch the package — the script exits with a clear,
+copy-pasteable, actionable message naming the precise remedy for that
+environment, rather than the bare `PyYAML is required` import error. The
+failure path is the exception, reached only after auto-provisioning has been
+attempted and ruled out. §req:apply-rulesets-pyyaml-criteria
+§req:apply-rulesets-pyyaml-constraints
+
+**Documentation matches reality.** The script's header comment no longer
+claims PyYAML is `preinstalled on macOS` — true only of the retired system
+Python 2, not the Xcode CLT `python3` adopters have. Its stated dependencies
+describe what adopters actually run and how the script obtains PyYAML when it
+is absent. §req:apply-rulesets-pyyaml §req:apply-rulesets-pyyaml-stories
+
+**Blast radius.** The change is confined to `apply-rulesets.sh` — its
+dependency-resolution preamble and header comment — and to the matching
+dependency note in `docs/adopter/setup.md`. The ruleset-application logic (the
+`gh api` calls, payload assembly, idempotent create-or-replace) is untouched.
+Because the script runs unauthenticated-input-free over an `owner/repo`
+argument the adopter supplies and fetches only PyYAML into a disposable
+location, auto-provisioning adds a runtime network dependency on the package
+index but no persistent footprint and no new credential surface.
+§req:apply-rulesets-pyyaml-constraints
+
+**Criteria.**
+
+- When an adopter on stock macOS (Xcode CLT `python3`, no PyYAML) runs the
+  script as documented, the script shall complete end-to-end without any
+  manual dependency install and without prompting the adopter to install
+  anything.
+- After the script exits — on success, failure, or interruption — the
+  adopter's Python environment and user site-packages shall be exactly as
+  they were before; nothing PyYAML-related shall remain installed.
+- When the invoking `python3` can already `import yaml`, the script shall use
+  it directly, adding no provisioning step and no latency.
+- The two `.flywheel.yml` reads shall produce results identical to today: the
+  complete list of managed branch refs, and the `release: production` subset,
+  with the same downstream ruleset behavior.
+- When self-provisioning genuinely cannot succeed in the environment, the
+  script shall exit with a clear, copy-pasteable, actionable message naming
+  the remedy — not a bare import error.
+- The script's header comment shall not claim PyYAML is preinstalled on
+  macOS; the stated dependencies shall match what adopters actually have and
+  how the script obtains PyYAML when it is missing.
+
+**Scope and alternatives.**
+
+- *Instructing a persistent `pip install`* (the prior behavior) is rejected:
+  it leaves a lasting change on the adopter's machine for a script run once —
+  the core grievance of #245.
+- *Dropping PyYAML for a hand-rolled or alternate-tool YAML parse* is rejected:
+  it risks parse divergence against a hard parse-parity requirement for no
+  adopter-visible benefit, and a different tool (`yq`) is no more likely to be
+  present on stock macOS than PyYAML.
+- *Requiring a project checkout or a pre-existing virtualenv* is rejected: the
+  script must stay `curl … | bash`-friendly and safe to re-run, with no
+  assumption of local project tooling.
+
+§req:apply-rulesets-pyyaml-constraints §req:apply-rulesets-pyyaml-stories

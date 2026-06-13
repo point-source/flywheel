@@ -39,8 +39,11 @@
 # production branch without slowing down day-to-day PRs into the
 # prerelease channel. See #134 for the failure mode that motivated it.
 #
-# Dependencies: gh, jq, python3 with PyYAML (preinstalled on macOS; yamllint
-# pulls it in too).
+# Dependencies: gh, jq, and python3. The two .flywheel.yml reads need PyYAML;
+# when the invoking python3 can't import it (e.g. the stock macOS Xcode
+# Command Line Tools python3, which does not ship PyYAML), the script
+# provisions PyYAML into a disposable virtualenv for the run and removes it
+# on exit — nothing is left installed on the adopter's machine. See #245.
 
 set -euo pipefail
 
@@ -90,10 +93,43 @@ for tool in gh jq python3; do
     exit 1
   }
 done
-python3 -c "import yaml" 2>/dev/null || {
-  echo "error: PyYAML is required. Install with: pip3 install --user pyyaml" >&2
-  exit 1
-}
+# PyYAML resolver. The two .flywheel.yml reads below need PyYAML, but we
+# refuse to tell adopters to permanently mutate their site-packages for a
+# one-shot script. Resolve a python interpreter that can `import yaml` into
+# PYYAML_PYTHON, provisioning an ephemeral venv only when the invoking
+# python3 lacks it. The cleanup trap is registered BEFORE the mktemp so an
+# interrupt mid-provision still removes the throwaway dir.
+PYYAML_PYTHON="python3"
+PYYAML_TMPDIR=""
+cleanup_pyyaml() { [[ -n "$PYYAML_TMPDIR" ]] && rm -rf "$PYYAML_TMPDIR"; return 0; }
+trap cleanup_pyyaml EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+# Tier 0 (fast path): if the invoking python3 already has PyYAML, use it as-is
+# — no temp dir, no provisioning, no added latency. Only when the import fails
+# do we fall through to Tier 1.
+if ! python3 -c "import yaml" 2>/dev/null; then
+  # Tier 1: provision PyYAML into a disposable, fully isolated venv.
+  PYYAML_TMPDIR="$(mktemp -d)"
+  echo "PyYAML not found in python3; provisioning it into a disposable virtualenv for this run..." >&2
+  if ! python3 -m venv "$PYYAML_TMPDIR/venv" 2>/dev/null; then
+    # Tier 2a: venv/ensurepip unavailable (some Debian/Ubuntu builds strip it).
+    echo "error: python3 can't create a virtualenv (the venv/ensurepip module is missing)." >&2
+    echo "  remedy: sudo apt-get install -y python3-venv, then re-run this script." >&2
+    echo "  one-time manual fallback: python3 -m pip install --user pyyaml" >&2
+    exit 1
+  fi
+  if ! "$PYYAML_TMPDIR/venv/bin/python" -m pip install --quiet --disable-pip-version-check pyyaml; then
+    # Tier 2b: venv built but PyYAML couldn't be installed (no network /
+    # package index unreachable).
+    echo "error: failed to install PyYAML into the virtualenv (no network or the package index is unreachable)." >&2
+    echo "  remedy: re-run this script with network access." >&2
+    echo "  one-time manual fallback: python3 -m pip install --user pyyaml" >&2
+    exit 1
+  fi
+  PYYAML_PYTHON="$PYYAML_TMPDIR/venv/bin/python"
+fi
 
 if [[ ! -f "$CONFIG_PATH" ]]; then
   echo "error: config file not found: $CONFIG_PATH" >&2
@@ -102,7 +138,7 @@ fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-branch_refs_json="$(CONFIG_PATH="$CONFIG_PATH" python3 - <<'PYEOF'
+branch_refs_json="$(CONFIG_PATH="$CONFIG_PATH" "$PYYAML_PYTHON" - <<'PYEOF'
 import json, os, yaml
 with open(os.environ['CONFIG_PATH']) as f:
     data = yaml.safe_load(f)
@@ -120,7 +156,7 @@ fi
 # in .flywheel.yml — are the target of the optional release-gate ruleset
 # below. Computed unconditionally so the help/dry output can show what
 # would be gated; only consumed when --release-required-checks is set.
-release_branch_refs_json="$(CONFIG_PATH="$CONFIG_PATH" python3 - <<'PYEOF'
+release_branch_refs_json="$(CONFIG_PATH="$CONFIG_PATH" "$PYYAML_PYTHON" - <<'PYEOF'
 import json, os, yaml
 with open(os.environ['CONFIG_PATH']) as f:
     data = yaml.safe_load(f)
