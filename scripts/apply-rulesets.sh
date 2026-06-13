@@ -101,7 +101,7 @@ done
 # interrupt mid-provision still removes the throwaway dir.
 PYYAML_PYTHON="python3"
 PYYAML_TMPDIR=""
-cleanup_pyyaml() { [[ -n "$PYYAML_TMPDIR" ]] && rm -rf "$PYYAML_TMPDIR"; }
+cleanup_pyyaml() { [[ -n "$PYYAML_TMPDIR" ]] && rm -rf "$PYYAML_TMPDIR"; return 0; }
 trap cleanup_pyyaml EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
