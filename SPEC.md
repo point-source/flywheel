@@ -1413,7 +1413,7 @@ override) before flywheel layers on top. §req:preflight-detection-stories
 
 ## Pre-flight credentials and App detection §spec:preflight-credentials-app
 
-*Status: not started*
+*Status: complete*
 
 The credentials detection — the `FLYWHEEL_GH_APP_ID` variable and the
 `FLYWHEEL_GH_APP_PRIVATE_KEY` secret, at both repo and org level — and the
