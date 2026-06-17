@@ -6,8 +6,8 @@ import { join } from "node:path";
 
 import { mintInstallationToken } from "./auth.js";
 import { loadConfig } from "./config.js";
-import { createGitHubClient, type PullRequest } from "./github.js";
-import { runPrFlow } from "./pr-flow.js";
+import { createGitHubClient, type GitHubClient, type PullRequest } from "./github.js";
+import { runPrFlow, runPrChecksOnly } from "./pr-flow.js";
 import { getUpstreamBranches, runPushFlow, findStreamForBranch } from "./push-flow.js";
 import { runPromotion } from "./promotion.js";
 import { syncRulesets } from "./rulesets.js";
@@ -19,24 +19,46 @@ async function run(): Promise<void> {
   const event = core.getInput("event", { required: true });
   const appId = core.getInput("app-id", { required: true });
   const privateKey = core.getInput("app-private-key");
+  const githubToken = core.getInput("github-token");
 
   const ctx = github.context;
   const owner = ctx.repo.owner;
   const repo = ctx.repo.repo;
 
-  // Fork-PR shortcut: GitHub doesn't pass repo secrets to PR workflows from
-  // forks, so app-private-key arrives empty. Without a key we can't mint an
-  // installation token, and the workflow's default GITHUB_TOKEN is read-only
-  // on fork PRs anyway — there's nothing useful for the conductor to do.
-  // Exit cleanly with a notice so the workflow ends green. See roadmap.md.
+  // No-App-token path: app-private-key arrives empty. This happens for fork
+  // PRs (GitHub doesn't pass repo secrets to fork PR workflows) and for
+  // Dependabot-triggered runs (GitHub serves those the *Dependabot* secret
+  // store, not the Actions store, so the Actions-registered App key is
+  // invisible). Without a key we can't mint an installation token, so the
+  // App-only conductor steps — title rewrite, auto-merge labels, promotion
+  // PR upserts — can't run.
+  //
+  // But the `flywheel/conventional-commit` check is title/skip-ci validation
+  // that needs no App privileges, and apply-rulesets.sh requires it by
+  // default. Skipping it outright leaves the PR deadlocked at "Expected —
+  // Waiting for status" (#243, #162). So on PR events we post that check
+  // best-effort with the workflow's own GITHUB_TOKEN (needs `checks: write`,
+  // which the flywheel-pr.yml template grants). For Dependabot the
+  // permissions key elevates the token, so this succeeds; for genuine fork
+  // PRs the token is read-only and the post 403s — runDegradedPrCheck
+  // swallows that, and such PRs still need a manual bypass.
   if (!privateKey || privateKey.trim() === "") {
     core.notice(
-      "Flywheel: app-private-key is empty. This is expected for fork PRs " +
-        "(GitHub does not pass secrets to fork PR workflows). Skipping the " +
-        "conductor — title rewrite, auto-merge labels, and promotion PR upserts " +
-        "will not run on this PR. The PR can still be merged manually.",
+      "Flywheel: app-private-key is empty. This is expected for fork PRs and " +
+        "for Dependabot PRs (GitHub serves Dependabot runs the Dependabot secret " +
+        "store, not the Actions store). Skipping the App-only steps — title " +
+        "rewrite, auto-merge labels, and promotion PR upserts will not run on " +
+        "this PR. The flywheel/conventional-commit check, which apply-rulesets.sh " +
+        "requires by default, is posted with the workflow GITHUB_TOKEN where it " +
+        "has checks:write (e.g. Dependabot PRs) so a required check does not " +
+        "deadlock the PR. To restore the full conductor on Dependabot PRs, also " +
+        "register FLYWHEEL_GH_APP_PRIVATE_KEY as a Dependabot secret. Fork PRs get " +
+        "a read-only token and may still need a manual merge.",
     );
     core.setOutput("managed_branch", "false");
+    if (event === "pull_request") {
+      await runDegradedPrCheck(githubToken, owner, repo);
+    }
     return;
   }
 
@@ -148,6 +170,64 @@ async function run(): Promise<void> {
   }
 
   core.setFailed(`Unknown event input: ${event}. Expected 'pull_request' or 'push'.`);
+}
+
+/**
+ * Degraded PR handling when no App installation token is available (empty
+ * app-private-key). Posts only the `flywheel/conventional-commit` check using
+ * the workflow's own GITHUB_TOKEN so a required check doesn't deadlock fork /
+ * Dependabot PRs. App-only steps stay skipped — see the empty-key branch in
+ * run(). Strictly best-effort: never setFailed (a failed job is itself a
+ * required-check block), and a read-only fork-PR token that 403s on the
+ * check post is logged, not fatal.
+ */
+async function runDegradedPrCheck(githubToken: string, owner: string, repo: string): Promise<void> {
+  if (!githubToken || githubToken.trim() === "") {
+    core.notice(
+      "Flywheel: no GITHUB_TOKEN available to post the conventional-commit check — skipping. " +
+        "Grant the workflow `permissions: checks: write` so it can post on fork/Dependabot PRs.",
+    );
+    return;
+  }
+
+  const workspace = process.env.GITHUB_WORKSPACE ?? process.cwd();
+  const configPath = join(workspace, CONFIG_FILE);
+  if (!existsSync(configPath)) {
+    core.warning(`${CONFIG_FILE} not found at repository root — nothing to validate.`);
+    return;
+  }
+
+  const result = loadConfig(await readFile(configPath, "utf8"));
+  if (result.config === null) {
+    // Don't setFailed here: in degraded mode a failing job would itself block
+    // the PR, which is the deadlock we're trying to avoid. A separate
+    // App-token run surfaces config errors loudly.
+    core.warning(`${CONFIG_FILE} is invalid — skipping the degraded conventional-commit check.`);
+    return;
+  }
+
+  const pr = readPullRequestFromContext();
+  if (!pr) {
+    core.warning("pull_request event invoked but no pull_request payload found — skipping.");
+    return;
+  }
+
+  const gh: GitHubClient = createGitHubClient(githubToken, `${owner}/${repo}`);
+  const log = {
+    info: (msg: string) => core.info(msg),
+    warning: (msg: string) => core.warning(msg),
+  };
+
+  try {
+    await runPrChecksOnly({ pr, config: result.config, gh, log });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    core.notice(
+      `Flywheel: could not post the conventional-commit check with GITHUB_TOKEN (${msg}). ` +
+        "This is expected on fork PRs, whose token is read-only and cannot be granted checks:write. " +
+        "The PR may need a manual merge or a re-trigger by a human actor.",
+    );
+  }
 }
 
 function pushTouchedConfig(payload: unknown, configFile: string): boolean {

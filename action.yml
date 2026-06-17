@@ -73,6 +73,13 @@ runs:
         INPUT_EVENT: ${{ inputs.event }}
         INPUT_APP-ID: ${{ inputs.app-id }}
         INPUT_APP-PRIVATE-KEY: ${{ inputs.app-private-key }}
+        # The workflow's own GITHUB_TOKEN. Used only when app-private-key is
+        # empty (fork / Dependabot PRs) to post the flywheel/conventional-commit
+        # check so a required check doesn't deadlock the PR — see the empty-key
+        # branch in core/src/main.ts. The flywheel-pr.yml template grants this
+        # token `checks: write`. Normal runs use the App installation token and
+        # ignore this entirely.
+        INPUT_GITHUB-TOKEN: ${{ github.token }}
       run: node "${{ github.action_path }}/core/dist/index.cjs"
 
     - name: Run semantic-release

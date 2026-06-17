@@ -15,6 +15,16 @@ jobs:
       github.event.pull_request.draft == false &&
       (github.event.action != 'edited' || github.event.sender.type == 'User')
     runs-on: ubuntu-latest
+    # Normal runs use the App installation token for every write, so these
+    # scopes only matter when app-private-key is empty (fork / Dependabot PRs):
+    # then Flywheel posts the required flywheel/conventional-commit check with
+    # this GITHUB_TOKEN instead of skipping, so the check doesn't deadlock the
+    # PR. Dependabot-triggered runs honor this elevation; fork-PR tokens stay
+    # read-only regardless and fall back to a manual merge.
+    permissions:
+      contents: read
+      checks: write
+      pull-requests: read
     steps:
       # The single `point-source/flywheel@<ref>` pin governs every flywheel
       # file that runs: the dispatcher, the bundled scripts, and the

@@ -28851,6 +28851,58 @@ async function runPrFlow({ pr, config, gh, log }) {
     merged: false
   };
 }
+async function runPrChecksOnly({ pr, config, gh, log }) {
+  const branch = findBranch(config, pr.baseRef);
+  if (!branch) {
+    log.info(`PR #${pr.number}: target branch ${pr.baseRef} is not in any stream \u2014 skipping.`);
+    return { kind: "unmanaged" };
+  }
+  const parsed = parseTitle(pr.title);
+  if (!parsed) {
+    const summary2 = `Title is not a valid conventional commit. Expected \`<type>[(<scope>)][!]: <description>\` where type is one of ${VALID_TYPES.join(", ")}.`;
+    await gh.createCheck({
+      name: FLYWHEEL_TITLE_CHECK,
+      conclusion: "failure",
+      summary: summary2,
+      details: `Got: ${pr.title}`,
+      headSha: pr.headSha
+    });
+    log.warning(`PR #${pr.number}: invalid conventional commit title \u2014 failing check posted (degraded mode).`);
+    return { kind: "parse-failed" };
+  }
+  const commits = await gh.listPullCommits(pr.number);
+  const skipCiHits = findSkipCiMarkers([
+    { source: "PR title", text: pr.title },
+    { source: "PR body", text: pr.body ?? "" },
+    ...commits.flatMap((c) => [
+      { source: `commit ${c.sha.slice(0, 7)} title`, text: c.title },
+      { source: `commit ${c.sha.slice(0, 7)} body`, text: c.body ?? "" }
+    ])
+  ]);
+  if (skipCiHits.length > 0) {
+    const summary2 = `PR contains GitHub Actions skip-ci marker(s). These suppress workflows on the merged commit and must be removed before merging.`;
+    const details = skipCiHits.map((h) => `- ${h.source}: \`${h.marker}\``).join("\n");
+    await gh.createCheck({
+      name: FLYWHEEL_TITLE_CHECK,
+      conclusion: "failure",
+      summary: summary2,
+      details,
+      headSha: pr.headSha
+    });
+    log.warning(`PR #${pr.number}: skip-ci marker(s) found \u2014 failing check posted (degraded mode).`);
+    return { kind: "skip-ci-found" };
+  }
+  await gh.createCheck({
+    name: FLYWHEEL_TITLE_CHECK,
+    conclusion: "success",
+    summary: `Valid conventional commit title.`,
+    headSha: pr.headSha
+  });
+  log.info(
+    `PR #${pr.number}: title valid, no skip-ci markers \u2014 passing check posted (degraded mode; App-only steps skipped).`
+  );
+  return { kind: "check-only" };
+}
 function findBranch(config, baseRef) {
   for (const stream of config.streams) {
     for (const branch of stream.branches) {
@@ -29289,14 +29341,18 @@ async function run() {
   const event = getInput("event", { required: true });
   const appId = getInput("app-id", { required: true });
   const privateKey = getInput("app-private-key");
+  const githubToken = getInput("github-token");
   const ctx = context2;
   const owner = ctx.repo.owner;
   const repo = ctx.repo.repo;
   if (!privateKey || privateKey.trim() === "") {
     notice(
-      "Flywheel: app-private-key is empty. This is expected for fork PRs (GitHub does not pass secrets to fork PR workflows). Skipping the conductor \u2014 title rewrite, auto-merge labels, and promotion PR upserts will not run on this PR. The PR can still be merged manually."
+      "Flywheel: app-private-key is empty. This is expected for fork PRs and for Dependabot PRs (GitHub serves Dependabot runs the Dependabot secret store, not the Actions store). Skipping the App-only steps \u2014 title rewrite, auto-merge labels, and promotion PR upserts will not run on this PR. The flywheel/conventional-commit check, which apply-rulesets.sh requires by default, is posted with the workflow GITHUB_TOKEN where it has checks:write (e.g. Dependabot PRs) so a required check does not deadlock the PR. To restore the full conductor on Dependabot PRs, also register FLYWHEEL_GH_APP_PRIVATE_KEY as a Dependabot secret. Fork PRs get a read-only token and may still need a manual merge."
     );
     setOutput("managed_branch", "false");
+    if (event === "pull_request") {
+      await runDegradedPrCheck(githubToken, owner, repo);
+    }
     return;
   }
   let auth6;
@@ -29383,6 +29439,43 @@ async function run() {
     return;
   }
   setFailed(`Unknown event input: ${event}. Expected 'pull_request' or 'push'.`);
+}
+async function runDegradedPrCheck(githubToken, owner, repo) {
+  if (!githubToken || githubToken.trim() === "") {
+    notice(
+      "Flywheel: no GITHUB_TOKEN available to post the conventional-commit check \u2014 skipping. Grant the workflow `permissions: checks: write` so it can post on fork/Dependabot PRs."
+    );
+    return;
+  }
+  const workspace = process.env.GITHUB_WORKSPACE ?? process.cwd();
+  const configPath = (0, import_node_path2.join)(workspace, CONFIG_FILE);
+  if (!(0, import_node_fs.existsSync)(configPath)) {
+    warning(`${CONFIG_FILE} not found at repository root \u2014 nothing to validate.`);
+    return;
+  }
+  const result = loadConfig(await (0, import_promises2.readFile)(configPath, "utf8"));
+  if (result.config === null) {
+    warning(`${CONFIG_FILE} is invalid \u2014 skipping the degraded conventional-commit check.`);
+    return;
+  }
+  const pr = readPullRequestFromContext();
+  if (!pr) {
+    warning("pull_request event invoked but no pull_request payload found \u2014 skipping.");
+    return;
+  }
+  const gh = createGitHubClient(githubToken, `${owner}/${repo}`);
+  const log = {
+    info: (msg) => info(msg),
+    warning: (msg) => warning(msg)
+  };
+  try {
+    await runPrChecksOnly({ pr, config: result.config, gh, log });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    notice(
+      `Flywheel: could not post the conventional-commit check with GITHUB_TOKEN (${msg}). This is expected on fork PRs, whose token is read-only and cannot be granted checks:write. The PR may need a manual merge or a re-trigger by a human actor.`
+    );
+  }
 }
 function pushTouchedConfig(payload, configFile) {
   const commits = payload?.commits;

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { FLYWHEEL_TITLE_CHECK, runPrFlow } from "../src/pr-flow.js";
+import { FLYWHEEL_TITLE_CHECK, runPrFlow, runPrChecksOnly } from "../src/pr-flow.js";
 import {
   FLYWHEEL_AUTO_MERGE_LABEL,
   FLYWHEEL_NEEDS_REVIEW_LABEL,
@@ -767,5 +767,82 @@ describe("runPrFlow", () => {
     }).fields.body!;
     const matches = body.match(/Closes #104/g) ?? [];
     expect(matches).toHaveLength(1);
+  });
+});
+
+describe("runPrChecksOnly (degraded mode — no App token)", () => {
+  it("target branch not in any stream → unmanaged, no check posted", async () => {
+    const gh = createFakeGh();
+    const { log } = silentLogger();
+
+    const outcome = await runPrChecksOnly({
+      pr: makePR({ baseRef: "some-feature-branch" }),
+      config: baseConfig,
+      gh,
+      log,
+    });
+
+    expect(outcome).toEqual({ kind: "unmanaged" });
+    expect(gh.createdChecks).toEqual([]);
+  });
+
+  it("valid title, no skip-ci → posts a single passing check and nothing else", async () => {
+    const gh = createFakeGh({
+      pullCommits: { 7: [makeCommit("aaaaaaa", "fix: legitimate")] },
+    });
+    const { log } = silentLogger();
+
+    const outcome = await runPrChecksOnly({ pr: makePR(), config: baseConfig, gh, log });
+
+    expect(outcome).toEqual({ kind: "check-only" });
+    expect(gh.createdChecks).toHaveLength(1);
+    expect(gh.createdChecks[0]!.name).toBe(FLYWHEEL_TITLE_CHECK);
+    expect(gh.createdChecks[0]!.conclusion).toBe("success");
+    expect(gh.createdChecks[0]!.headSha).toMatch(/^abcdef/);
+    // No App-only side effects: no rewrite, no labels, no auto-merge.
+    expect(gh.calls.find((c) => c.method === "updatePR")).toBeUndefined();
+    expect(gh.calls.find((c) => c.method === "addLabels")).toBeUndefined();
+    expect(gh.calls.find((c) => c.method === "enableAutoMerge")).toBeUndefined();
+    expect(gh.prLabels[7] ?? []).toEqual([]);
+    expect(gh.autoMergeEnabledFor).toEqual([]);
+  });
+
+  it("invalid conventional-commit title → posts a failing check, no commits fetched", async () => {
+    const gh = createFakeGh();
+    const { log } = silentLogger();
+
+    const outcome = await runPrChecksOnly({
+      pr: makePR({ title: "just some words, no type" }),
+      config: baseConfig,
+      gh,
+      log,
+    });
+
+    expect(outcome).toEqual({ kind: "parse-failed" });
+    expect(gh.createdChecks).toHaveLength(1);
+    expect(gh.createdChecks[0]!.conclusion).toBe("failure");
+    expect(gh.createdChecks[0]!.details).toContain("just some words, no type");
+    // Parse fails before any commit listing.
+    expect(gh.calls.find((c) => c.method === "listPullCommits")).toBeUndefined();
+  });
+
+  it("skip-ci marker in a commit → posts a failing check, no labels", async () => {
+    const gh = createFakeGh({
+      pullCommits: {
+        7: [
+          makeCommit("aaaaaaa", "fix: legitimate"),
+          makeCommit("bbbbbbb", "chore: bumped [no ci]"),
+        ],
+      },
+    });
+    const { log } = silentLogger();
+
+    const outcome = await runPrChecksOnly({ pr: makePR(), config: baseConfig, gh, log });
+
+    expect(outcome).toEqual({ kind: "skip-ci-found" });
+    expect(gh.createdChecks).toHaveLength(1);
+    expect(gh.createdChecks[0]!.conclusion).toBe("failure");
+    expect(gh.createdChecks[0]!.details).toMatch(/commit \w+ title/);
+    expect(gh.prLabels[7] ?? []).toEqual([]);
   });
 });

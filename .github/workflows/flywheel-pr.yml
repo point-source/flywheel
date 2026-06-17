@@ -17,6 +17,15 @@ jobs:
       github.event.pull_request.draft == false &&
       (github.event.action != 'edited' || github.event.sender.type == 'User')
     runs-on: ubuntu-latest
+    # Normal runs use the App installation token for every write; these scopes
+    # only matter when app-private-key is empty (fork / Dependabot PRs), where
+    # Flywheel posts the required flywheel/conventional-commit check with this
+    # GITHUB_TOKEN so the check doesn't deadlock the PR. Mirrors the
+    # scripts/templates/flywheel-pr.yml adopters install.
+    permissions:
+      contents: read
+      checks: write
+      pull-requests: read
     steps:
       # `uses: ./` resolves against the calling workflow's workspace, so the
       # action source has to be on disk before the composite is invoked. For

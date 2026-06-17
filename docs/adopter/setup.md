@@ -105,6 +105,8 @@ Install the App on your repo. Then store its credentials in Settings → Secrets
 
 Pass these straight into the Flywheel action via the `app-id` and `app-private-key` inputs (see the workflow YAML in §3). The action mints its own short-lived installation token internally and validates that the App's granted permissions match the list above — if anything is missing it fails fast with a friendly error pointing you at the App settings. You do not need a separate `actions/create-github-app-token` step.
 
+> **Using Dependabot?** Register `FLYWHEEL_GH_APP_PRIVATE_KEY` (and, if you want to reference it the same way, `FLYWHEEL_GH_APP_ID`) as a **Dependabot** secret as well — Settings → Secrets and variables → **Dependabot**. GitHub serves Dependabot-triggered workflow runs the *Dependabot* secret store, not the Actions store, so an Actions-only key resolves empty on Dependabot PRs and the full conductor (title rewrite, auto-merge labels, promotion PRs) can't run. Without the Dependabot secret, Flywheel still posts the required `flywheel/conventional-commit` check using the workflow `GITHUB_TOKEN` (so Dependabot PRs aren't deadlocked — see §3's `permissions:` block), but auto-merge and the other App-only steps stay skipped until the key is available in the Dependabot store. See [§Dependabot PRs](#dependabot-prs) in troubleshooting.
+
 ## 2. Add `.flywheel.yml`
 
 Place at the root of your repo. Start from one of these.
@@ -185,6 +187,14 @@ jobs:
       github.event.pull_request.draft == false &&
       (github.event.action != 'edited' || github.event.sender.type == 'User')
     runs-on: ubuntu-latest
+    # Normal runs use the App installation token for every write; these scopes
+    # only matter when app-private-key is empty (fork / Dependabot PRs), where
+    # Flywheel posts the required flywheel/conventional-commit check with this
+    # GITHUB_TOKEN so the check doesn't deadlock the PR. See §Dependabot PRs.
+    permissions:
+      contents: read
+      checks: write
+      pull-requests: read
     steps:
       - uses: point-source/flywheel@v2
         with:
@@ -700,6 +710,9 @@ Floating major tags don't pin you to a known-good build. If a recent `@v<major>`
 **Tag collision error from `semantic-release`.** Two streams produced the same tag string. Flywheel scopes tags per stream automatically (e.g. `customer-acme/v1.0.1` for non-primary streams), so if you see this, please file an issue with your `.flywheel.yml`.
 
 **PR opened by Flywheel doesn't trigger your quality checks.** Make sure your check workflows include `merge_group:` as well as `pull_request:` — without it, the merge queue stalls waiting for a check that never fires (see the snippet above).
+
+<a id="dependabot-prs"></a>
+**Dependabot PRs sit `BLOCKED` with `flywheel/conventional-commit` showing `Expected` forever.** GitHub serves Dependabot-triggered workflow runs the **Dependabot** secret store, not the Actions store, so an Actions-only `FLYWHEEL_GH_APP_PRIVATE_KEY` resolves empty on those runs (the same isolation forks get). The `Flywheel — PR` run logs `app-private-key is empty` and skips the App-only steps. Flywheel still posts the required `flywheel/conventional-commit` check with the workflow `GITHUB_TOKEN` — provided the `conduct` job grants `permissions: checks: write` (the template in §3 does; add it if your workflow predates this) — so the check resolves instead of deadlocking. To also get title rewrite and auto-merge on Dependabot PRs, **register `FLYWHEEL_GH_APP_PRIVATE_KEY` as a Dependabot secret** (Settings → Secrets and variables → Dependabot); see §1. For PRs already stuck, re-trigger them with a human actor (close/reopen, or edit the title) once the secret is in place — GitHub's "Re-run jobs" keeps the Dependabot trigger context and won't help. The same `permissions:` block makes genuine fork PRs degrade more gracefully, but a fork PR's `GITHUB_TOKEN` is read-only and cannot be elevated, so the check post may still be refused there — those PRs need a manual merge or a maintainer-actored re-trigger.
 
 **Back-merge step failed pushing to an upstream branch.** Two common causes:
 - The App isn't a bypass actor on the upstream branch's ruleset, so its merge-commit push is rejected by the PR-only rule (`EGITNOPERMISSION` / "changes must be made through a pull request"). Re-run `scripts/apply-rulesets.sh <owner/repo> --app-id <id>` — it covers every managed branch in one go.

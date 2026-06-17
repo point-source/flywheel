@@ -20,6 +20,7 @@ export type PrFlowOutcome =
   | { kind: "unmanaged" }
   | { kind: "parse-failed" }
   | { kind: "skip-ci-found" }
+  | { kind: "check-only" }
   | { kind: "promotion-pr" }
   | { kind: "back-merge-pr" }
   | {
@@ -289,6 +290,83 @@ export async function runPrFlow({ pr, config, gh, log }: PrFlowDeps): Promise<Pr
     autoMergeEnabled: false,
     merged: false,
   };
+}
+
+/**
+ * Validation-only subset of {@link runPrFlow}, run when no App installation
+ * token is available (`app-private-key` is empty) but the workflow's own
+ * `GITHUB_TOKEN` can still post checks. Dependabot-triggered runs read the
+ * Dependabot secret store rather than the Actions store, so the App key
+ * arrives empty exactly as it does for fork PRs (#243, #162); the full
+ * conductor can't run without the App's elevated scopes, but the
+ * `flywheel/conventional-commit` check is title/skip-ci validation that needs
+ * no App privileges. Posting it here keeps a *required* conventional-commit
+ * check from deadlocking the PR at "Expected — Waiting for status".
+ *
+ * Does ONLY what `GITHUB_TOKEN` with `checks: write` can do: parse the title,
+ * scan for skip-ci markers, and post the pass/fail check. It deliberately
+ * does NOT rewrite the title/body, apply `flywheel:*` labels, enable
+ * auto-merge, or upsert promotion PRs — all of those require the App token
+ * and stay skipped in this degraded mode.
+ *
+ * On a genuine fork PR the workflow `GITHUB_TOKEN` is read-only and cannot be
+ * elevated, so `createCheck` will 403; the caller runs this best-effort and
+ * swallows that failure (the PR still needs a manual bypass there).
+ */
+export async function runPrChecksOnly({ pr, config, gh, log }: PrFlowDeps): Promise<PrFlowOutcome> {
+  const branch = findBranch(config, pr.baseRef);
+  if (!branch) {
+    log.info(`PR #${pr.number}: target branch ${pr.baseRef} is not in any stream — skipping.`);
+    return { kind: "unmanaged" };
+  }
+
+  const parsed = parseTitle(pr.title);
+  if (!parsed) {
+    const summary = `Title is not a valid conventional commit. Expected \`<type>[(<scope>)][!]: <description>\` where type is one of ${VALID_TYPES.join(", ")}.`;
+    await gh.createCheck({
+      name: FLYWHEEL_TITLE_CHECK,
+      conclusion: "failure",
+      summary,
+      details: `Got: ${pr.title}`,
+      headSha: pr.headSha,
+    });
+    log.warning(`PR #${pr.number}: invalid conventional commit title — failing check posted (degraded mode).`);
+    return { kind: "parse-failed" };
+  }
+
+  const commits = await gh.listPullCommits(pr.number);
+  const skipCiHits = findSkipCiMarkers([
+    { source: "PR title", text: pr.title },
+    { source: "PR body", text: pr.body ?? "" },
+    ...commits.flatMap((c): { source: string; text: string }[] => [
+      { source: `commit ${c.sha.slice(0, 7)} title`, text: c.title },
+      { source: `commit ${c.sha.slice(0, 7)} body`, text: c.body ?? "" },
+    ]),
+  ]);
+  if (skipCiHits.length > 0) {
+    const summary = `PR contains GitHub Actions skip-ci marker(s). These suppress workflows on the merged commit and must be removed before merging.`;
+    const details = skipCiHits.map((h) => `- ${h.source}: \`${h.marker}\``).join("\n");
+    await gh.createCheck({
+      name: FLYWHEEL_TITLE_CHECK,
+      conclusion: "failure",
+      summary,
+      details,
+      headSha: pr.headSha,
+    });
+    log.warning(`PR #${pr.number}: skip-ci marker(s) found — failing check posted (degraded mode).`);
+    return { kind: "skip-ci-found" };
+  }
+
+  await gh.createCheck({
+    name: FLYWHEEL_TITLE_CHECK,
+    conclusion: "success",
+    summary: `Valid conventional commit title.`,
+    headSha: pr.headSha,
+  });
+  log.info(
+    `PR #${pr.number}: title valid, no skip-ci markers — passing check posted (degraded mode; App-only steps skipped).`,
+  );
+  return { kind: "check-only" };
 }
 
 function findBranch(config: FlywheelConfig, baseRef: string): Branch | null {
