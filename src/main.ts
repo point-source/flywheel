@@ -6,7 +6,12 @@ import { join } from "node:path";
 
 import { mintInstallationToken } from "./auth.js";
 import { loadConfig } from "./config.js";
-import { createGitHubClient, type PullRequest } from "./github.js";
+import {
+  createGitHubClient,
+  postDegradedTitleCheck,
+  FLYWHEEL_TITLE_CHECK,
+  type PullRequest,
+} from "./github.js";
 import { runPrFlow } from "./pr-flow.js";
 import { getUpstreamBranches, runPushFlow, findStreamForBranch } from "./push-flow.js";
 import { runPromotion } from "./promotion.js";
@@ -19,22 +24,71 @@ async function run(): Promise<void> {
   const event = core.getInput("event", { required: true });
   const appId = core.getInput("app-id", { required: true });
   const privateKey = core.getInput("app-private-key");
+  const githubToken = core.getInput("github-token");
 
   const ctx = github.context;
   const owner = ctx.repo.owner;
   const repo = ctx.repo.repo;
 
-  // Fork-PR shortcut: GitHub doesn't pass repo secrets to PR workflows from
-  // forks, so app-private-key arrives empty. Without a key we can't mint an
-  // installation token, and the workflow's default GITHUB_TOKEN is read-only
-  // on fork PRs anyway — there's nothing useful for the conductor to do.
-  // Exit cleanly with a notice so the workflow ends green. See roadmap.md.
+  // Empty-key (degraded) path. GitHub sources secrets from the Dependabot
+  // store on a Dependabot-triggered run (and withholds them on fork PRs), so
+  // app-private-key arrives empty and no App installation token can be minted.
+  // The old behaviour ("skip entirely") permanently deadlocked Dependabot PRs:
+  // apply-rulesets.sh makes flywheel/conventional-commit a REQUIRED check, so a
+  // PR whose check is never posted sits at `Expected` forever and can never
+  // merge (#243). Instead, on a pull_request run we post that check from the
+  // workflow's BUILT-IN GITHUB_TOKEN — never an App token — reflecting the
+  // title verdict, and run no App-only action (no rewrite, no labels, no native
+  // auto-merge, no promotion-PR upsert). The PR is made mergeable, not merged.
+  // Fork PRs share this seam but are out of scope (#162): their built-in token
+  // is read-only, so the post degrades gracefully to a logged warning. See SPEC
+  // §spec:dependabot-degraded-check.
   if (!privateKey || privateKey.trim() === "") {
+    if (event === "pull_request") {
+      const pr = readPullRequestFromContext();
+      if (pr) {
+        if (!githubToken || githubToken.trim() === "") {
+          core.notice(
+            "Flywheel: app-private-key is empty and no built-in GITHUB_TOKEN " +
+              "is available, so the flywheel/conventional-commit check could not " +
+              "be posted. Skipping the conductor — no App-only action runs without " +
+              "the key.",
+          );
+        } else {
+          const gh = createGitHubClient(githubToken);
+          const result = await postDegradedTitleCheck(
+            gh,
+            { title: pr.title, headSha: pr.headSha },
+            { info: (m) => core.info(m), warning: (m) => core.warning(m) },
+          );
+          if (result.posted) {
+            core.notice(
+              `Flywheel: app-private-key is empty — this is expected for a ` +
+                `Dependabot PR (GitHub sources secrets from the Dependabot store, ` +
+                `not the Actions store). Posted the required ${FLYWHEEL_TITLE_CHECK} ` +
+                `check with conclusion "${result.conclusion}" using the built-in ` +
+                `token, so the PR is no longer deadlocked. App-only actions ` +
+                `(title rewrite, auto-merge/needs-review labels, native auto-merge, ` +
+                `promotion-PR upserts) were skipped. Register ` +
+                `FLYWHEEL_GH_APP_PRIVATE_KEY in the Dependabot secret store to ` +
+                `enable the full Flywheel flow for Dependabot PRs.`,
+            );
+          } else {
+            core.notice(
+              `Flywheel: app-private-key is empty and the built-in token is ` +
+                `read-only, so the ${FLYWHEEL_TITLE_CHECK} check could not be posted ` +
+                `(expected for fork PRs — see #162). App-only actions were skipped.`,
+            );
+          }
+        }
+        core.setOutput("managed_branch", "false");
+        return;
+      }
+    }
     core.notice(
-      "Flywheel: app-private-key is empty. This is expected for fork PRs " +
-        "(GitHub does not pass secrets to fork PR workflows). Skipping the " +
-        "conductor — title rewrite, auto-merge labels, and promotion PR upserts " +
-        "will not run on this PR. The PR can still be merged manually.",
+      "Flywheel: app-private-key is empty and no pull_request payload is " +
+        "available, so there is no required check to post. Skipping the " +
+        "conductor — no App-only action runs without the key.",
     );
     core.setOutput("managed_branch", "false");
     return;

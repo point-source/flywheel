@@ -8,6 +8,7 @@ import {
 import {
   FLYWHEEL_AUTO_MERGE_LABEL,
   FLYWHEEL_NEEDS_REVIEW_LABEL,
+  FLYWHEEL_TITLE_CHECK,
   type Commit,
   type GitHubClient,
   type MergeMethod,
@@ -31,7 +32,10 @@ export type PrFlowOutcome =
       directMergeReason?: string;
     };
 
-export const FLYWHEEL_TITLE_CHECK = "flywheel/conventional-commit";
+// Re-exported from ./github.js (where the constant now lives, so the degraded
+// empty-key path can post the same check) — existing importers of
+// FLYWHEEL_TITLE_CHECK from this module keep resolving.
+export { FLYWHEEL_TITLE_CHECK };
 
 export interface PrFlowDeps {
   pr: PullRequest;

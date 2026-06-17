@@ -1,5 +1,6 @@
 import * as github from "@actions/github";
 
+import { parseTitle, VALID_TYPES } from "./conventional.js";
 import type {
   RulesetApi,
   RulesetDetail,
@@ -345,3 +346,45 @@ export function createGitHubClient(token: string, repoFullName?: string): GitHub
 
 export const FLYWHEEL_AUTO_MERGE_LABEL = "flywheel:auto-merge";
 export const FLYWHEEL_NEEDS_REVIEW_LABEL = "flywheel:needs-review";
+export const FLYWHEEL_TITLE_CHECK = "flywheel/conventional-commit";
+
+/**
+ * Posts the `flywheel/conventional-commit` check on the degraded empty-key
+ * path (a Dependabot-triggered run, where GitHub sources secrets from the
+ * Dependabot store and the App private key arrives empty). It computes the
+ * verdict from the SAME conventional-commit parser pr-flow uses and posts the
+ * SAME check, so a Dependabot title gets the identical pass/fail verdict it
+ * would on a first-party PR. The post uses whatever client is passed (on this
+ * path, one built from the workflow's built-in GITHUB_TOKEN, which carries
+ * checks:write for a same-repo Dependabot PR) — never an App token. A post
+ * failure is caught and logged as a warning rather than failing the run: the
+ * built-in token is read-only on fork PRs (#162, out of scope), where the
+ * post cannot succeed. See SPEC §spec:dependabot-degraded-check.
+ */
+export async function postDegradedTitleCheck(
+  gh: Pick<GitHubClient, "createCheck">,
+  pr: { title: string; headSha: string },
+  log: { info(msg: string): void; warning(msg: string): void },
+): Promise<{ conclusion: "success" | "failure"; posted: boolean }> {
+  const parsed = parseTitle(pr.title);
+  const conclusion: "success" | "failure" = parsed ? "success" : "failure";
+  const summary = parsed
+    ? "Valid conventional commit title."
+    : `Title is not a valid conventional commit. Expected \`<type>[(<scope>)][!]: <description>\` where type is one of ${VALID_TYPES.join(", ")}.`;
+  try {
+    await gh.createCheck({
+      name: FLYWHEEL_TITLE_CHECK,
+      conclusion,
+      summary,
+      ...(parsed ? {} : { details: `Got: ${pr.title}` }),
+      headSha: pr.headSha,
+    });
+    return { conclusion, posted: true };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    log.warning(
+      `Could not post the ${FLYWHEEL_TITLE_CHECK} check with the built-in token (${msg}). This is expected when the token is read-only (fork PRs — see #162); a Dependabot PR's same-repo token has checks:write.`,
+    );
+    return { conclusion, posted: false };
+  }
+}
