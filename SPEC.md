@@ -1716,3 +1716,125 @@ changes. §req:apply-rulesets-stdin-criteria
 **Backstop unchanged.** The e2e suite keeps exercising the full adopter
 path as a backstop; it is no longer the first line of defence for this bug
 class. §req:apply-rulesets-stdin-criteria
+
+## doctor repo-field reads are three-state §spec:doctor-settings-read
+
+*Status: not started*
+
+`scripts/doctor.sh` reports a repository setting as **enabled**,
+**disabled**, or **could-not-verify** — never collapsing the last into the
+second. Under "Repo settings" doctor checks two GitHub options flywheel
+depends on: `allow_auto_merge` (without it flywheel cannot schedule native
+auto-merge, so eligible PRs fall back to a direct merge that bypasses
+required status checks — see §spec:release-gate, #147/#153) and
+`delete_branch_on_merge` (without it head branches linger after every
+merge). Both are read off a single successful `gh api repos/<owner>/<repo>`
+response. §req:doctor-settings-read §req:doctor-settings-read-criteria
+
+**The false negative this closes.** GitHub omits these merge-setting fields
+from the repository object entirely when the caller's token lacks
+repo-admin: the API call still succeeds and returns the repo, just without
+the admin-only fields. doctor previously treated a setting as enabled only
+when its field read back exactly `true`, so an *absent* field — a `null`
+read — was indistinguishable from a genuine `false` and reported as
+**disabled**. An adopter running doctor with a non-admin or App
+installation token was told to go re-enable settings that were already on,
+chasing a non-problem and losing trust in the report; a check that
+confidently misdirects is worse than one that stays silent.
+§req:doctor-settings-read §req:doctor-settings-read-stories
+
+The reads now distinguish three states. The field present and `true` is
+enabled (reported `ok`, unchanged). The field present and `false` is
+genuinely disabled — reported `config` + `warn` with the existing
+remediation (re-run `scripts/apply-rulesets.sh`, or the Settings path),
+unchanged. The field **absent** from an otherwise-successful response is
+could-not-verify — reported `local-env` + `warn` with a message in the
+same register as doctor's existing permission notes: "could not verify
+`<setting>` — reading it requires repo-admin." doctor never asserts a
+setting is off when it merely could not read it.
+§req:doctor-settings-read-criteria §req:doctor-settings-read-constraints
+
+**Why `local-env` + `warn` for could-not-verify.** A field hidden by an
+under-scoped token is a condition on the adopter's own account, not a
+misconfiguration of their repo — the same shape as doctor's existing
+"could not list repo secrets — listing requires an admin PAT" finding,
+which is already `local-env`. It is `warn`, not `block`: doctor cannot
+confirm the setting either way, and a visibility limit must not halt a
+read-only validator. This reuses the bucket × severity vocabulary of
+§spec:preflight-classification (§req:preflight-detection) without inventing
+a new severity or bucket name. §req:doctor-settings-read-criteria
+§req:doctor-settings-read-constraints
+
+**The fix generalizes beyond the two named settings.** The conflation
+doctor avoids everywhere else — its variable, secret, and ruleset checks
+already distinguish "could not read — needs admin" from "absent" by
+inspecting whether the API *call* succeeded — was specific to fields read
+off an otherwise-successful call. Every doctor check that reads a
+permission-gated field off a successful `gh api` response distinguishes
+enabled / disabled / could-not-verify; none silently reports "disabled" or
+"absent" when the real cause is a permission gap. The two repo settings are
+the identified instance, not a special case. §req:doctor-settings-read
+§req:doctor-settings-read-criteria §req:doctor-settings-read-constraints
+
+**Severity reconciliation is ratified, not re-opened.** `allow_auto_merge`
+and `delete_branch_on_merge`, when genuinely disabled, report at the
+**same** severity and bucket — `config` + `warn`. The pre-flight work
+(#250, §spec:preflight-classification) already reconciled the historical
+fail-vs-warn mismatch between them; this section records that as the settled
+end state, not a new proposal. §req:doctor-settings-read-constraints
+
+**Mechanism is open; behavior is fixed.** How doctor tells an absent field
+from a `false` one (branching on `null` versus `false`, probing field
+presence with `jq`, or another means) is an implementation choice the spec
+does not pin — the section survives a change of mechanism. What is fixed is
+the adopter-visible behavior: never a false "disabled."
+§req:doctor-settings-read-constraints
+
+**Scope and blast radius.** The change is confined to how doctor
+*interprets* fields it already reads; it requests no additional scopes
+(the whole point is to behave correctly when the token is under-scoped),
+alters neither `apply-rulesets.sh` nor any setting nor any release
+behavior, and leaves doctor read-only. The exit contract is unchanged:
+neither a disabled-setting `warn` nor a could-not-verify `warn` is a block,
+so doctor still exits 1 only when a `block`-severity finding is present and
+0 otherwise (§spec:preflight-classification,
+§req:preflight-detection-criteria). §req:doctor-settings-read-constraints
+
+**Criteria.**
+
+- When the setting is enabled and the token can read it (field present and
+  `true`), doctor shall report it enabled, exactly as before.
+- When the token cannot read the setting (the field is absent from an
+  otherwise-successful `gh api` response), doctor shall report a
+  `local-env` + `warn` "could not verify `<setting>` — reading it requires
+  repo-admin" finding and shall not claim the setting is disabled.
+- When the setting is genuinely disabled (field present and `false`),
+  doctor shall report it `config` + `warn` with the existing remediation
+  guidance, unchanged.
+- Every doctor check that reads a permission-gated field off an
+  otherwise-successful `gh api` response shall distinguish enabled,
+  disabled, and could-not-verify; no such check shall report "disabled" or
+  "absent" when the cause is a permission gap.
+- `allow_auto_merge` and `delete_branch_on_merge`, when genuinely disabled,
+  shall report at the same severity (`warn`) and bucket (`config`).
+- doctor shall remain read-only and shall exit 1 only when a
+  `block`-severity finding is present, 0 otherwise — neither the
+  could-not-verify nor the disabled finding is a block.
+- A fast test shall exercise the could-not-verify path: fed a repo response
+  with the admin-gated fields absent, doctor reports "could not verify,"
+  not "disabled." The test shall need no live GitHub access and add no load
+  to the rate-limited sandbox installation
+  (§spec:sandbox-test-budget, §req:sandbox-ci-budget).
+
+**Scope and alternatives.**
+
+- *Requesting repo-admin so the fields are always present* was rejected: it
+  asks for privilege precisely where the value is behaving correctly
+  without it, and an App installation token still could not see them.
+- *Reporting could-not-verify as `block`* was rejected: doctor cannot
+  confirm the setting either way, and a visibility limit on a read-only
+  validator must not halt the adopter.
+- *Fixing only the two named settings* was rejected: the same successful-call
+  field-absence pattern can recur in any future repo-field read, so the
+  three-state treatment is a property of every such check, not a patch to
+  two lines.
