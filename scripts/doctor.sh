@@ -104,6 +104,18 @@ warn()  { finding "$1" warn "$2"; warns=$((warns+1)); }
 # note → info; same wrapper shape so NOTE sites read like the others.
 note()  { finding "$1" info "$2"; }
 
+# Classify a boolean field on an already-successful gh api response as one of
+# `true` / `false` / `absent`. GitHub omits admin-gated fields (e.g. the merge
+# settings) from the repo object entirely for an under-scoped or App token —
+# the call still succeeds, and a plain `jq -r` reads the absent field back as
+# `null`, indistinguishable from a genuine `false`. Branching on `has($f)`
+# inside jq keeps "could not read it" from being reported as "it is disabled".
+classify_repo_field() {
+  local json="$1" field="$2"
+  echo "$json" | jq -r --arg f "$field" \
+    'if has($f) then (.[$f] == true) else "absent" end'
+}
+
 cwd_repo=""
 if cwd_repo="$(gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null)"; then
   :
@@ -307,16 +319,16 @@ fi
 # 4. Repo settings: allow_auto_merge, delete_branch_on_merge.
 bold "Repo settings"
 if repo_settings="$(gh api "repos/$REPO" 2>/dev/null)"; then
-  if [[ "$(echo "$repo_settings" | jq -r .allow_auto_merge)" == "true" ]]; then
-    ok "allow_auto_merge enabled"
-  else
-    warn config "allow_auto_merge disabled — flywheel cannot schedule native auto-merge, so eligible PRs fall back to a direct merge that bypasses required status checks (#147). Re-run scripts/apply-rulesets.sh $REPO, or enable in Settings → General → Pull Requests → Allow auto-merge"
-  fi
-  if [[ "$(echo "$repo_settings" | jq -r .delete_branch_on_merge)" == "true" ]]; then
-    ok "delete_branch_on_merge enabled (head branches auto-delete on merge)"
-  else
-    warn config "delete_branch_on_merge disabled — apply-rulesets.sh enables this alongside the deletion-blocking ruleset (re-run scripts/apply-rulesets.sh $REPO), or flip manually in Settings → General → 'Automatically delete head branches'"
-  fi
+  case "$(classify_repo_field "$repo_settings" allow_auto_merge)" in
+    true)  ok "allow_auto_merge enabled" ;;
+    false) warn config "allow_auto_merge disabled — flywheel cannot schedule native auto-merge, so eligible PRs fall back to a direct merge that bypasses required status checks (#147). Re-run scripts/apply-rulesets.sh $REPO, or enable in Settings → General → Pull Requests → Allow auto-merge" ;;
+    absent) warn local-env "could not verify allow_auto_merge — reading it requires repo-admin" ;;
+  esac
+  case "$(classify_repo_field "$repo_settings" delete_branch_on_merge)" in
+    true)  ok "delete_branch_on_merge enabled (head branches auto-delete on merge)" ;;
+    false) warn config "delete_branch_on_merge disabled — apply-rulesets.sh enables this alongside the deletion-blocking ruleset (re-run scripts/apply-rulesets.sh $REPO), or flip manually in Settings → General → 'Automatically delete head branches'" ;;
+    absent) warn local-env "could not verify delete_branch_on_merge — reading it requires repo-admin" ;;
+  esac
 else
   fail instance "could not read repo settings"
 fi
