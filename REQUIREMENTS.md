@@ -38,6 +38,12 @@
 <!--     ruleset templates when read from stdin -->
 <!--     (§req:apply-rulesets-stdin, §req:apply-rulesets-stdin-criteria, -->
 <!--     §req:apply-rulesets-stdin-stories, §req:apply-rulesets-stdin-constraints) -->
+<!--   - Setup completion summary — setup ends with a static "Next steps" block -->
+<!--     that ignores what the run actually did; replace it with an outcome -->
+<!--     summary, a complete/incomplete verdict, and an auto-validation pass, -->
+<!--     all in the pre-flight vocabulary (#242) -->
+<!--     (§req:setup-completion-summary, §req:setup-completion-summary-criteria, -->
+<!--     §req:setup-completion-summary-stories, §req:setup-completion-summary-constraints) -->
 
 ## Problem statement §req:problem-statement
 
@@ -1306,3 +1312,170 @@ that exercises the stdin path so this class of break cannot ship again.
   `apply-rulesets.sh` command work end to end; (2) keep the docs honest and audit
   every other documented one-liner for the same class of failure; (3) the cheap
   stdin regression guard.
+
+## Setup completion summary §req:setup-completion-summary
+
+When an adopter finishes wiring flywheel into a repo, they cannot tell
+whether setup is actually *done*. `scripts/init.sh` ends by printing a
+fixed "Next steps" block — review `.flywheel.yml`, commit and push, open a
+smoke-test PR, run `doctor.sh` — and prints it identically no matter what
+the run did. It says the same thing whether the adopter set up App
+credentials or skipped them, applied the protection rulesets or declined,
+hit a pre-flight blocker or sailed through clean. The adopter is left to
+reconstruct from scrollback what was configured, what was skipped, and
+what still needs doing — and to remember to run a *separate* validator
+(`doctor.sh`) to find out whether any of it actually took. There is no
+moment where setup says "here is what I did, here is what is left, and
+here is whether you are ready."
+
+The same gap exists in the manual path. An adopter retrofitting an
+existing repo follows the §0 brownfield walkthrough in
+`docs/adopter/setup.md` — audit tags, disable prior release automation,
+confirm the bot can push, audit recent commits — and reaches the end with
+no single place that confirms the whole sequence is complete. The script
+and the docs describe "you are finished" differently (or, in the script's
+case, not at all), so an adopter who runs init and an adopter who follows
+the walkthrough learn two different pictures of "done."
+
+This compounds a vocabulary the rest of the setup cluster (#234–242)
+already established. §req:preflight-detection made init's *up-front*
+findings speak two axes — a **bucket** (local-env / instance / config) and
+a **severity** (block / warn / info) — and made `doctor.sh` speak the same
+language. But the *end* of the run drops that vocabulary entirely: the
+"Next steps" block is prose with no buckets, no severity, no tie to the
+findings the same run surfaced minutes earlier. The adopter learns one
+language for "what is wrong before we start" and a different, vaguer one
+for "what is left now that we are done."
+
+The users are the adopter wiring flywheel into a repo (greenfield or
+retrofit) and the flywheel maintainer who runs setup unattended — in CI or
+via `curl … | bash`. For the unattended maintainer the gap is sharper: a
+piped run prints "Next steps" and exits 0 regardless of whether a step
+failed or was silently skipped, so a CI pipeline cannot tell a clean setup
+from a half-finished one. The problem is frequent (every adoption),
+mandatory (no adopter avoids setup), and is first-run-experience friction
+rather than a release-correctness fault — nobody's published releases
+break, but every adopter pays in uncertainty about whether they are
+actually done.
+
+This is the closing item of the setup-onboarding cluster: it consumes the
+detection and the two-axis vocabulary built in §req:preflight-detection
+and turns them into the run's *final* report, so the adopter's last screen
+matches the language of the first.
+
+## Setup completion summary success criteria §req:setup-completion-summary-criteria
+
+- Setup ends with a **summary that reflects what the run actually did**, not
+  a fixed list. Every scaffold step init can touch is accounted for with its
+  real outcome: the `.flywheel.yml` preset, the two adopter workflow files,
+  `.gitattributes` plus the merge-driver git config, the App credentials (the
+  `FLYWHEEL_GH_APP_ID` variable and `FLYWHEEL_GH_APP_PRIVATE_KEY` secret), and
+  ruleset application. Each is shown as configured, skipped, failed, or
+  deferred-to-the-adopter.
+- Setup ends with an **explicit verdict**: "complete" or "incomplete — N
+  items remain." A **deliberate skip is not a failure** — when the adopter
+  answers no to a step or passes a `--skip-*` flag, the run can still read
+  "complete," with the skipped item listed as deferred and the exact command
+  to finish it later. Only a step that failed, or an unresolved
+  block-severity finding, makes the verdict "incomplete."
+- Outstanding and deferred items in the summary are **labelled in the
+  pre-flight vocabulary** — the same bucket (local-env / instance / config)
+  and severity (block / warn / info) axes from §req:preflight-detection — so
+  the adopter reads the *end* of the run in the same language as its
+  *beginning*. "App credentials not set" reads as the same kind of thing at
+  completion as it would at pre-flight.
+- Each deferred item names **the exact command that finishes it**, so the
+  adopter never has to reconstruct the remaining step from scrollback (e.g.
+  the `scripts/apply-rulesets.sh <repo> --app-id <id>` line init already
+  emits when rulesets are skipped, surfaced uniformly for every deferred
+  step).
+- Setup **auto-runs the `doctor.sh` validation at the end of every run** —
+  interactive or not — so the adopter sees a green/red confirmation that the
+  scaffold actually took, instead of being told to run a separate validator
+  themselves. doctor's findings feed the same end-of-run summary and speak
+  the same buckets and severity, so init and doctor produce one picture of
+  "done," not two.
+- In a **non-interactive run** (`curl … | bash`, CI), the completion summary
+  is **machine-readable** and init **exits with a meaningful code**: zero
+  when setup is complete (including complete-with-deliberate-deferrals),
+  non-zero when a step that was meant to run failed or a block-severity
+  finding is unresolved. A clean setup that the adopter intentionally
+  trimmed still exits zero.
+- A **strict mode** (a flag) is available that **elevates warn-severity
+  outstanding items to a non-zero exit**, so a maintainer who wants CI to
+  treat any deferred-or-warned item as a failure-to-investigate can opt into
+  it, while the default keeps deliberate skips green.
+- The manual §0 brownfield walkthrough in `docs/adopter/setup.md` ends with a
+  **completion check that mirrors the script's verdict and vocabulary**, so
+  an adopter who follows the docs and an adopter who runs init reach the same
+  definition of "finished."
+- A clean greenfield run that configures everything ends with an
+  **all-configured summary and a "complete" verdict** — the change is
+  additive and never makes a healthy setup look unfinished.
+
+## Setup completion summary user stories §req:setup-completion-summary-stories
+
+- As an adopter, I want setup to end by telling me exactly what it
+  configured, what I skipped, and what failed, so I do not have to scroll
+  back through the whole run to reconstruct where I stand.
+- As an adopter, I want a clear "you are set up" or "N items still needed"
+  verdict at the end, so I know whether I can stop or still have work to do.
+- As an adopter who deliberately skipped the rulesets for now, I want the run
+  to still say I am done — with the one command to apply them later — so a
+  choice I made on purpose is not reported to me as a failure.
+- As an adopter, I want the leftover items at the end described in the same
+  local-env / instance / config and block / warn / info terms the pre-flight
+  used, so I am not learning a second vocabulary for the same kinds of
+  problem.
+- As an adopter, I want setup to validate itself at the end instead of
+  telling me to go run another script, so I get a green/red confirmation that
+  the wiring actually took before I walk away.
+- As a maintainer running setup in CI or via `curl … | bash`, I want a failed
+  or block-level setup to exit non-zero with a readable summary, so an
+  unattended pipeline can tell a finished setup from a half-finished one.
+- As a maintainer with stricter standards, I want a flag that also fails the
+  run on warn-level leftovers, so CI can treat any deferred item as something
+  to investigate while ordinary adopters keep their deliberate skips green.
+- As an adopter retrofitting an existing repo by hand, I want the §0
+  walkthrough to end with the same completion check the script uses, so the
+  manual path and the scripted path agree on what "done" means.
+
+## Setup completion summary quality attributes and constraints §req:setup-completion-summary-constraints
+
+- **One vocabulary, end to end.** The completion summary reuses the bucket ×
+  severity classification from §req:preflight-detection rather than inventing
+  a third way to describe setup state. init's pre-flight, init's completion
+  summary, and doctor all speak the same buckets and severity names.
+- **Deliberate skip ≠ failure.** The verdict distinguishes an adopter's
+  intentional choice (answered no, passed `--skip-*`) from a step that was
+  supposed to run and did not. Conflating the two would train adopters to
+  ignore "incomplete," defeating the signal.
+- **Additive to the happy path.** A clean, fully-configured run is unchanged
+  except for gaining a passing summary and verdict. The completion signal
+  never turns a healthy setup into a scary one.
+- **Auto-validation respects the cost ceiling.** Auto-running `doctor.sh`
+  costs `gh` API calls; the validation stays within flywheel's
+  API-budget posture (§req:sandbox-ci-budget) — it reuses what the run
+  already knows where it can and does not balloon into a heavy re-probe of
+  the whole environment.
+- **Exit-code contract is stable and documented.** The default exit
+  semantics (zero on complete-including-deliberate-deferrals, non-zero on
+  real failure or unresolved block) and the strict-mode flag are a contract
+  CI can depend on; the §req:preflight-detection block-severity exit behavior
+  is preserved, not overridden.
+- **Machine-readability does not break interactive readability.** The
+  non-interactive summary is parseable, but the interactive run still reads
+  as human-friendly prose — one summary serves both audiences rather than
+  forcing a format that is good for neither.
+- **Priority.** Adopter-facing and on the documented onboarding path — it is
+  the *last* thing every adopter sees, so it directly shapes first-run
+  confidence. It ranks below the failures that break releases or a whole
+  major (§req:release-safety-gate, §req:composite-action-path) and below the
+  pre-flight spine it depends on (§req:preflight-detection): no adopter is
+  hard-blocked, and the scaffold itself still works without it. It is the
+  closing, polish item of the setup-onboarding cluster (#234–242). In
+  decreasing order of user impact: (1) the outcome-accurate summary and
+  complete/incomplete verdict at end of run; (2) the auto-validation pass so
+  the adopter gets a green/red confirmation without a second command; (3) the
+  non-interactive exit-code contract and strict-mode flag; (4) aligning the
+  §0 manual walkthrough's completion check with the script's.
