@@ -55,6 +55,12 @@
 <!--     merge (#243; fork PRs are the sibling case, tracked separately by #162) -->
 <!--     (§req:dependabot-deadlock, §req:dependabot-deadlock-criteria, -->
 <!--     §req:dependabot-deadlock-stories, §req:dependabot-deadlock-constraints) -->
+<!--   - doctor.sh curl-mode script references — doctor's remediation messages -->
+<!--     name flywheel scripts by local relative path (scripts/apply-rulesets.sh, -->
+<!--     scripts/init.sh), which an adopter cannot follow when doctor itself is -->
+<!--     run via `curl … | bash` and no local scripts/ exists (#238) -->
+<!--     (§req:doctor-curl-script-refs, §req:doctor-curl-script-refs-criteria, -->
+<!--     §req:doctor-curl-script-refs-stories, §req:doctor-curl-script-refs-constraints) -->
 
 ## Problem statement §req:problem-statement
 
@@ -1774,3 +1780,155 @@ fork-specific behaviour, documentation, and verification are out of scope and
   are never deadlocked, with no adopter configuration; (2) document and enable
   the Dependabot-secret opt-in so trusted bumps can auto-merge; (3) make the
   notice honest about Dependabot and about whether the check was posted.
+
+## doctor.sh curl-mode script references §req:doctor-curl-script-refs
+
+`scripts/doctor.sh` is a read-only validator an adopter runs to confirm a repo
+is correctly wired for flywheel. It is documented to be run **two ways**: from a
+local checkout (`./scripts/doctor.sh`) and — the form the README and adopter
+setup guide lead with — straight off GitHub with
+`curl -fsSL …/scripts/doctor.sh | bash`, where nothing of flywheel is on the
+adopter's disk. The scripts doctor tells an adopter to run as a fix —
+`apply-rulesets.sh` and `init.sh` — are themselves documented the same dual way,
+including a curl one-liner.
+
+When doctor reports a problem it also prints how to fix it, and those
+remediation messages name the fix scripts by **local relative path**: "Re-run
+`scripts/apply-rulesets.sh $REPO`", "run `scripts/apply-rulesets.sh $REPO`",
+"re-run `scripts/init.sh`". That instruction is only followable when doctor was
+itself run from a local checkout. An adopter who followed the documented
+`curl … | bash` path has no `scripts/` directory, so the very next thing doctor
+tells them to do cannot be done — it points at a file that does not exist on
+their machine. They are left to reverse-engineer that the fix is "fetch *this*
+script the same way I just fetched doctor, and run it with the right
+arguments."
+
+The gap is that doctor already solves exactly this problem for its **own**
+dependencies but not for the scripts it recommends. To locate `lib/findings.sh`
+and `lint-flywheel-config.py`, doctor checks whether it is running beside its
+on-disk siblings and, when it is not (the curl case), fetches them over the
+network — and it fetches them at the **same version** doctor itself came from
+(honoring `FLYWHEEL_TEMPLATES_BASE` for a pinned consumer, defaulting to `main`),
+not blindly at `main`. The remediation messages were never given that same
+treatment: they assume the local layout unconditionally.
+
+The affected messages span four finding areas — repo-settings
+(`allow_auto_merge`, `delete_branch_on_merge`), branch-protection (no ruleset,
+ruleset-without-PR-requirement, a branch not covered), tag-namespace
+(`refs/tags/v*`), all pointing at `apply-rulesets.sh`; plus the `.gitattributes`
+findings pointing at `init.sh`. They break identically under curl. A further
+wrinkle is that even the local form is under-specified: `apply-rulesets.sh`
+cannot do its job without `--app-id`, which the current "`scripts/apply-rulesets.sh
+$REPO`" text omits — so an adopter who *does* have the script still pastes a
+command that fails on a missing argument.
+
+The user is the adopter validating their setup — most often via the documented
+curl path, on a machine with no flywheel checkout — and the flywheel maintainer
+who owns the setup tooling. The problem is frequent (any adopter who hits a
+finding), self-inflicted onboarding friction rather than a release-correctness
+fault: nobody's releases break, but the one document whose entire job is to tell
+an adopter what is wrong and how to fix it hands them a fix they cannot run.
+This sits in the setup-onboarding cluster (#234–242) alongside
+§req:preflight-detection (shared doctor vocabulary) and touches the same
+repo-settings findings as §req:doctor-settings-read; the apply-rulesets curl
+form it shall emit is the one whose own invocation is constrained by
+§req:apply-rulesets-stdin.
+
+## doctor.sh curl-mode script references success criteria §req:doctor-curl-script-refs-criteria
+
+- An adopter who runs doctor via the documented `curl … | bash` path and hits
+  any finding is given a remediation command that **runs as-is in that same
+  context** — it fetches and runs the named fix script over the network (the
+  curl form) rather than naming a `scripts/…` path that is absent on their
+  machine.
+- An adopter who runs doctor from a local checkout (`./scripts/doctor.sh`)
+  still sees the **local `scripts/…` path** form in remediation messages — the
+  fix matches how they actually invoked doctor, with no regression to the
+  local workflow.
+- Every remediation command that names a fix script carries the **arguments
+  that script needs to actually perform the fix** — `apply-rulesets.sh` is
+  shown with `--app-id` (and the repo target), not just its bare path — using
+  a clearly-marked placeholder (e.g. `<your-app-id>`) where doctor cannot know
+  the concrete value, and substituting `$REPO` where doctor does know it. An
+  adopter who copy-pastes the command applies the fix instead of erroring on a
+  missing argument.
+- **Every** doctor finding that points at a flywheel script is corrected —
+  both `apply-rulesets.sh` (repo-settings, branch-protection, tag-namespace)
+  and `init.sh` (`.gitattributes`). A reader scanning doctor's output finds no
+  remaining remediation message that assumes a local `scripts/…` layout and
+  breaks under curl.
+- The curl form a message emits points at the **same flywheel version doctor
+  itself was fetched from** — honoring the pin / `FLYWHEEL_TEMPLATES_BASE` that
+  already governs how doctor fetches `findings.sh` and the linter, defaulting
+  to `main` — so a pinned adopter is told to fetch the matching
+  `apply-rulesets.sh` / `init.sh`, not a `main` that may have drifted.
+- doctor's existing exit contract, severity buckets, and finding vocabulary are
+  unchanged — only the wording of the remediation guidance changes. A repo that
+  was healthy before is healthy after; a finding that fired before fires after,
+  with the same severity and bucket.
+- A fast local test confirms the behavior in both modes: a finding's
+  remediation is the network/curl form when doctor runs without its on-disk
+  siblings, and the local-path form when it runs beside them — so a future edit
+  that reintroduces a bare `scripts/…` path under curl is caught cheaply,
+  without drawing on the rate-limited e2e sandbox (§req:sandbox-ci-budget).
+
+## doctor.sh curl-mode script references user stories §req:doctor-curl-script-refs-stories
+
+- As an adopter validating my repo with the documented
+  `curl …/doctor.sh | bash`, when doctor flags a missing ruleset I want the
+  fix-it command to be one I can paste right then and there, so I am not told
+  to run a `scripts/apply-rulesets.sh` that does not exist on my machine.
+- As an adopter who cloned flywheel and runs `./scripts/doctor.sh`, I want the
+  remediation to keep showing the local script path, so the instruction matches
+  how I actually invoke things and I am not pushed to re-download a script I
+  already have.
+- As an adopter, I want the suggested fix command to already include the flags
+  the script needs — like `apply-rulesets.sh`'s `--app-id` — so that pasting it
+  actually applies the fix rather than failing on a missing argument and
+  sending me back to the docs.
+- As an adopter running a version-pinned flywheel, I want the curl command
+  doctor prints to fetch the matching version of the fix script, so I do not
+  apply a `main` script that disagrees with the doctor I am running.
+- As a flywheel maintainer, I want every script reference doctor prints to be
+  safe in both invocation modes, so no finding ever leaves an adopter holding
+  an instruction they cannot follow.
+
+## doctor.sh curl-mode script references quality attributes and constraints §req:doctor-curl-script-refs-constraints
+
+- **Guidance-only change.** doctor stays read-only and its contract is
+  untouched: same exit codes, same severity buckets, same finding vocabulary,
+  same set of findings on a given repo. Only the human-readable remediation
+  text changes. The fix cannot alter what doctor *detects* — only what it
+  *advises*.
+- **One invocation-mode detector.** The local-vs-curl decision reuses the seam
+  doctor already has for locating `findings.sh` and the linter (the presence of
+  its on-disk siblings), rather than introducing a second, independently-drifting
+  notion of "am I running from disk or from curl." There is one source of truth
+  for invocation mode.
+- **Version-consistent fix URLs.** When a message emits a curl form, its URL
+  resolves against the same ref doctor resolved itself from
+  (`FLYWHEEL_TEMPLATES_BASE` / the pinned consumer ref, defaulting to `main`),
+  so a pinned adopter is pointed at the matching script. A message shall not
+  hard-code `main` when doctor itself was fetched from a pin.
+- **Placeholder honesty.** Where doctor cannot know an argument's value — the
+  App ID above all — the emitted command uses an obvious placeholder consistent
+  with the form already shown in `docs/adopter/setup.md`
+  (`--app-id <your-app-id>`), never a fabricated value or a silent omission.
+  Where doctor *does* know a value (`$REPO`), it substitutes it.
+- **Scope is doctor's messages.** The change is confined to the remediation
+  strings doctor prints; it does not modify `apply-rulesets.sh` or `init.sh`
+  themselves, nor the adopter docs (which already document the curl forms).
+- **Cheap coverage.** The behavior is pinned by a fast local/CI test, not the
+  e2e sandbox (§req:sandbox-ci-budget); e2e stays a backstop, not the first
+  line of defense for a wording regression.
+- **Priority.** Low-severity, adopter-facing correctness of guidance, and
+  self-contained. No release breaks and no adopter is hard-blocked — but an
+  adopter who hits a finding on the documented curl path is handed an
+  instruction they cannot follow, in the one tool whose purpose is to tell them
+  how to fix their setup, so the cost is paid precisely at the moment of
+  greatest confusion. It ranks below the release- and major-breaking failures
+  in this document (§req:release-safety-gate, §req:composite-action-path) and
+  sits with the other onboarding-friction fixes in the setup cluster. In
+  decreasing order of user impact: (1) make every remediation runnable in the
+  curl mode adopters actually use; (2) keep the local-checkout form correct for
+  maintainers; (3) complete the suggested commands so a paste applies the fix.
