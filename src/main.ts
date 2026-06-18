@@ -6,7 +6,12 @@ import { join } from "node:path";
 
 import { mintInstallationToken } from "./auth.js";
 import { loadConfig } from "./config.js";
-import { createGitHubClient, type PullRequest } from "./github.js";
+import {
+  createGitHubClient,
+  postDegradedTitleCheck,
+  FLYWHEEL_TITLE_CHECK,
+  type PullRequest,
+} from "./github.js";
 import { runPrFlow } from "./pr-flow.js";
 import { getUpstreamBranches, runPushFlow, findStreamForBranch } from "./push-flow.js";
 import { runPromotion } from "./promotion.js";
@@ -24,19 +29,9 @@ async function run(): Promise<void> {
   const owner = ctx.repo.owner;
   const repo = ctx.repo.repo;
 
-  // Fork-PR shortcut: GitHub doesn't pass repo secrets to PR workflows from
-  // forks, so app-private-key arrives empty. Without a key we can't mint an
-  // installation token, and the workflow's default GITHUB_TOKEN is read-only
-  // on fork PRs anyway — there's nothing useful for the conductor to do.
-  // Exit cleanly with a notice so the workflow ends green. See roadmap.md.
+  // Empty-key (degraded) path — see runDegradedEmptyKey for the full rationale.
   if (!privateKey || privateKey.trim() === "") {
-    core.notice(
-      "Flywheel: app-private-key is empty. This is expected for fork PRs " +
-        "(GitHub does not pass secrets to fork PR workflows). Skipping the " +
-        "conductor — title rewrite, auto-merge labels, and promotion PR upserts " +
-        "will not run on this PR. The PR can still be merged manually.",
-    );
-    core.setOutput("managed_branch", "false");
+    await runDegradedEmptyKey(event);
     return;
   }
 
@@ -159,6 +154,77 @@ function pushTouchedConfig(payload: unknown, configFile: string): boolean {
     if (c.removed?.includes(configFile)) return true;
   }
   return false;
+}
+
+// Empty-key (degraded) path. GitHub sources secrets from the Dependabot store
+// on a Dependabot-triggered run (and withholds them on fork PRs), so
+// app-private-key arrives empty and no App installation token can be minted.
+// The old behaviour ("skip entirely") permanently deadlocked Dependabot PRs:
+// apply-rulesets.sh makes flywheel/conventional-commit a REQUIRED check, so a
+// PR whose check is never posted sits at `Expected` forever and can never merge
+// (#243). Instead, on a pull_request run we post that check from the workflow's
+// BUILT-IN GITHUB_TOKEN — never an App token — reflecting the title verdict, and
+// run no App-only action (no rewrite, no labels, no native auto-merge, no
+// promotion-PR upsert). The PR is made mergeable, not merged. Fork PRs share
+// this seam but are out of scope (#162): their built-in token is read-only, so
+// the post degrades gracefully to a logged warning. See SPEC
+// §spec:dependabot-degraded-check.
+async function runDegradedEmptyKey(event: string): Promise<void> {
+  // Every exit reports an unmanaged branch — the conductor took no privileged
+  // action — so funnel the notice + output through one tail.
+  const skip = (msg: string) => {
+    core.notice(msg);
+    core.setOutput("managed_branch", "false");
+  };
+
+  const pr = event === "pull_request" ? readPullRequestFromContext() : null;
+  if (!pr) {
+    skip(
+      "Flywheel: app-private-key is empty and no pull_request payload is " +
+        "available, so there is no required check to post. Skipping the " +
+        "conductor — no App-only action runs without the key.",
+    );
+    return;
+  }
+
+  const githubToken = core.getInput("github-token");
+  if (!githubToken || githubToken.trim() === "") {
+    skip(
+      "Flywheel: app-private-key is empty and no built-in GITHUB_TOKEN is " +
+        "available, so the flywheel/conventional-commit check could not be " +
+        "posted. Skipping the conductor — no App-only action runs without the key.",
+    );
+    return;
+  }
+
+  // The check is posted for every empty-key pull_request run, regardless of
+  // whether pr.baseRef is a managed stream branch — §spec:dependabot-degraded-check
+  // mandates posting on the empty-key pull_request path unconditionally. The
+  // deadlock only bites where the check is required (managed branches, per
+  // apply-rulesets.sh); on any other branch the extra concluded check is a
+  // harmless no-op. (The full conductor, by contrast, returns `unmanaged`
+  // without posting — but it has the config loaded to make that distinction;
+  // the degraded path deliberately stays minimal and config-free.)
+  const result = await postDegradedTitleCheck(
+    createGitHubClient(githubToken),
+    { title: pr.title, headSha: pr.headSha },
+    { warning: (m) => core.warning(m) },
+  );
+  skip(
+    result.posted
+      ? `Flywheel: app-private-key is empty — this is expected for a Dependabot ` +
+          `PR (GitHub sources secrets from the Dependabot store, not the Actions ` +
+          `store). Posted the required ${FLYWHEEL_TITLE_CHECK} check with ` +
+          `conclusion "${result.conclusion}" using the built-in token, so the PR ` +
+          `is no longer deadlocked. App-only actions (title rewrite, ` +
+          `auto-merge/needs-review labels, native auto-merge, promotion-PR ` +
+          `upserts) were skipped. Register FLYWHEEL_GH_APP_PRIVATE_KEY in the ` +
+          `Dependabot secret store to enable the full Flywheel flow for ` +
+          `Dependabot PRs.`
+      : `Flywheel: app-private-key is empty and the built-in token is read-only, ` +
+          `so the ${FLYWHEEL_TITLE_CHECK} check could not be posted (expected for ` +
+          `fork PRs — see #162). App-only actions were skipped.`,
+  );
 }
 
 function readPullRequestFromContext(): PullRequest | null {

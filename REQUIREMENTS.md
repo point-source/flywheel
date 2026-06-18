@@ -38,6 +38,12 @@
 <!--     ruleset templates when read from stdin -->
 <!--     (§req:apply-rulesets-stdin, §req:apply-rulesets-stdin-criteria, -->
 <!--     §req:apply-rulesets-stdin-stories, §req:apply-rulesets-stdin-constraints) -->
+<!--   - Dependabot PR deadlock — when the app private key is empty on a -->
+<!--     Dependabot-triggered run, the conductor skips entirely and never posts -->
+<!--     the required flywheel/conventional-commit check, so the PR can never -->
+<!--     merge (#243; fork PRs are the sibling case, tracked separately by #162) -->
+<!--     (§req:dependabot-deadlock, §req:dependabot-deadlock-criteria, -->
+<!--     §req:dependabot-deadlock-stories, §req:dependabot-deadlock-constraints) -->
 
 ## Problem statement §req:problem-statement
 
@@ -1306,3 +1312,157 @@ that exercises the stdin path so this class of break cannot ship again.
   `apply-rulesets.sh` command work end to end; (2) keep the docs honest and audit
   every other documented one-liner for the same class of failure; (3) the cheap
   stdin regression guard.
+
+## Dependabot PR deadlock §req:dependabot-deadlock
+
+An adopter who follows Flywheel's documented setup registers the GitHub App
+private key as an **Actions** secret and applies the default ruleset from
+`apply-rulesets.sh`, which makes `flywheel/conventional-commit` a **required**
+check. The moment they also enable Dependabot, every Dependabot PR becomes
+permanently unmergeable.
+
+GitHub runs `dependabot[bot]`-actored workflows with the **Dependabot** secret
+store, not the Actions store — the same secret isolation it applies to fork
+PRs. The app private key the adopter registered for Actions is therefore not
+present on a Dependabot-triggered run, so it arrives empty. Flywheel's
+conductor cannot mint an app token without it, so it skips the run entirely —
+and skipping means the required `flywheel/conventional-commit` check is never
+posted. The PR sits at `BLOCKED` with that check showing **Expected**
+indefinitely: it is waiting on a check that, by construction, will never
+arrive. A routine `build(deps)` bump is stranded with no obvious cause.
+
+The skip notice makes this worse by being wrong. It says the PR "can still be
+merged manually" — language written for the era before the check was required.
+Once `apply-rulesets.sh`'s own default makes the check required, that
+reassurance is false: the PR cannot be merged at all, by hand or otherwise,
+until the missing check appears. The adopter reads a calm "this is expected for
+fork PRs" notice while their PR is silently deadlocked, and the notice never
+mentions Dependabot at all.
+
+The deadlock is silent, permanent, and near-universal for its trigger: it fires
+for every adopter who combines the documented default ruleset with Dependabot —
+which is to say, the recommended secure configuration plus one of the most
+common GitHub features. Nothing the adopter did was wrong; the project's own
+defaults compose into a trap.
+
+There are two distinct user wants tangled in this one symptom, and they pull in
+opposite directions. The adopter wants Dependabot PRs to **stop deadlocking** —
+unconditionally, with no setup, the moment they adopt Flywheel. But they do
+**not** want every secret-less PR to gain Flywheel's full powers, because
+auto-merge in the hands of an untrusted actor is a repository-compromise vector.
+The resolution is that breaking the deadlock and granting auto-merge are
+separable: posting the required check needs no app privilege and is always safe,
+while auto-merge stays gated behind whether the app key is actually reachable on
+the run. For Dependabot, the adopter makes the key reachable by registering it
+in the **Dependabot** secret store — a deliberate, GitHub-native act of trust
+that an external fork can never perform. The secret store *is* the actor
+allowlist; Flywheel adds no allowlist of its own.
+
+This requirement covers the **Dependabot** trigger only. Fork PRs are the
+sibling instance of the same empty-key root cause and remain tracked separately
+by #162; a fix here shares a seam with that case and may relieve it, but
+fork-specific behaviour, documentation, and verification are out of scope and
+#162 stays open.
+
+## Dependabot PR deadlock success criteria §req:dependabot-deadlock-criteria
+
+- A Dependabot PR in a repo that requires `flywheel/conventional-commit`, where
+  the app key is **not** in the Dependabot secret store, still receives a
+  pass/fail `flywheel/conventional-commit` check reflecting its title — so the
+  PR is no longer deadlocked and a maintainer can merge it once it is green and
+  reviewed. The deadlock is gone with **zero adopter configuration**.
+- In that same not-opted-in state, the Dependabot PR is **not** auto-merged and
+  gains none of the app-only actions (title rewrite, auto-merge / needs-review
+  labels, promotion-PR upserts). It is made mergeable, not merged.
+- When the adopter registers the app key in the **Dependabot** secret store, a
+  Dependabot PR runs the full conductor exactly as a first-party PR does: its
+  title is validated (and rewritten if malformed), the auto-merge or
+  needs-review label is applied, and the PR auto-merges when its title type is
+  listed in the target branch's `auto_merge` set and every other required gate
+  (other checks, required reviews) is satisfied.
+- A Dependabot PR is **never** auto-merged unless the app key is reachable on
+  the run. Absent the Dependabot secret, it receives the check and waits for a
+  human; auto-merge is opt-in by the explicit act of granting Dependabot the
+  key, never a default.
+- The pass/fail verdict a Dependabot title receives matches the verdict the same
+  title would receive on a first-party PR — Dependabot's `build(deps): …` /
+  `chore(deps): …` titles validate identically.
+- `docs/adopter/setup.md` documents registering the app private key in the
+  Dependabot secret store, alongside the Actions secret, as the step that
+  enables full Flywheel behaviour (including auto-merge) for Dependabot PRs.
+- The notice emitted when the key is empty names Dependabot explicitly, states
+  whether the required check was posted, and no longer claims the PR "can still
+  be merged manually" in the case where that is untrue.
+- The `apply-rulesets.sh` default that makes `flywheel/conventional-commit` a
+  required check is unchanged — the fix posts the check, it does not weaken the
+  default (§req:dependabot-deadlock-constraints).
+
+## Dependabot PR deadlock user stories §req:dependabot-deadlock-stories
+
+- As an adopter who just turned on Dependabot, I want its PRs to receive the
+  required conventional-commit check even though I have configured nothing
+  special, so a routine dependency bump is never permanently stuck behind a
+  check that can't be posted.
+- As an adopter, I want to opt Dependabot into the full Flywheel flow —
+  auto-merge included — by registering the app key where Dependabot can read it,
+  so trusted dependency bumps merge automatically when they are green.
+- As a security-conscious adopter, I want a Dependabot PR to auto-merge **only**
+  because I explicitly granted it the key, and an external contributor's PR to
+  never auto-merge at all, so I keep control over what merges without review.
+- As an adopter reading a run log, I want the notice to tell me plainly that
+  this is a Dependabot PR and whether the required check was posted, so I am not
+  misled into thinking the PR is mergeable when it is deadlocked — or left
+  worrying when it is actually fine.
+- As a Flywheel maintainer, I want setup.md to show the Dependabot-secret step,
+  so adopters enable Dependabot auto-merge from the docs instead of discovering
+  the deadlock through a bug report.
+
+## Dependabot PR deadlock quality attributes and constraints §req:dependabot-deadlock-constraints
+
+- **Safe by default.** No run that lacks the app key gains auto-merge or any
+  other app-only action. Breaking the deadlock (posting the check) and granting
+  auto-merge are separate outcomes with separate triggers; the former is
+  unconditional, the latter is gated on the key being reachable.
+- **Trust is GitHub-enforced, not Flywheel-configured.** The Dependabot secret
+  store is the opt-in that marks Dependabot trusted; an external fork can never
+  reach it, so a fork can never auto-merge. Flywheel adds no allowlist of its
+  own — the secret store already *is* the actor allowlist, and a second trust
+  mechanism would only risk drifting out of sync with GitHub's.
+- **No new privilege.** Posting the check requires only the low-privilege token
+  always present on a run (`checks: write`); it needs none of the App's
+  authority. The App-only features stay skipped when the key is empty. (Which
+  token posts the check and how the conductor degrades is a SPEC design
+  decision; the requirement is that the required check is posted and that no
+  app-only action runs without the key.)
+- **Required-check default preserved.** `flywheel/conventional-commit` remains a
+  required check by `apply-rulesets.sh` default. The defect is the unposted
+  check, not the requirement — the fix is to always post it for Dependabot, not
+  to relax the default and let malformed titles through.
+- **Supply-chain risk is the adopter's to accept.** Auto-merging Dependabot
+  means a dependency update that passes checks can merge without human review —
+  the standard supply-chain tradeoff. Flywheel makes that lever explicit and
+  off by default (it activates only when the adopter registers the Dependabot
+  secret and lists the relevant types in a branch's `auto_merge` set); it does
+  not decide dependency trust on the adopter's behalf.
+- **Scope boundary.** Only the Dependabot trigger is in scope. Fork PRs (#162)
+  share the empty-key root cause and may benefit from the same seam, but
+  fork-specific behaviour, docs, and tests are out of scope and #162 remains
+  open. This requirement neither closes nor depends on #162.
+- **Statelessness preserved.** The empty-key path posts a check and exits;
+  Flywheel holds no state between runs and waits on nothing after posting.
+- **Cheap coverage.** A fast local/CI test reproduces the empty-key Dependabot
+  path — required check posted, no auto-merge label applied — without drawing on
+  the rate-limited e2e sandbox installation (§req:sandbox-ci-budget). e2e stays a
+  backstop, not the first line of defence for this class of deadlock.
+- **Priority.** Adopter-facing, silent, and permanent: a Dependabot PR stuck at
+  `BLOCKED` with no posted check and a reassuring-but-wrong notice is a worse
+  first-run experience than a clean failure, because nothing tells the adopter
+  what is wrong. The trigger is near-universal — the documented default ruleset
+  plus one of GitHub's most common features. It ranks below the failures that
+  break releases or the whole v2 major (§req:release-safety-gate,
+  §req:composite-action-path): a maintainer who notices can still merge a stuck
+  PR by hand, so no adopter is hard-blocked, only silently obstructed. In
+  decreasing order of user impact: (1) post the required check so Dependabot PRs
+  are never deadlocked, with no adopter configuration; (2) document and enable
+  the Dependabot-secret opt-in so trusted bumps can auto-merge; (3) make the
+  notice honest about Dependabot and about whether the check was posted.
