@@ -106,10 +106,19 @@ flywheel_scripts_base() {
 # version-consistent network one-liner against the ref doctor was fetched from.
 fix_script_cmd() {
   local script="$1"; shift
+  local args="$*"
   if [[ "$doctor_local" == 1 ]]; then
-    printf 'scripts/%s %s' "$script" "$*"
+    if [[ -n "$args" ]]; then
+      printf 'scripts/%s %s' "$script" "$args"
+    else
+      printf 'scripts/%s' "$script"
+    fi
   else
-    printf 'curl -fsSL %s/%s | bash -s -- %s' "$(flywheel_scripts_base)" "$script" "$*"
+    if [[ -n "$args" ]]; then
+      printf 'curl -fsSL %s/%s | bash -s -- %s' "$(flywheel_scripts_base)" "$script" "$args"
+    else
+      printf 'curl -fsSL %s/%s | bash' "$(flywheel_scripts_base)" "$script"
+    fi
   fi
 }
 
@@ -555,14 +564,14 @@ fi
 if [[ $remote_only -eq 0 && -n "$yml" ]]; then
   bold ".gitattributes merge drivers"
   if [[ ! -f .gitattributes ]]; then
-    warn instance ".gitattributes missing — local merges of CHANGELOG.md will fall back to text merge (CI is unaffected). Re-run scripts/init.sh to write the managed block."
+    warn instance ".gitattributes missing — local merges of CHANGELOG.md will fall back to text merge (CI is unaffected). Re-run $(fix_script_cmd init.sh) to write the managed block."
   elif ! grep -qF "flywheel: managed merge-driver attributes" .gitattributes; then
-    warn instance ".gitattributes lacks Flywheel-managed block — re-run scripts/init.sh to add it."
+    warn instance ".gitattributes lacks Flywheel-managed block — re-run $(fix_script_cmd init.sh) to add it."
   else
     if grep -qE '^CHANGELOG\.md[[:space:]]+merge=flywheel-changelog' .gitattributes; then
       ok "CHANGELOG.md mapped to flywheel-changelog driver"
     else
-      warn instance ".gitattributes block exists but missing 'CHANGELOG.md merge=flywheel-changelog' — re-run scripts/init.sh."
+      warn instance ".gitattributes block exists but missing 'CHANGELOG.md merge=flywheel-changelog' — re-run $(fix_script_cmd init.sh)."
     fi
     # Each release_files entry in .flywheel.yml should also have a
     # merge=flywheel-release-file mapping. Init writes a comment template
