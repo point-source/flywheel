@@ -863,11 +863,24 @@ EOF
   fi
 }
 
+# app_creds_finish_cmd <scope> — emit the exact gh commands that set the App
+# credentials (the FLYWHEEL_GH_APP_ID variable + FLYWHEEL_GH_APP_PRIVATE_KEY
+# secret) at the given scope (org|repo). Single source of truth for the
+# finishing command recorded against every deferred/failed App-credential
+# outcome; $REPO/$OWNER expand at call time.
+app_creds_finish_cmd() {
+  if [[ "$1" == "org" ]]; then
+    printf '%s' "gh variable set FLYWHEEL_GH_APP_ID --body '<your-app-id>' --org $OWNER --visibility all && gh secret set FLYWHEEL_GH_APP_PRIVATE_KEY < /path/to/private-key.pem --org $OWNER --visibility all"
+  else
+    printf '%s' "gh variable set FLYWHEEL_GH_APP_ID --body '<your-app-id>' --repo $REPO && gh secret set FLYWHEEL_GH_APP_PRIVATE_KEY < /path/to/private-key.pem --repo $REPO"
+  fi
+}
+
 if [[ "$SKIP_SECRETS" -eq 1 ]]; then
   echo "  --skip-secrets set; not touching App credentials."
   # SCOPE is not yet resolved this early; default to the repo form (matches the
   # non-interactive branch's fallback below).
-  app_creds_cmd="gh variable set FLYWHEEL_GH_APP_ID --body '<your-app-id>' --repo $REPO && gh secret set FLYWHEEL_GH_APP_PRIVATE_KEY < /path/to/private-key.pem --repo $REPO"
+  app_creds_cmd="$(app_creds_finish_cmd repo)"
   record_outcome "App credentials" deferred config warn "$app_creds_cmd"
 else
   # Reuse the pre-flight credential probe (detect_credentials) instead of
@@ -890,12 +903,11 @@ else
     if [[ "$SCOPE" == "org" ]]; then
       echo "    gh variable set FLYWHEEL_GH_APP_ID --body '<your-app-id>' --org $OWNER --visibility all"
       echo "    gh secret set FLYWHEEL_GH_APP_PRIVATE_KEY < /path/to/private-key.pem --org $OWNER --visibility all"
-      app_creds_cmd="gh variable set FLYWHEEL_GH_APP_ID --body '<your-app-id>' --org $OWNER --visibility all && gh secret set FLYWHEEL_GH_APP_PRIVATE_KEY < /path/to/private-key.pem --org $OWNER --visibility all"
     else
       echo "    gh variable set FLYWHEEL_GH_APP_ID --body '<your-app-id>' --repo $REPO"
       echo "    gh secret set FLYWHEEL_GH_APP_PRIVATE_KEY < /path/to/private-key.pem --repo $REPO"
-      app_creds_cmd="gh variable set FLYWHEEL_GH_APP_ID --body '<your-app-id>' --repo $REPO && gh secret set FLYWHEEL_GH_APP_PRIVATE_KEY < /path/to/private-key.pem --repo $REPO"
     fi
+    app_creds_cmd="$(app_creds_finish_cmd "$SCOPE")"
     record_outcome "App credentials" deferred config warn "$app_creds_cmd"
   else
     # Resolve SCOPE before the App-source prompt so write_app_id_var /
@@ -930,11 +942,7 @@ else
     # Finishing command for any deferred/failed App-credential outcome below,
     # in the same form the non-interactive branch prints, keyed off the now-
     # resolved SCOPE so it's copy-pasteable.
-    if [[ "$SCOPE" == "org" ]]; then
-      app_creds_cmd="gh variable set FLYWHEEL_GH_APP_ID --body '<your-app-id>' --org $OWNER --visibility all && gh secret set FLYWHEEL_GH_APP_PRIVATE_KEY < /path/to/private-key.pem --org $OWNER --visibility all"
-    else
-      app_creds_cmd="gh variable set FLYWHEEL_GH_APP_ID --body '<your-app-id>' --repo $REPO && gh secret set FLYWHEEL_GH_APP_PRIVATE_KEY < /path/to/private-key.pem --repo $REPO"
-    fi
+    app_creds_cmd="$(app_creds_finish_cmd "$SCOPE")"
 
     echo
     echo "  Flywheel needs a GitHub App for installation tokens. Pick a setup path:"
@@ -1075,8 +1083,11 @@ if [[ "$SKIP_RULESETS" -eq 0 && -x "${SCRIPT_DIR:-}/apply-rulesets.sh" ]]; then
       exit "$rulesets_status"
     fi
   else
-    echo "  skipped ruleset apply. Run later with: scripts/apply-rulesets.sh $REPO${CREATED_APP_ID:+ --app-id $CREATED_APP_ID}"
-    record_outcome "Branch + tag protection rulesets" deferred instance warn "scripts/apply-rulesets.sh $REPO${CREATED_APP_ID:+ --app-id $CREATED_APP_ID}"
+    # One string for both the printed hint and the recorded finishing command,
+    # so they can never drift.
+    rulesets_cmd="scripts/apply-rulesets.sh $REPO${CREATED_APP_ID:+ --app-id $CREATED_APP_ID}"
+    echo "  skipped ruleset apply. Run later with: $rulesets_cmd"
+    record_outcome "Branch + tag protection rulesets" deferred instance warn "$rulesets_cmd"
   fi
 elif [[ "$SKIP_RULESETS" -eq 0 ]]; then
   echo "  apply-rulesets.sh not adjacent to init.sh — fetch the repo or run:"
