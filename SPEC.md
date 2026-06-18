@@ -2330,7 +2330,7 @@ backstop, not the first line of defence for this class of deadlock.
 
 ## doctor remediation matches its invocation mode §spec:doctor-curl-remediation
 
-*Status: not started*
+*Status: in progress*
 
 `scripts/doctor.sh` is a read-only validator an adopter runs to confirm a repo
 is wired for flywheel, and the README and `docs/adopter/setup.md` lead with the
