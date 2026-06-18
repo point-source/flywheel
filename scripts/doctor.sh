@@ -387,13 +387,13 @@ bold "Repo settings"
 if repo_settings="$(gh api "repos/$REPO" 2>/dev/null)"; then
   case "$(classify_repo_field "$repo_settings" allow_auto_merge)" in
     true)  ok "allow_auto_merge enabled" ;;
-    false) warn config "allow_auto_merge disabled — flywheel cannot schedule native auto-merge, so eligible PRs fall back to a direct merge that bypasses required status checks (#147). Re-run scripts/apply-rulesets.sh $REPO, or enable in Settings → General → Pull Requests → Allow auto-merge" ;;
+    false) warn config "allow_auto_merge disabled — flywheel cannot schedule native auto-merge, so eligible PRs fall back to a direct merge that bypasses required status checks (#147). Re-run $(fix_script_cmd apply-rulesets.sh "$REPO --app-id <your-app-id>"), or enable in Settings → General → Pull Requests → Allow auto-merge" ;;
     absent) warn local-env "could not verify allow_auto_merge — reading it requires repo-admin" ;;
     *) warn local-env "could not verify allow_auto_merge — unexpected response from repos/$REPO" ;;
   esac
   case "$(classify_repo_field "$repo_settings" delete_branch_on_merge)" in
     true)  ok "delete_branch_on_merge enabled (head branches auto-delete on merge)" ;;
-    false) warn config "delete_branch_on_merge disabled — apply-rulesets.sh enables this alongside the deletion-blocking ruleset (re-run scripts/apply-rulesets.sh $REPO), or flip manually in Settings → General → 'Automatically delete head branches'" ;;
+    false) warn config "delete_branch_on_merge disabled — apply-rulesets.sh enables this alongside the deletion-blocking ruleset (re-run $(fix_script_cmd apply-rulesets.sh "$REPO --app-id <your-app-id>")), or flip manually in Settings → General → 'Automatically delete head branches'" ;;
     absent) warn local-env "could not verify delete_branch_on_merge — reading it requires repo-admin" ;;
     *) warn local-env "could not verify delete_branch_on_merge — unexpected response from repos/$REPO" ;;
   esac
@@ -458,7 +458,7 @@ bold "Branch protection rulesets"
 if rulesets_json="$(gh api "repos/$REPO/rulesets" 2>/dev/null)"; then
   branch_ruleset_ids="$(echo "$rulesets_json" | jq -r '.[] | select(.target == "branch") | .id')"
   if [[ -z "$branch_ruleset_ids" ]]; then
-    fail instance "no branch rulesets defined — run scripts/apply-rulesets.sh $REPO"
+    fail instance "no branch rulesets defined — run $(fix_script_cmd apply-rulesets.sh "$REPO --app-id <your-app-id>")"
   else
     # Parallel arrays (bash 3.2 compatible — no associative arrays).
     ruleset_includes=()
@@ -500,7 +500,7 @@ if rulesets_json="$(gh api "repos/$REPO/rulesets" 2>/dev/null)"; then
         if [[ $ruleset_detail_unreadable -eq 1 ]]; then
           warn local-env "could not verify branch '$b' is covered by a ruleset — reading rulesets requires repo-admin"
         else
-          fail instance "no ruleset covers branch '$b' — run scripts/apply-rulesets.sh $REPO"
+          fail instance "no ruleset covers branch '$b' — run $(fix_script_cmd apply-rulesets.sh "$REPO --app-id <your-app-id>")"
         fi
       elif [[ $pr_required -eq 0 ]]; then
         if [[ $ruleset_detail_unreadable -eq 1 ]]; then
@@ -510,7 +510,7 @@ if rulesets_json="$(gh api "repos/$REPO/rulesets" 2>/dev/null)"; then
           # rather than a false block (#239).
           warn local-env "could not verify branch '$b' pull_request requirement — reading rulesets requires repo-admin"
         else
-          fail instance "branch '$b' is in a ruleset but no pull_request requirement — re-run scripts/apply-rulesets.sh"
+          fail instance "branch '$b' is in a ruleset but no pull_request requirement — re-run $(fix_script_cmd apply-rulesets.sh "$REPO --app-id <your-app-id>")"
         fi
       else
         ok "branch '$b' protected, requires PRs"
@@ -543,7 +543,7 @@ if [[ -n "${rulesets_json:-}" ]]; then
   elif [[ $tag_ruleset_detail_unreadable -eq 1 ]]; then
     warn local-env "could not verify 'refs/tags/v*' protection — reading rulesets requires repo-admin"
   else
-    fail instance "no ruleset protects 'refs/tags/v*' — run scripts/apply-rulesets.sh $REPO"
+    fail instance "no ruleset protects 'refs/tags/v*' — run $(fix_script_cmd apply-rulesets.sh "$REPO --app-id <your-app-id>")"
   fi
 fi
 
