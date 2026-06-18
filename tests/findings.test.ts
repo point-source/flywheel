@@ -222,6 +222,74 @@ describe("findings.sh — format_finding (summary formatter)", () => {
   });
 });
 
+describe("findings.sh — findings_validation_headline", () => {
+  it("0 0 renders a green all-checks-pass headline", () => {
+    const r = runWithLib("findings_validation_headline 0 0");
+    expect(r.exitCode, r.stderr).toBe(0);
+    const plain = stripAnsi(r.stdout);
+    expect(plain).toContain("Setup validation: all checks pass");
+    expect(plain).not.toContain("blocking");
+    // Uses the green ✓ style other green lines use.
+    expect(r.stdout).toMatch(/\x1b\[32m✓\x1b\[0m/);
+  });
+
+  it("2 1 renders a red headline naming 2 blocking and 1 warning", () => {
+    const r = runWithLib("findings_validation_headline 2 1");
+    expect(r.exitCode, r.stderr).toBe(0);
+    const plain = stripAnsi(r.stdout);
+    expect(plain).toContain("2 blocking finding(s)");
+    expect(plain).toContain("1 warning(s)");
+    // Leads with the block glyph (red ✗) when anything blocks.
+    expect(r.stdout).toContain("✗");
+  });
+
+  it("0 3 renders a warn-style headline with no 'blocking' lead", () => {
+    const r = runWithLib("findings_validation_headline 0 3");
+    expect(r.exitCode, r.stderr).toBe(0);
+    const plain = stripAnsi(r.stdout);
+    expect(plain).toContain("0 blocking finding(s)");
+    expect(plain).toContain("3 warning(s)");
+    // Only warnings → leads with the amber warn glyph, not the block ✗.
+    expect(r.stdout).toMatch(/\x1b\[33m!\x1b\[0m/);
+    expect(r.stdout).not.toContain("✗");
+  });
+
+  it("invalid (non-integer) input returns non-zero and writes to stderr", () => {
+    const r = runWithLib(
+      [
+        "findings_validation_headline x 0; rc=$?",
+        'echo "RC=$rc"',
+      ].join("\n"),
+    );
+    const plain = stripAnsi(r.stdout);
+    expect(plain).toContain("RC=1");
+    expect(r.stderr).toContain("invalid blocks");
+  });
+
+  it("a negative warns arg is rejected (returns non-zero, writes to stderr)", () => {
+    const r = runWithLib(
+      [
+        "findings_validation_headline 0 -1; rc=$?",
+        'echo "RC=$rc"',
+      ].join("\n"),
+    );
+    const plain = stripAnsi(r.stdout);
+    expect(plain).toContain("RC=1");
+    expect(r.stderr).toContain("invalid warns");
+  });
+
+  it("does NOT mutate FINDINGS_BLOCK_COUNT (pure renderer)", () => {
+    const r = runWithLib(
+      [
+        "findings_validation_headline 5 5",
+        'echo "COUNT=$FINDINGS_BLOCK_COUNT"',
+      ].join("\n"),
+    );
+    expect(r.exitCode, r.stderr).toBe(0);
+    expect(stripAnsi(r.stdout)).toContain("COUNT=0");
+  });
+});
+
 describe("findings.sh — invalid input rejected", () => {
   it("an invalid bucket returns non-zero, prints to stderr, and does not count", () => {
     const r = runWithLib(

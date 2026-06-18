@@ -116,10 +116,12 @@ elif { exec 3</dev/tty; } 2>/dev/null; then
   INTERACTIVE=1
 fi
 
-# Test hooks (FLYWHEEL_ASSUME_INTERACTIVE, FLYWHEEL_PREFLIGHT_INJECT) are INERT
-# unless FLYWHEEL_TEST_HOOKS=1 is explicitly set. This keeps them usable by the
-# test suite while ensuring a stray or maliciously-injected env var in a real
-# adopter run can neither fake a TTY nor forge/suppress pre-flight findings.
+# Test hooks (FLYWHEEL_ASSUME_INTERACTIVE, FLYWHEEL_PREFLIGHT_INJECT,
+# FLYWHEEL_DOCTOR_OVERRIDE) are INERT unless FLYWHEEL_TEST_HOOKS=1 is explicitly
+# set. This keeps them usable by the test suite while ensuring a stray or
+# maliciously-injected env var in a real adopter run can neither fake a TTY,
+# forge/suppress pre-flight findings, nor redirect the end-of-run validation to
+# an attacker-controlled script.
 FLYWHEEL_TEST_HOOKS="${FLYWHEEL_TEST_HOOKS:-0}"
 
 # Test-only override: force the interactive gate branch without a real TTY. Used
@@ -535,6 +537,75 @@ record_outcome() {
   SUMMARY_RECORDS+=("${label}"$'\t'"${outcome}"$'\t'"${bucket}"$'\t'"${severity}"$'\t'"${command}")
 }
 
+# run_setup_validation — auto-run doctor.sh at the end of the run and fold its
+# findings into the completion summary (SPEC.md §spec:setup-auto-validation), so
+# init and doctor produce ONE picture of "done". Read-only; never aborts the run.
+#
+# Prints a "Setup validation" heading, the canonical green/red headline (via
+# findings_validation_headline), and doctor's finding lines verbatim (already in
+# the shared [bucket]/glyph vocabulary); on an all-green run there are no finding
+# lines, only the headline. The block count doctor reported is returned to the
+# caller via the global VALIDATION_BLOCKS, keeping this function's stdout purely
+# the human-readable section (no machine marker for the caller to re-parse).
+#
+# Budget rationale (§req:sandbox-ci-budget): $REPO is already resolved, so doctor
+# skips its own `gh repo view`; --skip-credentials is passed because init's
+# pre-flight already probed the FLYWHEEL_GH_APP_ID/PRIVATE_KEY credentials, and
+# re-listing them needs an admin-PAT round trip the run already covered. doctor
+# stays read-only. Run identically in interactive and non-interactive runs.
+VALIDATION_BLOCKS=0
+run_setup_validation() {
+  VALIDATION_BLOCKS=0
+  printf '\nSetup validation:\n'
+
+  # Resolve the doctor command, mirroring the findings.sh source/curl fallback.
+  local doctor_cmd="" doctor_tmp=""
+  # Test seam: FLYWHEEL_DOCTOR_OVERRIDE points the validation at a stub doctor.
+  # INERT in real runs (gated on FLYWHEEL_TEST_HOOKS), exactly like
+  # FLYWHEEL_ASSUME_INTERACTIVE / FLYWHEEL_PREFLIGHT_INJECT.
+  if [[ "$FLYWHEEL_TEST_HOOKS" == "1" && -n "${FLYWHEEL_DOCTOR_OVERRIDE:-}" ]]; then
+    doctor_cmd="$FLYWHEEL_DOCTOR_OVERRIDE"
+  elif [[ -n "$SCRIPT_DIR" && -f "$SCRIPT_DIR/doctor.sh" ]]; then
+    doctor_cmd="$SCRIPT_DIR/doctor.sh"
+  else
+    doctor_tmp="$(mktemp)"
+    if curl -fsSL "${TEMPLATES_BASE%/templates}/doctor.sh" -o "$doctor_tmp" 2>/dev/null; then
+      doctor_cmd="$doctor_tmp"
+    else
+      rm -f "$doctor_tmp"
+      doctor_tmp=""
+    fi
+  fi
+
+  if [[ -z "$doctor_cmd" ]]; then
+    # Could not locate or fetch doctor — surface a deferred (non-block) line and
+    # skip the rest of validation rather than aborting the run.
+    format_finding instance warn "Setup validation — deferred (doctor.sh unavailable)"
+    printf '      finish with: scripts/doctor.sh %s\n' "$REPO"
+    return 0
+  fi
+
+  # Run doctor read-only. Capture stdout + exit code without tripping `set -e`.
+  local out=""
+  out="$(bash "$doctor_cmd" "$REPO" --skip-credentials --summary 2>/dev/null || true)"
+  [[ -n "$doctor_tmp" ]] && rm -f "$doctor_tmp"
+
+  # The `DOCTOR_RESULT blocks=N warns=M` trailer is doctor's last line; read the
+  # counts from it and drop it from the finding lines shown to the adopter.
+  local blocks=0 warns=0 body
+  if [[ "$(printf '%s\n' "$out" | tail -n1)" =~ ^DOCTOR_RESULT\ blocks=([0-9]+)\ warns=([0-9]+)$ ]]; then
+    blocks="${BASH_REMATCH[1]}"
+    warns="${BASH_REMATCH[2]}"
+  fi
+  body="$(printf '%s\n' "$out" | grep -vE '^DOCTOR_RESULT blocks=[0-9]+ warns=[0-9]+$' || true)"
+
+  findings_validation_headline "$blocks" "$warns"
+  # Print the remaining finding lines verbatim (empty on an all-green run).
+  [[ -n "$body" ]] && printf '%s\n' "$body"
+
+  VALIDATION_BLOCKS="$blocks"
+}
+
 # print_completion_summary — render the end-of-run outcome summary
 # (SPEC.md §spec:setup-completion-summary). Lists every scaffold step init can
 # touch with its real outcome, then closes with a complete/incomplete verdict.
@@ -575,6 +646,14 @@ print_completion_summary() {
       fi
     done
   fi
+
+  # Auto-run doctor and fold its blocking findings into the verdict so the run is
+  # "complete" only when BOTH the scaffold steps AND doctor are clean
+  # (SPEC.md §spec:setup-auto-validation). run_setup_validation prints the
+  # "Setup validation" section to stdout and sets the global VALIDATION_BLOCKS to
+  # doctor's block count; add that to incomplete_count.
+  run_setup_validation
+  incomplete_count=$((incomplete_count + VALIDATION_BLOCKS))
 
   if [[ "$incomplete_count" -gt 0 ]]; then
     printf '\n\033[1;31mincomplete — %d item(s) remain\033[0m\n' "$incomplete_count"
