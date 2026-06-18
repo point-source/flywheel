@@ -107,18 +107,16 @@ flywheel_scripts_base() {
 fix_script_cmd() {
   local script="$1"; shift
   local args="$*"
+  # Emit the base command per mode, then append the args as a pure suffix only
+  # when present — so an arg-less call (e.g. init.sh) yields a clean
+  # `scripts/init.sh` / `curl … | bash` with no trailing space or dangling
+  # `-s --`, while arg-bearing callers (apply-rulesets.sh) are byte-identical.
   if [[ "$doctor_local" == 1 ]]; then
-    if [[ -n "$args" ]]; then
-      printf 'scripts/%s %s' "$script" "$args"
-    else
-      printf 'scripts/%s' "$script"
-    fi
+    printf 'scripts/%s' "$script"
+    [[ -n "$args" ]] && printf ' %s' "$args"
   else
-    if [[ -n "$args" ]]; then
-      printf 'curl -fsSL %s/%s | bash -s -- %s' "$(flywheel_scripts_base)" "$script" "$args"
-    else
-      printf 'curl -fsSL %s/%s | bash' "$(flywheel_scripts_base)" "$script"
-    fi
+    printf 'curl -fsSL %s/%s | bash' "$(flywheel_scripts_base)" "$script"
+    [[ -n "$args" ]] && printf ' -s -- %s' "$args"
   fi
 }
 
