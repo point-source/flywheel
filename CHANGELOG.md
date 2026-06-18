@@ -1,3 +1,10 @@
+# [2.1.0-dev.6](https://github.com/point-source/flywheel/compare/v2.1.0-dev.5...v2.1.0-dev.6) (2026-06-18)
+
+
+### Features
+
+* setup completion summary ([#256](https://github.com/point-source/flywheel/issues/256)) ([156517d](https://github.com/point-source/flywheel/commit/156517d1f4a6f697204847956d0a883b8581e6c1)), closes [#242](https://github.com/point-source/flywheel/issues/242) [#242](https://github.com/point-source/flywheel/issues/242) [#242](https://github.com/point-source/flywheel/issues/242)
+
 # [2.1.0-dev.5](https://github.com/point-source/flywheel/compare/v2.1.0-dev.4...v2.1.0-dev.5) (2026-06-18)
 
 
