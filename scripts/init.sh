@@ -13,8 +13,8 @@
 #
 # Flags (all optional):
 #   --preset minimal|three-stage|multi-stream
-#   --skip-secrets        do not prompt for App credentials (FLYWHEEL_GH_APP_ID
-#                         variable, FLYWHEEL_GH_APP_PRIVATE_KEY secret)
+#   --skip-secrets        do not prompt for the App's shared credentials
+#                         (FLYWHEEL_GH_APP_ID Variable, FLYWHEEL_GH_APP_PRIVATE_KEY Secret)
 #   --skip-rulesets       do not offer to run apply-rulesets.sh
 #   --required-checks "quality,build"   passed through to apply-rulesets.sh
 #   --force               overwrite flywheel-pr.yml / flywheel-push.yml even
@@ -275,7 +275,8 @@ echo "  registered Flywheel merge drivers in .git/config"
 
 # 3. App-token secrets.
 #
-# SCOPE controls where the credentials live:
+# SCOPE controls where the App's shared credentials (FLYWHEEL_GH_APP_ID Variable
+# + FLYWHEEL_GH_APP_PRIVATE_KEY Secret) live:
 #   repo — Variable + Secret on $REPO (default; isolates per repo)
 #   org  — Variable + Secret on $OWNER with visibility=all, so every repo
 #          in the org inherits them (matches an org-installed App). The
@@ -365,13 +366,17 @@ create_app_via_manifest() {
 
 prompt_existing_app_credentials() {
   cat <<EOF
+  Paste the Flywheel GitHub App's shared credentials (the App's own identity,
+  not a personal access token): its numeric App ID — stored as the
+  FLYWHEEL_GH_APP_ID Variable — and its PEM private key — stored as the
+  FLYWHEEL_GH_APP_PRIVATE_KEY Secret.
   If you haven't created the App yet, follow:
     https://docs.github.com/en/apps/creating-github-apps/about-creating-github-apps/creating-a-github-app
   Required permissions: Contents r/w, Pull requests r/w, Issues r/w,
   Checks r/w, Metadata r. Install on $REPO.
 EOF
   if [[ "$has_app_id" -eq 0 ]]; then
-    read -r -u 3 -p "  GitHub App ID (numeric): " app_id
+    read -r -u 3 -p "  App ID (numeric, stored as the FLYWHEEL_GH_APP_ID Variable): " app_id
     if [[ -z "$app_id" ]]; then
       echo "  empty App ID — skipping FLYWHEEL_GH_APP_ID variable."
     else
@@ -384,7 +389,7 @@ EOF
     fi
   fi
   if [[ "$has_app_key" -eq 0 ]]; then
-    read -r -u 3 -p "  Path to private-key PEM file: " pem_path
+    read -r -u 3 -p "  Path to PEM private-key file (stored as the FLYWHEEL_GH_APP_PRIVATE_KEY Secret): " pem_path
     if [[ -z "$pem_path" ]]; then
       echo "  empty path — skipping FLYWHEEL_GH_APP_PRIVATE_KEY secret."
     elif [[ ! -f "$pem_path" ]]; then
@@ -397,7 +402,7 @@ EOF
 }
 
 if [[ "$SKIP_SECRETS" -eq 1 ]]; then
-  echo "  --skip-secrets set; not touching App credentials."
+  echo "  --skip-secrets set; not touching the App's FLYWHEEL_GH_APP_ID Variable or FLYWHEEL_GH_APP_PRIVATE_KEY Secret."
 else
   # Repo-level lookup first (cheapest — no admin:org needed). If anything is
   # missing AND the owner is an Organization, also probe org-level so a
@@ -434,7 +439,9 @@ else
       echo "  FLYWHEEL_GH_APP_ID set at ${app_id_found_at}-level, FLYWHEEL_GH_APP_PRIVATE_KEY at ${app_key_found_at}-level — workflows will prefer the repo-level value when both exist."
     fi
   elif [[ "$INTERACTIVE" -eq 0 ]]; then
-    echo "  non-interactive shell — skipping App-credential prompts. Set them manually:"
+    echo "  non-interactive shell — skipping App-credential prompts. Set the Flywheel"
+    echo "  GitHub App's two shared values manually (the FLYWHEEL_GH_APP_ID Variable and"
+    echo "  the FLYWHEEL_GH_APP_PRIVATE_KEY Secret, under Settings → Secrets and variables → Actions):"
     if [[ "$SCOPE" == "org" ]]; then
       echo "    gh variable set FLYWHEEL_GH_APP_ID --body '<your-app-id>' --org $OWNER --visibility all"
       echo "    gh secret set FLYWHEEL_GH_APP_PRIVATE_KEY < /path/to/private-key.pem --org $OWNER --visibility all"
@@ -451,9 +458,13 @@ else
       detect_owner_type
       if [[ "$OWNER_TYPE" == "Organization" ]]; then
         echo
-        echo "  Where should the credentials live?"
-        echo "    1) Repo $REPO only (default)"
-        echo "    2) Org-wide ($OWNER) — visibility=all, shared across every repo in the org"
+        echo "  Where should the Flywheel GitHub App's shared credentials live?"
+        echo "  These are the App's own identity (its numeric App ID + PEM private key),"
+        echo "  not a personal access token or per-user secret. Each option writes both:"
+        echo "  the FLYWHEEL_GH_APP_ID Variable and the FLYWHEEL_GH_APP_PRIVATE_KEY Secret."
+        echo "    1) Repo $REPO only (default) — writes the Variable + Secret on this repo"
+        echo "    2) Org-wide ($OWNER) — writes the Variable + Secret on the org with"
+        echo "       visibility=all, shared across every repo in the org"
         echo "       (requires an admin:org gh token; useful when one App serves many repos)"
         read -r -u 3 -p "  Selection [1/2] (default 1): " scope_choice
         case "${scope_choice:-1}" in
@@ -475,8 +486,8 @@ else
     echo
     echo "  Flywheel needs a GitHub App for installation tokens. Pick a setup path:"
     echo "    1) Create the App for me  — opens browser, ~30s round-trip"
-    echo "    2) I have an App already — paste credentials manually"
-    echo "    3) Skip — I'll set the App credentials later"
+    echo "    2) I have an App already — paste its App ID (Variable) + PEM private key (Secret)"
+    echo "    3) Skip — I'll set the App's Variable + Secret later"
     read -r -u 3 -p "  Selection [1/2/3] (default 1): " app_choice
     case "${app_choice:-1}" in
       1)
@@ -486,7 +497,7 @@ else
         fi
         ;;
       2) prompt_existing_app_credentials ;;
-      3) echo "  Skipped — set FLYWHEEL_GH_APP_ID variable and FLYWHEEL_GH_APP_PRIVATE_KEY secret before any Flywheel workflow runs." ;;
+      3) echo "  Skipped — set the App's FLYWHEEL_GH_APP_ID Variable and FLYWHEEL_GH_APP_PRIVATE_KEY Secret under Settings → Secrets and variables → Actions before any Flywheel workflow runs." ;;
       *) echo "  invalid selection — skipping." ;;
     esac
   fi
