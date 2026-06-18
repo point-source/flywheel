@@ -13,6 +13,17 @@
 #
 # Flags (all optional):
 #   --preset minimal|three-stage|multi-stream
+#                         which .flywheel.yml to scaffold, described by purpose:
+#                           minimal      — a single release line on one branch
+#                                          that cuts a release on every
+#                                          qualifying push
+#                           three-stage  — one release line through staged
+#                                          branches (develop → staging → main)
+#                                          with promotion PRs between them
+#                           multi-stream — two or more independent release lines
+#                                          in parallel, each cutting its own
+#                                          prereleases with its own version
+#                                          suffix and auto-merge rules
 #   --skip-secrets        do not prompt for App credentials (FLYWHEEL_GH_APP_ID
 #                         variable, FLYWHEEL_GH_APP_PRIVATE_KEY secret)
 #   --skip-rulesets       do not offer to run apply-rulesets.sh
@@ -810,9 +821,9 @@ else
       echo "  non-interactive shell, defaulting to --preset minimal"
     else
       echo "Choose a .flywheel.yml preset:"
-      echo "  1) minimal       — single stream, single branch (releases on every push to main)"
-      echo "  2) three-stage   — develop → staging → main with promotion PRs"
-      echo "  3) multi-stream  — main-line + a customer-acme variant"
+      echo "  1) minimal       — a single release line on one branch that cuts a release on every qualifying push"
+      echo "  2) three-stage   — one release line through staged branches (develop → staging → main) with promotion PRs between them"
+      echo "  3) multi-stream  — two or more independent release lines in parallel, each cutting its own prereleases with its own version suffix and auto-merge rules"
       read -r -u 3 -p "Selection [1/2/3] (default 1): " choice
       case "${choice:-1}" in
         1|"") PRESET="minimal" ;;
