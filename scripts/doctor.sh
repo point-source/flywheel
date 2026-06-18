@@ -82,19 +82,49 @@ if [[ -n "$doctor_src" ]]; then
   doctor_dir="$(cd "$(dirname "$doctor_src")" 2>/dev/null && pwd || true)"
 fi
 
+# The single invocation-mode flag. Derived from the one seam — on-disk siblings
+# next to this script. Both dependency-loading (below) and remediation
+# references (fix_script_cmd) branch on this so there is exactly one notion of
+# how doctor was invoked.
+if [[ -n "$doctor_dir" && -f "$doctor_dir/lib/findings.sh" ]]; then
+  doctor_local=1   # checkout: on-disk siblings present
+else
+  doctor_local=0   # curl … | bash: fetch over the network
+fi
+
+# Resolve the flywheel scripts base URL for network fetches, honoring a pinned
+# consumer (FLYWHEEL_TEMPLATES_BASE) and defaulting to main. Returns …/scripts.
+flywheel_scripts_base() {
+  local tb="${FLYWHEEL_TEMPLATES_BASE:-https://raw.githubusercontent.com/point-source/flywheel/main/scripts/templates}"
+  printf '%s' "${tb%/templates}"
+}
+
+# Emit a remediation reference to a flywheel fix script in the same invocation
+# mode doctor was run from. $1 = script filename (e.g. apply-rulesets.sh);
+# remaining args = the arguments the script needs. Under a checkout (on-disk
+# siblings present) emits the local scripts/… path; under curl emits the
+# version-consistent network one-liner against the ref doctor was fetched from.
+fix_script_cmd() {
+  local script="$1"; shift
+  if [[ "$doctor_local" == 1 ]]; then
+    printf 'scripts/%s %s' "$script" "$*"
+  else
+    printf 'curl -fsSL %s/%s | bash -s -- %s' "$(flywheel_scripts_base)" "$script" "$*"
+  fi
+}
+
 # Source the shared finding vocabulary (scripts/lib/findings.sh). Locate it next
 # to this script; otherwise fetch it. The fetch ref follows FLYWHEEL_TEMPLATES_BASE
 # when set (so a pinned consumer gets the matching findings.sh, not main),
 # defaulting to main otherwise. Without it doctor cannot emit vocabulary
 # findings — that is a hard error.
 # shellcheck source=scripts/lib/findings.sh
-if [[ -n "$doctor_dir" && -f "$doctor_dir/lib/findings.sh" ]]; then
+if [[ "$doctor_local" == 1 ]]; then
   # shellcheck disable=SC1091
   . "$doctor_dir/lib/findings.sh"
 else
-  findings_base="${FLYWHEEL_TEMPLATES_BASE:-https://raw.githubusercontent.com/point-source/flywheel/main/scripts/templates}"
   findings_tmp="$(mktemp)"
-  if curl -fsSL "${findings_base%/templates}/lib/findings.sh" -o "$findings_tmp" 2>/dev/null; then
+  if curl -fsSL "$(flywheel_scripts_base)/lib/findings.sh" -o "$findings_tmp" 2>/dev/null; then
     # shellcheck disable=SC1090
     . "$findings_tmp"
     rm -f "$findings_tmp"
