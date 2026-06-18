@@ -105,6 +105,28 @@ Install the App on your repo. Then store its credentials in Settings → Secrets
 
 Pass these straight into the Flywheel action via the `app-id` and `app-private-key` inputs (see the workflow YAML in §3). The action mints its own short-lived installation token internally and validates that the App's granted permissions match the list above — if anything is missing it fails fast with a friendly error pointing you at the App settings. You do not need a separate `actions/create-github-app-token` step.
 
+### 1.1 Opt Dependabot into the full flow (optional)
+
+By default a Dependabot PR does not get the full Flywheel treatment. The reason is where GitHub keeps its secrets: when a workflow is triggered by `dependabot[bot]`, GitHub sources `secrets.*` from the repository's (or organisation's) **Dependabot** secret store — a separate store from the **Actions** one you populated in §1 — *not* the Actions store. The `FLYWHEEL_GH_APP_PRIVATE_KEY` Secret you registered under Actions is therefore invisible to a Dependabot-triggered run, and `secrets.FLYWHEEL_GH_APP_PRIVATE_KEY` arrives **empty**. Without the key, the action cannot mint its App token, so it cannot rewrite the title, apply a label, or enable auto-merge.
+
+**Without the Dependabot secret** the run still does one thing: it posts the `flywheel/conventional-commit` required check — `success` or `failure`, reflecting the PR title — using the workflow's built-in token. That lets the PR *conclude* rather than hang forever at `Expected` on a check that would otherwise never be posted. But the PR is **not** auto-merged: it is made mergeable and then waits for a human to review and merge it. This is the safe default and needs no configuration.
+
+**To grant Dependabot the full flow** — title validate/rewrite, the `flywheel:auto-merge` / `flywheel:needs-review` label, and native auto-merge, exactly as a first-party PR gets — register the same private key a second time, in the **Dependabot** secret store:
+
+- Go to **Settings → Secrets and variables → Dependabot** (organisation-level if you manage credentials there).
+- Add a Secret named `FLYWHEEL_GH_APP_PRIVATE_KEY` with the same PEM-format private key you stored under Actions in §1.
+
+`FLYWHEEL_GH_APP_ID` is a Variable, not a Secret, and is read the same way regardless of who triggered the run — you do not need to duplicate it. Only the private-key Secret needs to live in the Dependabot store as well.
+
+Once it's there, GitHub resolves `secrets.FLYWHEEL_GH_APP_PRIVATE_KEY` non-empty on Dependabot runs, the action mints its App token, and a `build(deps): …` or `chore(deps): …` bump flows through the conductor identically to any other PR.
+
+**This is a deliberate supply-chain decision, and it is double-gated.** Auto-merging a Dependabot PR means a dependency update can merge without a human looking at it — the standard tradeoff of trusting your update bot. Flywheel will not make that call for you. A Dependabot PR auto-merges only when **both** of these are true:
+
+1. The App private key is registered in the **Dependabot** secret store (the step above), **and**
+2. The bump's Conventional Commit type — typically `build(deps)` or `chore(deps)` — is listed in the target branch's `auto_merge` set in `.flywheel.yml` (e.g. `auto_merge: [build, chore]`).
+
+Miss either gate and the PR waits for a human. Flywheel adds no list of "trusted bots" of its own — registering the secret *is* the trust decision. Because an external fork can never write to your repository's Dependabot secret store, a fork can never present the key, and so a fork can never auto-merge. The Dependabot store is the actor boundary, enforced by GitHub rather than by any Flywheel allowlist.
+
 ## 2. Add `.flywheel.yml`
 
 Place at the root of your repo. Start from one of these.
@@ -690,6 +712,8 @@ Floating major tags don't pin you to a known-good build. If a recent `@v<major>`
 **Got `flywheel:needs-review` but expected `flywheel:auto-merge`.** Compare the PR's commit type (with `!` if breaking) against the target branch's `auto_merge` list. `fix!` only matches if `fix!` is listed explicitly — listing `fix` doesn't imply `fix!`.
 
 **Native auto-merge wasn't enabled even though the PR got `flywheel:auto-merge`.** Either the branch doesn't have native auto-merge enabled (check **Settings → General → Pull Requests → Allow auto-merge**), the App lacks **Pull requests: write**, or you're passing a `secrets.GITHUB_TOKEN` somewhere instead of the App credentials (`app-id` / `app-private-key`). `doctor.sh` flags all three. Note: when an eligible PR is already mergeable with no required check pending — e.g. your repo has no required status checks — GitHub's `enableAutoMerge` mutation has nothing to schedule and declines it; Flywheel then falls through to a direct REST merge, so the PR still merges and the label stays applied. If instead a required status check or review is unsatisfied (`mergeable_state` is `blocked`), Flywheel does **not** direct-merge — it leaves the label applied and logs a warning, so the fallback can never bypass your gates.
+
+**Dependabot PR got the `flywheel/conventional-commit` check but was never auto-merged or labelled.** Its run couldn't reach the App private key, because GitHub reads `secrets.*` from the **Dependabot** secret store on Dependabot-triggered runs, not the Actions store. Register `FLYWHEEL_GH_APP_PRIVATE_KEY` in the Dependabot store as well — see [§1.1](#11-opt-dependabot-into-the-full-flow-optional). Remember it's double-gated: even with the secret, the bump only auto-merges if its type (e.g. `build(deps)` / `chore(deps)`) is in the target branch's `auto_merge` set.
 
 **Release job failed with `EGITNOPERMISSION` / "denied to github-actions[bot]".** The branch ruleset doesn't list the App as a bypass actor — re-run `scripts/apply-rulesets.sh <owner/repo> --app-id <id>`. (Other historical causes — `actions/checkout@v6` not setting `persist-credentials: false`, extraheader shadowing — now live in the composite action's own checkout step and can't drift from your repo.)
 
