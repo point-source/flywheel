@@ -29310,43 +29310,11 @@ async function run() {
   const event = getInput("event", { required: true });
   const appId = getInput("app-id", { required: true });
   const privateKey = getInput("app-private-key");
-  const githubToken = getInput("github-token");
   const ctx = context2;
   const owner = ctx.repo.owner;
   const repo = ctx.repo.repo;
   if (!privateKey || privateKey.trim() === "") {
-    if (event === "pull_request") {
-      const pr = readPullRequestFromContext();
-      if (pr) {
-        if (!githubToken || githubToken.trim() === "") {
-          notice(
-            "Flywheel: app-private-key is empty and no built-in GITHUB_TOKEN is available, so the flywheel/conventional-commit check could not be posted. Skipping the conductor \u2014 no App-only action runs without the key."
-          );
-        } else {
-          const gh2 = createGitHubClient(githubToken);
-          const result2 = await postDegradedTitleCheck(
-            gh2,
-            { title: pr.title, headSha: pr.headSha },
-            { info: (m) => info(m), warning: (m) => warning(m) }
-          );
-          if (result2.posted) {
-            notice(
-              `Flywheel: app-private-key is empty \u2014 this is expected for a Dependabot PR (GitHub sources secrets from the Dependabot store, not the Actions store). Posted the required ${FLYWHEEL_TITLE_CHECK} check with conclusion "${result2.conclusion}" using the built-in token, so the PR is no longer deadlocked. App-only actions (title rewrite, auto-merge/needs-review labels, native auto-merge, promotion-PR upserts) were skipped. Register FLYWHEEL_GH_APP_PRIVATE_KEY in the Dependabot secret store to enable the full Flywheel flow for Dependabot PRs.`
-            );
-          } else {
-            notice(
-              `Flywheel: app-private-key is empty and the built-in token is read-only, so the ${FLYWHEEL_TITLE_CHECK} check could not be posted (expected for fork PRs \u2014 see #162). App-only actions were skipped.`
-            );
-          }
-        }
-        setOutput("managed_branch", "false");
-        return;
-      }
-    }
-    notice(
-      "Flywheel: app-private-key is empty and no pull_request payload is available, so there is no required check to post. Skipping the conductor \u2014 no App-only action runs without the key."
-    );
-    setOutput("managed_branch", "false");
+    await runDegradedEmptyKey(event);
     return;
   }
   let auth6;
@@ -29443,6 +29411,34 @@ function pushTouchedConfig(payload, configFile) {
     if (c.removed?.includes(configFile)) return true;
   }
   return false;
+}
+async function runDegradedEmptyKey(event) {
+  const skip = (msg) => {
+    notice(msg);
+    setOutput("managed_branch", "false");
+  };
+  const pr = event === "pull_request" ? readPullRequestFromContext() : null;
+  if (!pr) {
+    skip(
+      "Flywheel: app-private-key is empty and no pull_request payload is available, so there is no required check to post. Skipping the conductor \u2014 no App-only action runs without the key."
+    );
+    return;
+  }
+  const githubToken = getInput("github-token");
+  if (!githubToken || githubToken.trim() === "") {
+    skip(
+      "Flywheel: app-private-key is empty and no built-in GITHUB_TOKEN is available, so the flywheel/conventional-commit check could not be posted. Skipping the conductor \u2014 no App-only action runs without the key."
+    );
+    return;
+  }
+  const result = await postDegradedTitleCheck(
+    createGitHubClient(githubToken),
+    { title: pr.title, headSha: pr.headSha },
+    { info: (m) => info(m), warning: (m) => warning(m) }
+  );
+  skip(
+    result.posted ? `Flywheel: app-private-key is empty \u2014 this is expected for a Dependabot PR (GitHub sources secrets from the Dependabot store, not the Actions store). Posted the required ${FLYWHEEL_TITLE_CHECK} check with conclusion "${result.conclusion}" using the built-in token, so the PR is no longer deadlocked. App-only actions (title rewrite, auto-merge/needs-review labels, native auto-merge, promotion-PR upserts) were skipped. Register FLYWHEEL_GH_APP_PRIVATE_KEY in the Dependabot secret store to enable the full Flywheel flow for Dependabot PRs.` : `Flywheel: app-private-key is empty and the built-in token is read-only, so the ${FLYWHEEL_TITLE_CHECK} check could not be posted (expected for fork PRs \u2014 see #162). App-only actions were skipped.`
+  );
 }
 function readPullRequestFromContext() {
   const payload = context2.payload;

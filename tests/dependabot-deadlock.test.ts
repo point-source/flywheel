@@ -5,7 +5,6 @@ import {
   FLYWHEEL_NEEDS_REVIEW_LABEL,
   FLYWHEEL_TITLE_CHECK,
   postDegradedTitleCheck,
-  type CreateCheckOptions,
 } from "../src/github.js";
 import { createFakeGh, silentLogger } from "./helpers/fakeGh.js";
 
@@ -25,12 +24,6 @@ import { createFakeGh, silentLogger } from "./helpers/fakeGh.js";
 
 const HEAD_SHA = "abcdef01234567890abcdef01234567890abcdef";
 
-// The conductor's degraded path only ever needs `createCheck`; if it grew any
-// other call this test would surface it (see the "no App-only action" guards).
-function findChecks(gh: ReturnType<typeof createFakeGh>): CreateCheckOptions[] {
-  return gh.createdChecks;
-}
-
 describe("postDegradedTitleCheck — empty-key Dependabot path", () => {
   // Real Dependabot titles: `build(deps): …` and `chore(deps): …` (and the
   // `deps-dev` scope). All are valid conventional commits, so the degraded
@@ -47,7 +40,7 @@ describe("postDegradedTitleCheck — empty-key Dependabot path", () => {
     const result = await postDegradedTitleCheck(gh, { title, headSha: HEAD_SHA }, log);
 
     expect(result).toEqual({ conclusion: "success", posted: true });
-    const checks = findChecks(gh);
+    const checks = gh.createdChecks;
     expect(checks).toHaveLength(1);
     expect(checks[0]).toMatchObject({
       name: FLYWHEEL_TITLE_CHECK,
@@ -75,7 +68,7 @@ describe("postDegradedTitleCheck — empty-key Dependabot path", () => {
     const result = await postDegradedTitleCheck(gh, { title, headSha: HEAD_SHA }, log);
 
     expect(result).toEqual({ conclusion: "failure", posted: true });
-    const checks = findChecks(gh);
+    const checks = gh.createdChecks;
     expect(checks).toHaveLength(1);
     expect(checks[0]).toMatchObject({
       name: FLYWHEEL_TITLE_CHECK,
