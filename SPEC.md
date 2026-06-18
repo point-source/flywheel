@@ -1127,3 +1127,107 @@ rather than an already-superseded one. §req:setup-node-v5
   decision, not part of this bump; the steps remain cache-free.
 
 §req:setup-node-v5-constraints
+
+## init.sh credentials prompt §spec:init-credentials-prompt
+
+*Status: not started*
+
+When an adopter runs `scripts/init.sh` interactively on an
+organization-owned repository, the credential prompts name the two things
+being placed and report what already exists. The "where should they live?"
+scope prompt no longer asks an adopter to make a placement decision about
+an unnamed "credentials" blob, and a re-run or second-repo onboarding is
+not asked from a blank slate when half the answer is already present.
+§req:init-credentials-prompt
+
+**The two values are named where they are set.** The credential prompts
+identify the pair being written as the Flywheel GitHub App's automation
+identity: `FLYWHEEL_GH_APP_ID` — the App's public numeric ID, stored as an
+Actions **Variable** — and `FLYWHEEL_GH_APP_PRIVATE_KEY` — the App's
+PEM-format private key, stored as an Actions **Secret**. The prompts make
+clear these are App-level credentials shared by the automation, not a
+personal access token or a per-user secret, and that the chosen scope
+writes them to the repo's or org's *Settings → Secrets and variables →
+Actions* — so an adopter reading only the terminal can name both values
+and find them afterward. This is the cheaper, higher-confidence half of
+the change and the framing all other surfaces are reconciled against.
+§req:init-credentials-prompt-criteria §req:init-credentials-prompt-stories
+§req:init-credentials-prompt-priorities
+
+**Detection state is surfaced, and only the gap is prompted.** `init.sh`
+already probes both repo and org level for the App ID (Variable) and
+private key (Secret), recording for each the scope it was found at. The
+run reports what that probe found and prompts only for what is missing:
+
+| Found | Behavior |
+| ----- | -------- |
+| Both values | Report both and their scope(s); prompt for neither (unchanged from today). |
+| Exactly one value | Report which value is set and at which scope (repo vs. org); the interactive flow asks only for the missing value. |
+| Neither value | Prompt as today. |
+
+When exactly one value already exists, the scope for the missing value
+defaults to the scope where the present value lives, so the App ID and its
+private key co-locate rather than being split across repo and org by an
+uninformed choice. This reuses state the existing probe already gathered —
+it adds no new GitHub API round-trip.
+§req:init-credentials-prompt-criteria §req:init-credentials-prompt-stories
+§req:init-credentials-prompt-constraints
+
+**One vocabulary across every surface.** The same naming holds across all
+of `init.sh`'s credential prompts — the scope prompt, the
+create/paste-existing/skip path, and the manual-setup instructions printed
+on non-interactive runs — and matches `docs/adopter/setup.md`, which
+already describes `FLYWHEEL_GH_APP_ID` as a Variable and
+`FLYWHEEL_GH_APP_PRIVATE_KEY` as a Secret. The terminal and the
+documentation never contradict each other about what the adopter is
+setting or where it is stored.
+§req:init-credentials-prompt-constraints
+§req:init-credentials-prompt-stories
+
+**Behavior preserved.** `--scope`, `--skip-secrets`, and non-interactive
+runs behave exactly as before; only the interactive wording and the use of
+already-detected state change. The change writes the same Variable/Secret
+names (`FLYWHEEL_GH_APP_ID`, `FLYWHEEL_GH_APP_PRIVATE_KEY`) to the same
+scopes (repo-level, or org-level with `visibility=all`) as today.
+§req:init-credentials-prompt-constraints
+
+**Criteria.**
+
+- The interactive credential prompts shall name both `FLYWHEEL_GH_APP_ID`
+  (the App's numeric ID, stored as a Variable) and
+  `FLYWHEEL_GH_APP_PRIVATE_KEY` (the PEM private key, stored as a Secret),
+  and identify them as the Flywheel GitHub App's credentials rather than a
+  personal token.
+- The scope prompt shall state where the chosen scope writes the two
+  values — a repo-level Variable + Secret, or an org-level Variable +
+  Secret with `visibility=all`.
+- When exactly one of the two values already exists at repo or org level,
+  the run shall report which value is set and at which scope, and the
+  interactive flow shall prompt only for the missing value.
+- When one value already exists, the scope chosen for the missing value
+  shall default to the scope where the existing value lives, so the App ID
+  and private key co-locate.
+- When both values already exist, the run shall report them and their
+  scope (unchanged from today).
+- `init.sh`'s create/paste/skip prompts, its non-interactive manual-setup
+  instructions, and `docs/adopter/setup.md` shall describe the two values
+  identically — Variable for the App ID, Secret for the private key.
+- Detection shall add no GitHub API calls beyond the repo- and org-level
+  probes `init.sh` already performs.
+- `--scope`, `--skip-secrets`, and non-interactive runs shall behave
+  exactly as before, writing the same names to the same scopes.
+
+**Scope and alternatives.**
+
+- *Requiring the literal word "credentials" or adding a glossary* is
+  rejected: the value is the adopter confidently knowing what the two
+  things are, not the vocabulary used. The prompts name the values and
+  what each is for; wording is otherwise free.
+  §req:init-credentials-prompt-constraints
+- *Adding a fresh detection round to learn existing state* is rejected:
+  the probe already records the scope each value was found at, so
+  surfacing partial state reuses what is known and respects the repo's
+  CI/API budget (§spec:sandbox-test-budget, §req:sandbox-ci-budget).
+- *Relocating an already-placed value to a different scope* (e.g. moving a
+  repo-level key org-wide) is out of scope. The flow reports what exists
+  and fills the gap; it does not move credentials already in place.
