@@ -120,6 +120,33 @@ warn()  { finding "$1" warn "$2"; warns=$((warns+1)); }
 # note → info; same wrapper shape so NOTE sites read like the others.
 note()  { finding "$1" info "$2"; }
 
+# Classify a boolean field on an already-successful gh api response as one of
+# `true` / `false` / `absent`. GitHub omits admin-gated fields (e.g. the merge
+# settings) from the repo object entirely for an under-scoped or App token —
+# the call still succeeds, and a plain `jq -r` reads the absent field back as
+# `null`, indistinguishable from a genuine `false`. Branching on `has($f)`
+# inside jq keeps "could not read it" from being reported as "it is disabled".
+classify_repo_field() {
+  local json="$1" field="$2"
+  echo "$json" | jq -r --arg f "$field" \
+    'if has($f) then (.[$f] == true) else "absent" end'
+}
+
+# Read a ruleset's detail JSON into the global RULESET_DETAIL. On a failed read
+# — a permission gap where listing rulesets is allowed but reading one's detail
+# requires repo-admin — emit a could-not-verify warn and return non-zero so the
+# caller can mark coverage indeterminate and skip the ruleset. Sets a global
+# rather than echoing, so the warn it emits reaches the report instead of being
+# swallowed by a caller's command substitution (and `warns` increments persist).
+read_ruleset_detail() {
+  local rid="$1"
+  if RULESET_DETAIL="$(gh api "repos/$REPO/rulesets/$rid" 2>/dev/null)"; then
+    return 0
+  fi
+  warn local-env "could not verify ruleset $rid — reading it requires repo-admin"
+  return 1
+}
+
 cwd_repo=""
 if cwd_repo="$(gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null)"; then
   :
@@ -241,7 +268,7 @@ detect_owner_type() {
 # $1 = "variables" or "secrets"
 # $2 = resource name
 org_resource_visible_to_repo() {
-  local kind="$1" name="$2" resp visibility priv
+  local kind="$1" name="$2" resp visibility repo_obj
   detect_owner_type
   [[ "$OWNER_TYPE" == "Organization" ]] || return 1
   resp="$(gh api "orgs/$OWNER/actions/$kind/$name" 2>/dev/null)" || return 1
@@ -252,10 +279,15 @@ org_resource_visible_to_repo() {
       return 0
       ;;
     private)
-      priv="$(gh api "repos/$REPO" --jq .private 2>/dev/null || echo "")"
-      if [[ "$priv" == "true" ]]; then
-        echo "private"
-        return 0
+      # Branch on the repo read SUCCEEDING — a failed/permission-gapped call
+      # must not collapse to "" and read back as "repo is not private".
+      # `.private` is always present on a successful repo read, so
+      # classify_repo_field returns true/false here, never "absent".
+      if repo_obj="$(gh api "repos/$REPO" 2>/dev/null)"; then
+        if [[ "$(classify_repo_field "$repo_obj" private)" == "true" ]]; then
+          echo "private"
+          return 0
+        fi
       fi
       return 1
       ;;
@@ -323,16 +355,18 @@ fi
 # 4. Repo settings: allow_auto_merge, delete_branch_on_merge.
 bold "Repo settings"
 if repo_settings="$(gh api "repos/$REPO" 2>/dev/null)"; then
-  if [[ "$(echo "$repo_settings" | jq -r .allow_auto_merge)" == "true" ]]; then
-    ok "allow_auto_merge enabled"
-  else
-    warn config "allow_auto_merge disabled — flywheel cannot schedule native auto-merge, so eligible PRs fall back to a direct merge that bypasses required status checks (#147). Re-run scripts/apply-rulesets.sh $REPO, or enable in Settings → General → Pull Requests → Allow auto-merge"
-  fi
-  if [[ "$(echo "$repo_settings" | jq -r .delete_branch_on_merge)" == "true" ]]; then
-    ok "delete_branch_on_merge enabled (head branches auto-delete on merge)"
-  else
-    warn config "delete_branch_on_merge disabled — apply-rulesets.sh enables this alongside the deletion-blocking ruleset (re-run scripts/apply-rulesets.sh $REPO), or flip manually in Settings → General → 'Automatically delete head branches'"
-  fi
+  case "$(classify_repo_field "$repo_settings" allow_auto_merge)" in
+    true)  ok "allow_auto_merge enabled" ;;
+    false) warn config "allow_auto_merge disabled — flywheel cannot schedule native auto-merge, so eligible PRs fall back to a direct merge that bypasses required status checks (#147). Re-run scripts/apply-rulesets.sh $REPO, or enable in Settings → General → Pull Requests → Allow auto-merge" ;;
+    absent) warn local-env "could not verify allow_auto_merge — reading it requires repo-admin" ;;
+    *) warn local-env "could not verify allow_auto_merge — unexpected response from repos/$REPO" ;;
+  esac
+  case "$(classify_repo_field "$repo_settings" delete_branch_on_merge)" in
+    true)  ok "delete_branch_on_merge enabled (head branches auto-delete on merge)" ;;
+    false) warn config "delete_branch_on_merge disabled — apply-rulesets.sh enables this alongside the deletion-blocking ruleset (re-run scripts/apply-rulesets.sh $REPO), or flip manually in Settings → General → 'Automatically delete head branches'" ;;
+    absent) warn local-env "could not verify delete_branch_on_merge — reading it requires repo-admin" ;;
+    *) warn local-env "could not verify delete_branch_on_merge — unexpected response from repos/$REPO" ;;
+  esac
 else
   fail instance "could not read repo settings"
 fi
@@ -399,9 +433,17 @@ if rulesets_json="$(gh api "repos/$REPO/rulesets" 2>/dev/null)"; then
     # Parallel arrays (bash 3.2 compatible — no associative arrays).
     ruleset_includes=()
     ruleset_has_pr=()
+    # Track whether any ruleset DETAIL read failed (permission gap). A failed
+    # detail call must not collapse into empty includes and surface as a false
+    # "no ruleset covers branch" BLOCK — it is a could-not-verify warn instead.
+    ruleset_detail_unreadable=0
     while read -r rid; do
       [[ -z "$rid" ]] && continue
-      detail="$(gh api "repos/$REPO/rulesets/$rid" 2>/dev/null || true)"
+      if ! read_ruleset_detail "$rid"; then
+        ruleset_detail_unreadable=1
+        continue
+      fi
+      detail="$RULESET_DETAIL"
       includes="$(echo "$detail" | jq -r '.conditions.ref_name.include[]?' 2>/dev/null)"
       has_pr="$(echo "$detail" | jq -r '[.rules[]? | select(.type == "pull_request")] | length' 2>/dev/null)"
       while IFS= read -r inc; do
@@ -425,9 +467,21 @@ if rulesets_json="$(gh api "repos/$REPO/rulesets" 2>/dev/null)"; then
         i=$((i+1))
       done
       if [[ $matched -eq 0 ]]; then
-        fail instance "no ruleset covers branch '$b' — run scripts/apply-rulesets.sh $REPO"
+        if [[ $ruleset_detail_unreadable -eq 1 ]]; then
+          warn local-env "could not verify branch '$b' is covered by a ruleset — reading rulesets requires repo-admin"
+        else
+          fail instance "no ruleset covers branch '$b' — run scripts/apply-rulesets.sh $REPO"
+        fi
       elif [[ $pr_required -eq 0 ]]; then
-        fail instance "branch '$b' is in a ruleset but no pull_request requirement — re-run scripts/apply-rulesets.sh"
+        if [[ $ruleset_detail_unreadable -eq 1 ]]; then
+          # A matched branch with no PR rule among the READABLE rulesets is only
+          # a genuine misconfiguration if every ruleset was readable — an unread
+          # ruleset could carry the PR requirement, so report could-not-verify
+          # rather than a false block (#239).
+          warn local-env "could not verify branch '$b' pull_request requirement — reading rulesets requires repo-admin"
+        else
+          fail instance "branch '$b' is in a ruleset but no pull_request requirement — re-run scripts/apply-rulesets.sh"
+        fi
       else
         ok "branch '$b' protected, requires PRs"
       fi
@@ -442,15 +496,22 @@ bold "Tag namespace ruleset"
 if [[ -n "${rulesets_json:-}" ]]; then
   tag_ruleset_ids="$(echo "$rulesets_json" | jq -r '.[] | select(.target == "tag") | .id')"
   found_v_protect=0
+  tag_ruleset_detail_unreadable=0
   while read -r rid; do
     [[ -z "$rid" ]] && continue
-    detail="$(gh api "repos/$REPO/rulesets/$rid" 2>/dev/null || true)"
+    if ! read_ruleset_detail "$rid"; then
+      tag_ruleset_detail_unreadable=1
+      continue
+    fi
+    detail="$RULESET_DETAIL"
     if echo "$detail" | jq -e '.conditions.ref_name.include[]? | select(. == "refs/tags/v*")' >/dev/null 2>&1; then
       found_v_protect=1
     fi
   done <<< "$tag_ruleset_ids"
   if [[ $found_v_protect -eq 1 ]]; then
     ok "v* tag namespace protected"
+  elif [[ $tag_ruleset_detail_unreadable -eq 1 ]]; then
+    warn local-env "could not verify 'refs/tags/v*' protection — reading rulesets requires repo-admin"
   else
     fail instance "no ruleset protects 'refs/tags/v*' — run scripts/apply-rulesets.sh $REPO"
   fi

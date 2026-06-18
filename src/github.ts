@@ -1,5 +1,6 @@
 import * as github from "@actions/github";
 
+import { parseTitle, VALID_TYPES } from "./conventional.js";
 import type {
   RulesetApi,
   RulesetDetail,
@@ -345,3 +346,69 @@ export function createGitHubClient(token: string, repoFullName?: string): GitHub
 
 export const FLYWHEEL_AUTO_MERGE_LABEL = "flywheel:auto-merge";
 export const FLYWHEEL_NEEDS_REVIEW_LABEL = "flywheel:needs-review";
+export const FLYWHEEL_TITLE_CHECK = "flywheel/conventional-commit";
+
+const TITLE_CHECK_SUCCESS_SUMMARY = "Valid conventional commit title.";
+
+/**
+ * Builds the `flywheel/conventional-commit` check payload for a title's
+ * conventional-commit parse verdict: `success` when the title parses, `failure`
+ * (carrying the expected-format hint and the offending title) when it does not.
+ * Single source of truth for the check's name, conclusion, and summary text, so
+ * the degraded empty-key path (`postDegradedTitleCheck`) and the full conductor
+ * (`runPrFlow`) cannot drift on the verdict they report for the same title. The
+ * verdict is title-only by design (§spec:dependabot-degraded-check, "Verdict
+ * parity"): it reflects the conventional-commit parse and nothing else — the
+ * full conductor's separate skip-ci gate is not part of this verdict.
+ */
+export function buildTitleCheck(
+  title: string,
+  headSha: string,
+): CreateCheckOptions & { conclusion: "success" | "failure" } {
+  if (parseTitle(title)) {
+    return {
+      name: FLYWHEEL_TITLE_CHECK,
+      conclusion: "success",
+      summary: TITLE_CHECK_SUCCESS_SUMMARY,
+      headSha,
+    };
+  }
+  return {
+    name: FLYWHEEL_TITLE_CHECK,
+    conclusion: "failure",
+    summary: `Title is not a valid conventional commit. Expected \`<type>[(<scope>)][!]: <description>\` where type is one of ${VALID_TYPES.join(", ")}.`,
+    details: `Got: ${title}`,
+    headSha,
+  };
+}
+
+/**
+ * Posts the `flywheel/conventional-commit` check on the degraded empty-key
+ * path (a Dependabot-triggered run, where GitHub sources secrets from the
+ * Dependabot store and the App private key arrives empty). It posts the SAME
+ * check the full conductor posts, via `buildTitleCheck`, so a Dependabot title
+ * gets the identical pass/fail verdict it would on a first-party PR. The post
+ * uses whatever client is passed (on this path, one built from the workflow's
+ * built-in GITHUB_TOKEN, which carries checks:write for a same-repo Dependabot
+ * PR) — never an App token. A post failure is caught and logged as a warning
+ * rather than failing the run: the built-in token is read-only on fork PRs
+ * (#162, out of scope), where the post cannot succeed — so the `{ posted: false }`
+ * arm carries no conclusion. See SPEC §spec:dependabot-degraded-check.
+ */
+export async function postDegradedTitleCheck(
+  gh: Pick<GitHubClient, "createCheck">,
+  pr: { title: string; headSha: string },
+  log: { warning(msg: string): void },
+): Promise<{ posted: true; conclusion: "success" | "failure" } | { posted: false }> {
+  const check = buildTitleCheck(pr.title, pr.headSha);
+  try {
+    await gh.createCheck(check);
+    return { posted: true, conclusion: check.conclusion };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    log.warning(
+      `Could not post the ${FLYWHEEL_TITLE_CHECK} check with the built-in token (${msg}). This is expected when the token is read-only (fork PRs — see #162); a Dependabot PR's same-repo token has checks:write.`,
+    );
+    return { posted: false };
+  }
+}

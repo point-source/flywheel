@@ -14,6 +14,12 @@ jobs:
     if: |
       github.event.pull_request.draft == false &&
       (github.event.action != 'edited' || github.event.sender.type == 'User')
+    # The degraded empty-key path (Dependabot PRs, where the App key is absent)
+    # posts the flywheel/conventional-commit check with the built-in token, so
+    # the token needs checks:write. See SPEC §spec:dependabot-degraded-check.
+    permissions:
+      contents: read
+      checks: write
     runs-on: ubuntu-latest
     steps:
       # The single `point-source/flywheel@<ref>` pin governs every flywheel

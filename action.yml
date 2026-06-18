@@ -22,6 +22,10 @@ inputs:
   app-private-key:
     description: "GitHub App private key in PEM format. Typically supplied via secrets.FLYWHEEL_GH_APP_PRIVATE_KEY. Required for normal runs; empty on fork PRs (GitHub does not pass secrets to fork PR workflows) — the action exits cleanly with a notice in that case."
     required: false
+  github-token:
+    description: "Built-in workflow token (GITHUB_TOKEN). Used only on the degraded empty-key path to post the flywheel/conventional-commit check via checks:write — never to mint an App token. Defaults to the caller workflow's token."
+    required: false
+    default: ${{ github.token }}
 outputs:
   token:
     description: "Minted installation token (masked). Pass to downstream steps that need it (e.g. semantic-release)."
@@ -73,6 +77,7 @@ runs:
         INPUT_EVENT: ${{ inputs.event }}
         INPUT_APP-ID: ${{ inputs.app-id }}
         INPUT_APP-PRIVATE-KEY: ${{ inputs.app-private-key }}
+        INPUT_GITHUB-TOKEN: ${{ inputs.github-token }}
       run: node "${{ github.action_path }}/core/dist/index.cjs"
 
     - name: Run semantic-release

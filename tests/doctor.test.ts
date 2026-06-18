@@ -82,12 +82,37 @@ interface StubOpts {
   allowAutoMerge?: boolean;
   /** delete_branch_on_merge value in the repos/<REPO> settings response. */
   deleteBranchOnMerge?: boolean;
+  /** If true (default), the repos/<REPO> settings response includes the
+   * admin-gated `allow_auto_merge` + `delete_branch_on_merge` fields. If
+   * false, both are OMITTED from the (still-successful) response — modelling
+   * an under-scoped / App-installation token, where GitHub drops admin-gated
+   * fields from the repo object rather than failing the call. doctor must
+   * then read them as "could not verify" (absent), not "disabled" (false). */
+  adminFieldsVisible?: boolean;
   /** If true, `repos/<REPO>/contents/.flywheel.yml` returns the config;
    * if false, it 404s (→ instance block "no .flywheel.yml"). */
   hasConfig?: boolean;
   /** If true, rulesets are present and protect main + v* tags;
    * if false, `repos/<REPO>/rulesets` returns `[]` (→ instance blocks). */
   hasRulesets?: boolean;
+  /** If true, the rulesets LIST still succeeds (so `hasRulesets` stays in
+   * effect) but the BRANCH ruleset DETAIL read (`repos/<REPO>/rulesets/1`)
+   * exits non-zero — modelling a permission gap where listing rulesets is
+   * allowed but reading one requires repo-admin. doctor must then emit a
+   * "could not verify ruleset" warn and downgrade the unmatched-branch BLOCK
+   * to a could-not-verify warn, instead of a false "no ruleset covers branch"
+   * (#239). The tag ruleset detail (id 2) is left readable, so v* protection
+   * still verifies cleanly and this path introduces no block-severity finding. */
+  rulesetDetailFails?: boolean;
+  /** If true, models a MIXED branch-ruleset permission gap: a READABLE branch
+   * ruleset (id 1) covers main but carries NO pull_request rule, while a SECOND
+   * branch ruleset (id 3) — which could supply the PR requirement — is unreadable
+   * (its detail exits non-zero). With this combination the branch is matched
+   * (pr_required stays 0) AND a detail read failed, so doctor must downgrade the
+   * "no pull_request requirement" finding to a could-not-verify warn rather than
+   * a false `fail instance` block (#239). The tag ruleset (id 2) stays readable,
+   * so this path introduces no block-severity finding and the run exits 0. */
+  branchPrUnreadable?: boolean;
 }
 
 /** Writes a `gh` stub into a temp bin dir and returns the dir + a cleanup.
@@ -107,29 +132,50 @@ function setupGhStub(opts: StubOpts = {}): { binDir: string; cleanup: () => void
   const {
     allowAutoMerge = true,
     deleteBranchOnMerge = true,
+    adminFieldsVisible = true,
     hasConfig = true,
     hasRulesets = true,
+    rulesetDetailFails = false,
+    branchPrUnreadable = false,
   } = opts;
 
   const binDir = mkdtempSync(join(tmpdir(), "flywheel-doctor-bin-"));
 
   const b64 = (s: string): string => Buffer.from(s, "utf8").toString("base64");
 
-  const settingsJson = JSON.stringify({
-    allow_auto_merge: allowAutoMerge,
-    delete_branch_on_merge: deleteBranchOnMerge,
-    private: false,
-  });
+  // When adminFieldsVisible is false, omit the two admin-gated fields entirely
+  // (an under-scoped/App token sees a successful response without them), while
+  // keeping `private: false` so the object is still a valid non-empty repo.
+  const settingsJson = JSON.stringify(
+    adminFieldsVisible
+      ? {
+          allow_auto_merge: allowAutoMerge,
+          delete_branch_on_merge: deleteBranchOnMerge,
+          private: false,
+        }
+      : { private: false },
+  );
 
   // One branch ruleset (id 1) covering refs/heads/main with a pull_request
-  // rule, plus one tag ruleset (id 2) covering refs/tags/v*.
-  const rulesetsList = JSON.stringify([
-    { id: 1, target: "branch" },
-    { id: 2, target: "tag" },
-  ]);
+  // rule, plus one tag ruleset (id 2) covering refs/tags/v*. When
+  // branchPrUnreadable is set, a second branch ruleset (id 3) is added whose
+  // detail is unreadable (see the stub below), and id 1 drops its PR rule so
+  // the only possible PR requirement lives in the unreadable ruleset.
+  const rulesetsList = JSON.stringify(
+    branchPrUnreadable
+      ? [
+          { id: 1, target: "branch" },
+          { id: 3, target: "branch" },
+          { id: 2, target: "tag" },
+        ]
+      : [
+          { id: 1, target: "branch" },
+          { id: 2, target: "tag" },
+        ],
+  );
   const branchRulesetDetail = JSON.stringify({
     conditions: { ref_name: { include: ["refs/heads/main"] } },
-    rules: [{ type: "pull_request" }],
+    rules: branchPrUnreadable ? [] : [{ type: "pull_request" }],
   });
   const tagRulesetDetail = JSON.stringify({
     conditions: { ref_name: { include: ["refs/tags/v*"] } },
@@ -183,10 +229,20 @@ case "$path" in
     ${hasRulesets ? `printf '%s\\n' '${rulesetsList}'` : `printf '%s\\n' '[]'`}
     ;;
   "repos/${REPO}/rulesets/1")
-    printf '%s\\n' '${branchRulesetDetail}'
+    # Branch ruleset detail. When rulesetDetailFails is set, exit non-zero to
+    # model a permission gap (LIST allowed, DETAIL repo-admin-gated) — doctor
+    # must surface this as could-not-verify, not a false coverage block (#239).
+    ${rulesetDetailFails ? "exit 1" : `printf '%s\\n' '${branchRulesetDetail}'`}
     ;;
   "repos/${REPO}/rulesets/2")
     printf '%s\\n' '${tagRulesetDetail}'
+    ;;
+  "repos/${REPO}/rulesets/3")
+    # Second branch ruleset, present only when branchPrUnreadable is set. Its
+    # detail is repo-admin-gated and 404s — it is the ruleset that *would* carry
+    # the pull_request requirement, so doctor must report could-not-verify
+    # rather than a false "no pull_request requirement" block (#239).
+    exit 1
     ;;
   *)
     # Unknown path → behave like a 404 so doctor's "if …; then" guards take
@@ -256,6 +312,176 @@ describe.skipIf(!depsAvailable)("doctor.sh — pre-flight classification (end-to
       // …and it is a warn, not a block — it does not flip the exit code.
       expect(r.exitCode, `stderr:\n${r.stderr}\nstdout:\n${plain}`).toBe(0);
       expect(plain).toMatch(/OK with warnings/);
+    } finally {
+      stub.cleanup();
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("admin-gated settings absent → [local-env] could-not-verify, not [config] disabled (#239)", () => {
+    // Under-scoped / App token: the repos/<REPO> call succeeds but GitHub omits
+    // allow_auto_merge + delete_branch_on_merge. doctor must read these as
+    // "could not verify" (a local-env warn), NOT misreport them as "disabled".
+    const stub = setupGhStub({ adminFieldsVisible: false });
+    const cwd = mkdtempSync(join(tmpdir(), "flywheel-doctor-cwd-"));
+    try {
+      const r = runDoctor(stub.binDir, cwd);
+      const plain = stripAnsi(r.stdout);
+      // Both could-not-verify lines surface on [local-env] lines.
+      const autoMergeLine = plain
+        .split("\n")
+        .find((l) =>
+          l.includes("could not verify allow_auto_merge — reading it requires repo-admin"),
+        );
+      expect(
+        autoMergeLine,
+        "expected an allow_auto_merge could-not-verify finding",
+      ).toBeDefined();
+      expect(autoMergeLine).toContain("[local-env]");
+      const deleteBranchLine = plain
+        .split("\n")
+        .find((l) =>
+          l.includes(
+            "could not verify delete_branch_on_merge — reading it requires repo-admin",
+          ),
+        );
+      expect(
+        deleteBranchLine,
+        "expected a delete_branch_on_merge could-not-verify finding",
+      ).toBeDefined();
+      expect(deleteBranchLine).toContain("[local-env]");
+      // Absence must NOT be misreported as "disabled".
+      const disabledLine = plain
+        .split("\n")
+        .find((l) => l.includes("allow_auto_merge") && l.includes("disabled"));
+      expect(
+        disabledLine,
+        "absent allow_auto_merge must not be reported as disabled",
+      ).toBeUndefined();
+      // could-not-verify is a warn, not a block — exit stays 0.
+      expect(r.exitCode, `stderr:\n${r.stderr}\nstdout:\n${plain}`).toBe(0);
+    } finally {
+      stub.cleanup();
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("admin-gated settings present+true → ok 'allow_auto_merge enabled', no warn (#239)", () => {
+    // Clean default stub: the field is present and true, so doctor emits the
+    // ok "enabled" line — never a "disabled" or "could not verify" warn.
+    const stub = setupGhStub();
+    const cwd = mkdtempSync(join(tmpdir(), "flywheel-doctor-cwd-"));
+    try {
+      const r = runDoctor(stub.binDir, cwd);
+      const plain = stripAnsi(r.stdout);
+      const enabledLine = plain
+        .split("\n")
+        .find((l) => l.includes("allow_auto_merge enabled"));
+      expect(enabledLine, "expected an allow_auto_merge enabled finding").toBeDefined();
+      expect(plain).not.toContain("allow_auto_merge disabled");
+      expect(plain).not.toContain("could not verify allow_auto_merge");
+      expect(r.exitCode, `stderr:\n${r.stderr}\nstdout:\n${plain}`).toBe(0);
+    } finally {
+      stub.cleanup();
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("ruleset DETAIL unreadable → [local-env] could-not-verify, not a false 'no ruleset covers branch' block (#239)", () => {
+    // Permission gap: listing rulesets succeeds but reading a ruleset's detail
+    // requires repo-admin and 404s/403s. doctor must NOT collapse the empty
+    // includes into a false "no ruleset covers branch 'main'" instance BLOCK —
+    // it emits a could-not-verify warn for the ruleset and downgrades the
+    // unmatched-branch finding to a could-not-verify warn (both [local-env]).
+    // The tag ruleset detail stays readable, so this path alone introduces no
+    // block-severity finding and the run exits 0.
+    const stub = setupGhStub({ rulesetDetailFails: true });
+    const cwd = mkdtempSync(join(tmpdir(), "flywheel-doctor-cwd-"));
+    try {
+      const r = runDoctor(stub.binDir, cwd);
+      const plain = stripAnsi(r.stdout);
+      // The ruleset detail read failed → a could-not-verify warn on [local-env].
+      const rulesetLine = plain
+        .split("\n")
+        .find((l) =>
+          l.includes("could not verify ruleset 1 — reading it requires repo-admin"),
+        );
+      expect(
+        rulesetLine,
+        "expected a could-not-verify finding for the unreadable ruleset detail",
+      ).toBeDefined();
+      expect(rulesetLine).toContain("[local-env]");
+      // The unmatched branch downgrades to a could-not-verify warn on [local-env].
+      const branchLine = plain
+        .split("\n")
+        .find((l) =>
+          l.includes(
+            "could not verify branch 'main' is covered by a ruleset — reading rulesets requires repo-admin",
+          ),
+        );
+      expect(
+        branchLine,
+        "expected the downgraded could-not-verify branch-coverage finding",
+      ).toBeDefined();
+      expect(branchLine).toContain("[local-env]");
+      // The false BLOCK must be gone entirely.
+      expect(plain).not.toContain("no ruleset covers branch 'main'");
+      // could-not-verify is a warn, not a block — this path does not flip exit.
+      expect(r.exitCode, `stderr:\n${r.stderr}\nstdout:\n${plain}`).toBe(0);
+    } finally {
+      stub.cleanup();
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("matched branch, PR rule only in an unreadable ruleset → could-not-verify, not a false 'no pull_request requirement' block (#239)", () => {
+    // Mixed permission gap: a READABLE branch ruleset covers main but has no PR
+    // rule, while a SECOND branch ruleset that could supply the PR requirement
+    // is unreadable. The branch is matched (so the "no ruleset covers branch"
+    // arm does not apply) yet pr_required stays 0 — doctor must downgrade the
+    // "no pull_request requirement" finding to a could-not-verify warn instead
+    // of a false instance BLOCK, since the unread ruleset may carry the rule.
+    const stub = setupGhStub({ branchPrUnreadable: true });
+    const cwd = mkdtempSync(join(tmpdir(), "flywheel-doctor-cwd-"));
+    try {
+      const r = runDoctor(stub.binDir, cwd);
+      const plain = stripAnsi(r.stdout);
+      const prLine = plain
+        .split("\n")
+        .find((l) =>
+          l.includes(
+            "could not verify branch 'main' pull_request requirement — reading rulesets requires repo-admin",
+          ),
+        );
+      expect(
+        prLine,
+        "expected the downgraded could-not-verify pull_request-requirement finding",
+      ).toBeDefined();
+      expect(prLine).toContain("[local-env]");
+      // The false BLOCK must be gone entirely.
+      expect(plain).not.toContain("no pull_request requirement");
+      // could-not-verify is a warn, not a block — exit stays 0.
+      expect(r.exitCode, `stderr:\n${r.stderr}\nstdout:\n${plain}`).toBe(0);
+    } finally {
+      stub.cleanup();
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("readable ruleset details → coverage verified, no could-not-verify warn (regression guard) (#239)", () => {
+    // Clean default stub (details readable): the generalized could-not-verify
+    // path must stay dormant — branch + tag coverage verify exactly as before,
+    // and NO "could not verify ruleset" / "could not verify branch" warn fires.
+    const stub = setupGhStub();
+    const cwd = mkdtempSync(join(tmpdir(), "flywheel-doctor-cwd-"));
+    try {
+      const r = runDoctor(stub.binDir, cwd);
+      const plain = stripAnsi(r.stdout);
+      expect(plain).toContain("branch 'main' protected, requires PRs");
+      expect(plain).toContain("v* tag namespace protected");
+      expect(plain).not.toContain("could not verify ruleset");
+      expect(plain).not.toContain("could not verify branch");
+      expect(r.exitCode, `stderr:\n${r.stderr}\nstdout:\n${plain}`).toBe(0);
     } finally {
       stub.cleanup();
       rmSync(cwd, { recursive: true, force: true });

@@ -1999,3 +1999,331 @@ reach one definition of finished. §req:setup-completion-summary-stories
   was rejected: it leaves the manual adopter without the confirmation the
   scripted adopter gets, and lets the two paths diverge on what "done"
   means.
+## doctor repo-field reads are three-state §spec:doctor-settings-read
+
+*Status: complete*
+
+Batch 1 (#239) landed the two named repo settings (`allow_auto_merge`,
+`delete_branch_on_merge`): they read three-state via the `classify_repo_field`
+helper, satisfying criteria 1–3 and 5–7. Batch 2 generalized the same treatment
+to every permission-gated field read off an otherwise-successful `gh api`
+response (criterion 4) — the `.private` visibility probe and the branch/tag
+ruleset-detail reads now branch on call success and surface a `local-env` +
+`warn` could-not-verify finding instead of collapsing a permission gap into a
+false "absent"/"no coverage" block — closing the section.
+
+`scripts/doctor.sh` reports a repository setting as **enabled**,
+**disabled**, or **could-not-verify** — never collapsing the last into the
+second. Under "Repo settings" doctor checks two GitHub options flywheel
+depends on: `allow_auto_merge` (without it flywheel cannot schedule native
+auto-merge, so eligible PRs fall back to a direct merge that bypasses
+required status checks — see §spec:release-gate, #147/#153) and
+`delete_branch_on_merge` (without it head branches linger after every
+merge). Both are read off a single successful `gh api repos/<owner>/<repo>`
+response. §req:doctor-settings-read §req:doctor-settings-read-criteria
+
+**The false negative this closes.** GitHub omits these merge-setting fields
+from the repository object entirely when the caller's token lacks
+repo-admin: the API call still succeeds and returns the repo, just without
+the admin-only fields. doctor previously treated a setting as enabled only
+when its field read back exactly `true`, so an *absent* field — a `null`
+read — was indistinguishable from a genuine `false` and reported as
+**disabled**. An adopter running doctor with a non-admin or App
+installation token was told to go re-enable settings that were already on,
+chasing a non-problem and losing trust in the report; a check that
+confidently misdirects is worse than one that stays silent.
+§req:doctor-settings-read §req:doctor-settings-read-stories
+
+The reads now distinguish three states. The field present and `true` is
+enabled (reported `ok`, unchanged). The field present and `false` is
+genuinely disabled — reported `config` + `warn` with the existing
+remediation (re-run `scripts/apply-rulesets.sh`, or the Settings path),
+unchanged. The field **absent** from an otherwise-successful response is
+could-not-verify — reported `local-env` + `warn` with a message in the
+same register as doctor's existing permission notes: "could not verify
+`<setting>` — reading it requires repo-admin." doctor never asserts a
+setting is off when it merely could not read it.
+§req:doctor-settings-read-criteria §req:doctor-settings-read-constraints
+
+**Why `local-env` + `warn` for could-not-verify.** A field hidden by an
+under-scoped token is a condition on the adopter's own account, not a
+misconfiguration of their repo — the same shape as doctor's existing
+"could not list repo secrets — listing requires an admin PAT" finding,
+which is already `local-env`. It is `warn`, not `block`: doctor cannot
+confirm the setting either way, and a visibility limit must not halt a
+read-only validator. This reuses the bucket × severity vocabulary of
+§spec:preflight-classification (§req:preflight-detection) without inventing
+a new severity or bucket name. §req:doctor-settings-read-criteria
+§req:doctor-settings-read-constraints
+
+**The fix generalizes beyond the two named settings.** The conflation
+doctor avoids everywhere else — its variable, secret, and ruleset checks
+already distinguish "could not read — needs admin" from "absent" by
+inspecting whether the API *call* succeeded — was specific to fields read
+off an otherwise-successful call. Every doctor check that reads a
+permission-gated field off a successful `gh api` response distinguishes
+enabled / disabled / could-not-verify; none silently reports "disabled" or
+"absent" when the real cause is a permission gap. The two repo settings are
+the identified instance, not a special case. §req:doctor-settings-read
+§req:doctor-settings-read-criteria §req:doctor-settings-read-constraints
+
+**Severity reconciliation is ratified, not re-opened.** `allow_auto_merge`
+and `delete_branch_on_merge`, when genuinely disabled, report at the
+**same** severity and bucket — `config` + `warn`. The pre-flight work
+(#250, §spec:preflight-classification) already reconciled the historical
+fail-vs-warn mismatch between them; this section records that as the settled
+end state, not a new proposal. §req:doctor-settings-read-constraints
+
+**Mechanism is open; behavior is fixed.** How doctor tells an absent field
+from a `false` one (branching on `null` versus `false`, probing field
+presence with `jq`, or another means) is an implementation choice the spec
+does not pin — the section survives a change of mechanism. What is fixed is
+the adopter-visible behavior: never a false "disabled."
+§req:doctor-settings-read-constraints
+
+**Scope and blast radius.** The change is confined to how doctor
+*interprets* fields it already reads; it requests no additional scopes
+(the whole point is to behave correctly when the token is under-scoped),
+alters neither `apply-rulesets.sh` nor any setting nor any release
+behavior, and leaves doctor read-only. The exit contract is unchanged:
+neither a disabled-setting `warn` nor a could-not-verify `warn` is a block,
+so doctor still exits 1 only when a `block`-severity finding is present and
+0 otherwise (§spec:preflight-classification,
+§req:preflight-detection-criteria). §req:doctor-settings-read-constraints
+
+**Criteria.**
+
+- When the setting is enabled and the token can read it (field present and
+  `true`), doctor shall report it enabled, exactly as before.
+- When the token cannot read the setting (the field is absent from an
+  otherwise-successful `gh api` response), doctor shall report a
+  `local-env` + `warn` "could not verify `<setting>` — reading it requires
+  repo-admin" finding and shall not claim the setting is disabled.
+- When the setting is genuinely disabled (field present and `false`),
+  doctor shall report it `config` + `warn` with the existing remediation
+  guidance, unchanged.
+- Every doctor check that reads a permission-gated field off an
+  otherwise-successful `gh api` response shall distinguish enabled,
+  disabled, and could-not-verify; no such check shall report "disabled" or
+  "absent" when the cause is a permission gap.
+- `allow_auto_merge` and `delete_branch_on_merge`, when genuinely disabled,
+  shall report at the same severity (`warn`) and bucket (`config`).
+- doctor shall remain read-only and shall exit 1 only when a
+  `block`-severity finding is present, 0 otherwise — neither the
+  could-not-verify nor the disabled finding is a block.
+- A fast test shall exercise the could-not-verify path: fed a repo response
+  with the admin-gated fields absent, doctor reports "could not verify,"
+  not "disabled." The test shall need no live GitHub access and add no load
+  to the rate-limited sandbox installation
+  (§spec:sandbox-test-budget, §req:sandbox-ci-budget).
+
+**Scope and alternatives.**
+
+- *Requesting repo-admin so the fields are always present* was rejected: it
+  asks for privilege precisely where the value is behaving correctly
+  without it, and an App installation token still could not see them.
+- *Reporting could-not-verify as `block`* was rejected: doctor cannot
+  confirm the setting either way, and a visibility limit on a read-only
+  validator must not halt the adopter.
+- *Fixing only the two named settings* was rejected: the same successful-call
+  field-absence pattern can recur in any future repo-field read, so the
+  three-state treatment is a property of every such check, not a patch to
+  two lines.
+
+## Dependabot deadlock: degraded-mode required check §spec:dependabot-degraded-check
+
+*Status: complete*
+
+When the conductor runs on a `pull_request` event and the App private key
+arrives empty, it validates the PR title and posts the
+`flywheel/conventional-commit` check — `success` or `failure`, reflecting the
+title — and then exits without performing any App-privileged action. The
+empty-key path is no longer "do nothing and skip"; it is "post the required
+check, do nothing privileged, exit." This is what breaks the Dependabot
+deadlock with zero adopter configuration: a Dependabot PR in a repo that
+requires `flywheel/conventional-commit`, whose run cannot reach the App key,
+still gets a concluded check instead of a permanently `Expected` one, so a
+maintainer can merge it once it is green and reviewed. §req:dependabot-deadlock
+§req:dependabot-deadlock-criteria
+
+**Why posting the check is separable from granting auto-merge — and always
+safe.** Posting a check needs only the low-privilege `checks: write`
+capability the workflow's built-in `GITHUB_TOKEN` can carry; it needs none of
+the App's authority. Auto-merge, title rewrite, label application, and
+promotion-PR upserts need the App. Splitting the empty-key path so it posts the
+check from the built-in token but mints no App token and runs no App-only
+action satisfies *safe by default*: breaking the deadlock and granting
+auto-merge become separate outcomes with separate triggers — the former
+unconditional, the latter gated on the key being reachable
+(§spec:dependabot-full-conductor-optin). A secret-less run gains exactly one
+new ability: to post a pass/fail verdict on its own title — the very gate it
+needs to pass — with no path to merge, label, or rewrite. §req:dependabot-deadlock
+§req:dependabot-deadlock-constraints
+
+**Why this fixes Dependabot but not forks — the same seam, a different token
+reach.** Dependabot opens its PRs from branches in the *same* repository
+(`dependabot/…`), so the PR workflow can grant the built-in token
+`checks: write` and the degraded post succeeds. A fork PR's built-in token is
+forced read-only by GitHub regardless of the workflow's `permissions:` block,
+so the post cannot succeed there. The degraded path attempts the post on any
+empty-key run and degrades gracefully when the token is read-only — so it
+shares a seam with the fork case (#162) and may relieve it, but it makes no
+claim to fix forks, whose residual read-only-token problem stays #162's.
+§req:dependabot-deadlock §req:dependabot-deadlock-constraints
+
+**Verdict parity.** The degraded path runs the title through the same
+conventional-commit parser a first-party PR uses, so a Dependabot
+`build(deps): …` or `chore(deps): …` receives the identical pass/fail verdict
+it would receive on a first-party PR. The check is the same check
+(`flywheel/conventional-commit`); only the token that posts it and the absence
+of any follow-on action differ. §req:dependabot-deadlock-criteria
+
+**Statelessness preserved.** The degraded path posts one check and returns; it
+holds no state between runs and waits on nothing after posting.
+§req:dependabot-deadlock-constraints
+
+**Criteria.**
+
+- When the App private key is empty on a `pull_request` run, the conductor
+  shall post a `flywheel/conventional-commit` check whose conclusion reflects
+  the title, using the workflow's built-in token rather than an App token.
+- On that same empty-key run the conductor shall mint no App token and perform
+  no App-only action — no title rewrite, no `flywheel:auto-merge` /
+  `flywheel:needs-review` label, no native auto-merge, no promotion-PR upsert.
+  The PR is made mergeable, not merged.
+- The pass/fail verdict a Dependabot title receives shall equal the verdict the
+  same title would receive on a first-party PR.
+- The `apply-rulesets.sh` default that makes `flywheel/conventional-commit`
+  required is unchanged; the fix posts the check, it does not weaken the
+  default.
+- Where the built-in token is read-only (the fork case), the path shall fail to
+  post gracefully rather than error the run; fork-specific behaviour remains out
+  of scope (#162).
+
+**Scope and alternatives.**
+
+- *Relaxing the `apply-rulesets.sh` default so the check is no longer required*
+  is rejected: the defect is the unposted check, not the requirement. Weakening
+  the default would let malformed titles through and remove the guard for every
+  adopter, first-party PRs included.
+- *Posting the check via the App token through a fallback secret, or
+  auto-granting App powers to secret-less runs* is rejected: minting the App
+  token is exactly what is impossible without the key, and handing App authority
+  to an untrusted actor is the repository-compromise vector the requirement
+  forbids.
+- *Marking the check advisory (non-required) only for Dependabot* is rejected:
+  Flywheel cannot un-require a ruleset check per-PR without weakening the
+  ruleset for everyone, and it would re-open the malformed-title gap.
+
+## Dependabot full conductor opt-in §spec:dependabot-full-conductor-optin
+
+*Status: complete*
+
+When the adopter registers `FLYWHEEL_GH_APP_PRIVATE_KEY` in the repository's
+(or organisation's) **Dependabot** secret store — alongside the existing
+Actions secret — a Dependabot-triggered run resolves the key non-empty
+(GitHub sources `secrets.*` from the Dependabot store for Dependabot runs), the
+empty-key path is not taken, and the conductor runs the full flow exactly as it
+does for a first-party PR: the title is validated and rewritten if malformed,
+the `flywheel:auto-merge` or `flywheel:needs-review` label is applied, native
+auto-merge is enabled, and the PR auto-merges when its title type is in the
+target branch's `auto_merge` set and every other required gate (other checks,
+required reviews) is satisfied. A Dependabot PR is **never** auto-merged unless
+the key is reachable on that run. §req:dependabot-deadlock
+§req:dependabot-deadlock-criteria §req:dependabot-deadlock-stories
+
+**The Dependabot secret store *is* the actor allowlist.** Trust is
+GitHub-enforced, not Flywheel-configured. An external fork can never write to a
+repository's Dependabot secret store, so a fork can never present the key, so a
+fork can never auto-merge — the same gate, with no Flywheel-side list to
+maintain. Adding a second trust mechanism (an `allowed_bots:` config, a
+hardcoded `dependabot[bot]` allowlist) is rejected: it would duplicate GitHub's
+trust boundary and risk drifting out of sync with it. Registering the secret is
+a deliberate, GitHub-native act of trust; that act, and only that act, opts
+Dependabot into the full flow. §req:dependabot-deadlock-constraints
+
+**No new mechanism on this path — the opt-in is secret placement, not config.**
+Once `FLYWHEEL_GH_APP_PRIVATE_KEY` resolves from the Dependabot store, the
+existing conductor proceeds unchanged; nothing about the full flow is
+Dependabot-specific. Auto-merge fires through the existing `auto_merge`
+title-type matching with no special-casing of which dependency types merge — so
+a `build(deps)` / `chore(deps)` bump auto-merges only if the adopter lists that
+type in the branch's `auto_merge` set. The deliverable here is therefore the
+documentation of the opt-in and the explicit, tested invariant that no
+auto-merge occurs without the key — not a new code path for the keyed case.
+§req:dependabot-deadlock-criteria §req:dependabot-deadlock-constraints
+
+**Documented opt-in.** `docs/adopter/setup.md` documents registering the App
+private key in the Dependabot secret store, alongside the Actions secret, as
+the step that enables full Flywheel behaviour — auto-merge included — for
+Dependabot PRs, so adopters enable it from the docs rather than discovering the
+deadlock through a bug report. §req:dependabot-deadlock-criteria
+§req:dependabot-deadlock-stories
+
+**Supply-chain risk is the adopter's to accept, and off by default.**
+Auto-merging Dependabot means a dependency update that passes checks can merge
+without human review — the standard supply-chain tradeoff. Flywheel makes that
+lever explicit and double-gated: it activates only when the adopter both
+registers the Dependabot secret *and* lists the relevant types in a branch's
+`auto_merge` set. Flywheel does not decide dependency trust on the adopter's
+behalf. §req:dependabot-deadlock-constraints
+
+**Criteria.**
+
+- With the App key registered in the Dependabot secret store, a Dependabot PR
+  shall run the full conductor identically to a first-party PR: title validated
+  and rewritten if malformed, auto-merge/needs-review label applied, and
+  auto-merge enabled when the title type is in the target branch's `auto_merge`
+  set and all other required gates pass.
+- A Dependabot PR shall never auto-merge unless the App key is reachable on the
+  run; absent the Dependabot secret it receives the degraded check
+  (§spec:dependabot-degraded-check) and waits for a human.
+- Flywheel shall introduce no actor allowlist of its own; the Dependabot secret
+  store is the sole opt-in marking Dependabot trusted.
+- `docs/adopter/setup.md` shall document the Dependabot-secret registration as
+  the step that enables full Flywheel behaviour, including auto-merge, for
+  Dependabot PRs.
+
+**Scope and alternatives.**
+
+- *A Flywheel-side actor allowlist* is rejected: it duplicates the secret-store
+  trust boundary and can drift out of sync with GitHub's.
+- *Auto-merging Dependabot by default, without the secret opt-in* is rejected:
+  it would auto-merge on the secret-less path, violating "never auto-merge
+  without the key" and granting repository write to any secret-less actor.
+
+## Dependabot empty-key regression guard §spec:dependabot-deadlock-test
+
+*Status: complete*
+
+A fast unit/CI test reproduces the empty-key Dependabot path and asserts the
+two halves of the contract: a well-formed Dependabot title posts a `success`
+`flywheel/conventional-commit` check and a malformed one posts `failure`, while
+in both cases no `flywheel:auto-merge` / `flywheel:needs-review` label is
+applied and no other App-only action runs. The test draws on no rate-limited
+e2e sandbox installation. §req:dependabot-deadlock-criteria
+§req:dependabot-deadlock-constraints
+
+**Why a unit guard, not e2e.** The deadlock is silent, permanent, and
+near-universal for its trigger, so it needs a guard that runs on every PR — not
+one gated behind the rate-limited sandbox budget (§spec:sandbox-test-budget,
+§req:sandbox-ci-budget). A deterministic unit test on the conductor's degraded
+branch, mirroring §spec:apply-rulesets-stdin-test, catches a regression that
+re-strands Dependabot PRs at the cheapest possible cost; the e2e suite stays a
+backstop, not the first line of defence for this class of deadlock.
+§req:dependabot-deadlock-constraints
+
+**Criteria.**
+
+- A unit/CI test shall exercise the empty-key path and assert the required
+  check is posted with the correct conclusion for both a well-formed and a
+  malformed Dependabot title.
+- The same test shall assert no auto-merge/needs-review label is applied and no
+  App-only action runs on that path.
+- The test shall not consume the e2e sandbox installation.
+
+**Scope and alternatives.**
+
+- *Relying on the e2e sandbox to catch this regression* is rejected: it draws on
+  the rate-limited installation and is slow, whereas the degraded path is a pure
+  conductor branch a unit test can cover deterministically.
