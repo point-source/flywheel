@@ -204,7 +204,7 @@ describe.skipIf(!ghAuthenticated())("init.sh completion summary", () => {
   function runInit(
     work: string,
     doctorStub: string,
-    opts: { interactive?: boolean } = {},
+    opts: { interactive?: boolean; extraArgs?: string[] } = {},
   ): { stdout: string; status: number | null } {
     const r = spawnSync(
       "bash",
@@ -214,6 +214,7 @@ describe.skipIf(!ghAuthenticated())("init.sh completion summary", () => {
         "--version", TEST_VERSION,
         "--skip-secrets",
         "--skip-rulesets",
+        ...(opts.extraArgs ?? []),
       ],
       {
         cwd: work,
@@ -389,6 +390,78 @@ describe.skipIf(!ghAuthenticated())("init.sh completion summary", () => {
       expect(plain).not.toContain("FLYWHEEL_SETUP_STEP");
       // Prose verdict is present instead.
       expect(plain).toContain("complete");
+    } finally {
+      rmSync(work, { recursive: true, force: true });
+    }
+  }, INIT_E2E_TIMEOUT);
+
+  it("--strict elevates warn-severity deferrals to a non-zero exit (§spec:setup-exit-contract)", () => {
+    // --skip-secrets defers App creds (config/warn) and --skip-rulesets defers
+    // rulesets (instance/warn): two warn-severity outstanding items. With a green
+    // doctor (blocks=0, warns=0) there is no block/failure, so incomplete_count is
+    // 0 — but --strict elevates the warn_count>0 to a non-zero exit.
+    const work = makeAdopterRepo("strict-warns");
+    try {
+      const stub = writeDoctorStub(work, { blocks: 0, warns: 0 });
+      const { stdout, status } = runInit(work, stub, { extraArgs: ["--strict"] });
+      const plain = stripAnsi(stdout);
+
+      // Strict elevates the deliberate deferrals to a non-zero (status 1) exit.
+      expect(status).toBe(1);
+
+      // Strict affects the EXIT CODE only: the verdict still reads complete and
+      // items stays 0 (warns never count toward incomplete_count). The additive
+      // strict=/warn_items= fields expose why the exit went non-zero.
+      expect(plain).toMatch(
+        /FLYWHEEL_SETUP_RESULT verdict=complete items=0 strict=1 warn_items=2/,
+      );
+    } finally {
+      rmSync(work, { recursive: true, force: true });
+    }
+  }, INIT_E2E_TIMEOUT);
+
+  it("the SAME run without --strict stays green (default exits 0)", () => {
+    // Regression guard: the identical --skip-secrets/--skip-rulesets run + green
+    // doctor must exit 0 without --strict. Deliberate deferrals keep the default
+    // green; strict is strictly opt-in (SPEC.md §spec:setup-exit-contract).
+    const work = makeAdopterRepo("strict-default-green");
+    try {
+      const stub = writeDoctorStub(work, { blocks: 0, warns: 0 });
+      const { stdout, status } = runInit(work, stub);
+      const plain = stripAnsi(stdout);
+
+      expect(status).toBe(0);
+      // verdict=complete with items=0, and strict=0 records the default mode.
+      expect(plain).toMatch(
+        /FLYWHEEL_SETUP_RESULT verdict=complete items=0 strict=0 warn_items=2/,
+      );
+    } finally {
+      rmSync(work, { recursive: true, force: true });
+    }
+  }, INIT_E2E_TIMEOUT);
+
+  it("--strict folds doctor warns into the warn_count exit decision", () => {
+    // A doctor stub reporting warns=2, blocks=0 contributes to warn_count (on top
+    // of the two scaffold deferrals). With no blocks/failures incomplete_count is
+    // 0, so without --strict this would exit 0 — but --strict elevates the warns.
+    const work = makeAdopterRepo("strict-doctor-warns");
+    try {
+      const warnLine = "  ! [instance] ruleset is missing a required check";
+      const stub = writeDoctorStub(work, {
+        blocks: 0,
+        warns: 2,
+        findingLines: [warnLine],
+      });
+      const { stdout, status } = runInit(work, stub, { extraArgs: ["--strict"] });
+      const plain = stripAnsi(stdout);
+
+      // Doctor warns fold into warn_count, so --strict exits non-zero (status 1).
+      expect(status).toBe(1);
+      // verdict stays complete (warns/doctor-warns don't move it); warn_items
+      // tallies the two scaffold deferrals plus doctor's two warns.
+      expect(plain).toMatch(
+        /FLYWHEEL_SETUP_RESULT verdict=complete items=0 strict=1 warn_items=4/,
+      );
     } finally {
       rmSync(work, { recursive: true, force: true });
     }

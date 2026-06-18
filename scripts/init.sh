@@ -16,6 +16,11 @@
 #   --skip-secrets        do not prompt for App credentials (FLYWHEEL_GH_APP_ID
 #                         variable, FLYWHEEL_GH_APP_PRIVATE_KEY secret)
 #   --skip-rulesets       do not offer to run apply-rulesets.sh
+#   --strict              treat warn-severity outstanding items (e.g. deferred
+#                         App credentials from --skip-secrets, deferred rulesets
+#                         from --skip-rulesets, doctor warnings) as a non-zero
+#                         exit. Off by default: deliberate skips/warns keep the
+#                         run green; opt in when every warn must be resolved.
 #   --required-checks "quality,build"   passed through to apply-rulesets.sh
 #   --force               overwrite flywheel-pr.yml / flywheel-push.yml even
 #                         if they already exist (for upgrading workflows
@@ -47,6 +52,10 @@ set -euo pipefail
 PRESET=""
 SKIP_SECRETS=0
 SKIP_RULESETS=0
+# Opt-in: when 1, warn-severity outstanding items (deferred App creds / rulesets,
+# doctor warnings) elevate the end-of-run exit to non-zero. Default 0 keeps
+# deliberate skips green (SPEC.md §spec:setup-exit-contract, strict-mode criterion).
+STRICT=0
 REQUIRED_CHECKS=""
 FORCE=0
 FLYWHEEL_VERSION=""
@@ -69,6 +78,7 @@ while [[ $# -gt 0 ]]; do
     --preset) PRESET="$2"; shift 2 ;;
     --skip-secrets) SKIP_SECRETS=1; shift ;;
     --skip-rulesets) SKIP_RULESETS=1; shift ;;
+    --strict) STRICT=1; shift ;;
     --required-checks) REQUIRED_CHECKS="$2"; shift 2 ;;
     --force) FORCE=1; shift ;;
     --override-release-conflict) PREFLIGHT_OVERRIDE_release_conflict=1; shift ;;
@@ -80,7 +90,7 @@ while [[ $# -gt 0 ]]; do
       esac
       shift 2
       ;;
-    -h|--help) sed -n '2,43p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,48p' "$0"; exit 0 ;;
     *) echo "Unknown argument: $1" >&2; exit 2 ;;
   esac
 done
@@ -561,8 +571,13 @@ record_outcome() {
 # re-listing them needs an admin-PAT round trip the run already covered. doctor
 # stays read-only. Run identically in interactive and non-interactive runs.
 VALIDATION_BLOCKS=0
+# Doctor's warn count from the same `DOCTOR_RESULT ... warns=M` trailer. Folded
+# into print_completion_summary's warn_count so --strict elevates doctor warnings
+# too (SPEC.md §spec:setup-exit-contract).
+VALIDATION_WARNS=0
 run_setup_validation() {
   VALIDATION_BLOCKS=0
+  VALIDATION_WARNS=0
   printf '\nSetup validation:\n'
 
   # Resolve the doctor command, mirroring the findings.sh source/curl fallback.
@@ -611,6 +626,7 @@ run_setup_validation() {
   [[ -n "$body" ]] && printf '%s\n' "$body"
 
   VALIDATION_BLOCKS="$blocks"
+  VALIDATION_WARNS="$warns"
 }
 
 # print_completion_summary — render the end-of-run outcome summary
@@ -623,6 +639,10 @@ run_setup_validation() {
 print_completion_summary() {
   local rec label outcome bucket severity command
   local incomplete_count=0
+  # warn-severity outstanding items (deliberate deferrals: App creds, rulesets).
+  # These never touch incomplete_count / the verdict — they drive the --strict
+  # exit only (SPEC.md §spec:setup-exit-contract, strict-mode criterion).
+  local warn_count=0
 
   # One summary, two audiences (SPEC.md §spec:setup-exit-contract). Interactive
   # runs (a real TTY) get today's human prose; non-interactive runs (curl|bash,
@@ -677,6 +697,11 @@ print_completion_summary() {
       if [[ "$outcome" == "failed" || "$severity" == "block" ]]; then
         incomplete_count=$((incomplete_count + 1))
       fi
+      # warn-severity items (deliberate deferrals like skipped App creds /
+      # rulesets) are tallied separately — they fail the run only under --strict.
+      if [[ "$severity" == "warn" ]]; then
+        warn_count=$((warn_count + 1))
+      fi
     done
   fi
 
@@ -687,13 +712,20 @@ print_completion_summary() {
   # doctor's block count; add that to incomplete_count.
   run_setup_validation
   incomplete_count=$((incomplete_count + VALIDATION_BLOCKS))
+  # Doctor's warn count folds into warn_count so --strict elevates doctor
+  # warnings the same as deferred scaffold items; never into incomplete_count.
+  warn_count=$((warn_count + VALIDATION_WARNS))
 
   if [[ "$machine" -eq 1 ]]; then
     # Machine trailer: the verdict token is derived from the SAME incomplete_count
     # that selects the exit code below, so verdict=incomplete <=> non-zero exit.
     local verdict="complete"
     [[ "$incomplete_count" -gt 0 ]] && verdict="incomplete"
-    printf 'FLYWHEEL_SETUP_RESULT verdict=%s items=%d\n' "$verdict" "$incomplete_count"
+    # verdict=/items= keep their block/failure-driven meaning (warns never move
+    # them). strict=/warn_items= are additive: they expose the strict-mode inputs
+    # so a consumer can see why the exit code went non-zero under --strict.
+    printf 'FLYWHEEL_SETUP_RESULT verdict=%s items=%d strict=%d warn_items=%d\n' \
+      "$verdict" "$incomplete_count" "$STRICT" "$warn_count"
   elif [[ "$incomplete_count" -gt 0 ]]; then
     printf '\n\033[1;31mincomplete — %d item(s) remain\033[0m\n' "$incomplete_count"
   else
@@ -713,9 +745,17 @@ print_completion_summary() {
   # any step failed or an unresolved block remains, zero otherwise (deliberate
   # deferrals are complete). Explicit `exit` keeps the EXIT-trap status gotcha at
   # bay — the genuine terminal action, never a fall-through.
+  #
+  # Strict-mode criterion: --strict (STRICT=1) elevates warn-severity outstanding
+  # items (warn_count) to a non-zero exit. Without it, warns never fail the run —
+  # most adopters deliberately defer steps, so the default stays green and strict
+  # is opt-in (SPEC.md §spec:setup-exit-contract, "Why a strict mode…"). This
+  # affects the EXIT CODE only; the verdict text/machine fields are unchanged.
   if [[ -n "$FORCED_EXIT_STATUS" ]]; then
     exit "$FORCED_EXIT_STATUS"
   elif [[ "$incomplete_count" -gt 0 ]]; then
+    exit 1
+  elif [[ "$STRICT" -eq 1 && "$warn_count" -gt 0 ]]; then
     exit 1
   else
     exit 0
