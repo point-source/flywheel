@@ -2473,7 +2473,7 @@ complete the suggested commands so a paste applies the fix.
 
 ## init.sh preset wording §spec:init-preset-wording
 
-*Status: in progress*
+*Status: complete*
 
 The preset descriptions `init.sh` shows an adopter — at the interactive
 menu, in the `--preset` validation/usage text, and in the adopter docs —
