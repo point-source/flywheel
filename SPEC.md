@@ -1719,13 +1719,16 @@ class. §req:apply-rulesets-stdin-criteria
 
 ## doctor repo-field reads are three-state §spec:doctor-settings-read
 
-*Status: in progress*
+*Status: complete*
 
-Batch 1 (#239) lands the two named repo settings (`allow_auto_merge`,
+Batch 1 (#239) landed the two named repo settings (`allow_auto_merge`,
 `delete_branch_on_merge`): they read three-state via the `classify_repo_field`
-helper, satisfying criteria 1–3 and 5–7. Generalizing the same treatment to
-every permission-gated field read (criterion 4) is Batch 2; the section flips to
-*complete* there.
+helper, satisfying criteria 1–3 and 5–7. Batch 2 generalized the same treatment
+to every permission-gated field read off an otherwise-successful `gh api`
+response (criterion 4) — the `.private` visibility probe and the branch/tag
+ruleset-detail reads now branch on call success and surface a `local-env` +
+`warn` could-not-verify finding instead of collapsing a permission gap into a
+false "absent"/"no coverage" block — closing the section.
 
 `scripts/doctor.sh` reports a repository setting as **enabled**,
 **disabled**, or **could-not-verify** — never collapsing the last into the
