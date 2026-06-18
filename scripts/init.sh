@@ -516,6 +516,26 @@ preflight_gate() {
 preflight_run
 preflight_gate
 
+# ---------------------------------------------------------------------------
+# Setup outcome tracking (SPEC.md §spec:setup-completion-summary).
+#
+# Every scaffold step records its real outcome here. The end-of-run summary
+# (added by a later workstream) renders these records and derives the
+# complete/incomplete verdict. bash 3.2-safe: a single indexed array of
+# tab-separated records (label, outcome, bucket, severity, command); finishing
+# commands never contain a literal tab. bucket/severity/command are filled in
+# by later workstreams and may be empty for now.
+# ---------------------------------------------------------------------------
+# shellcheck disable=SC2034  # read by a later workstream's summary renderer
+SUMMARY_RECORDS=()
+
+# record_outcome <label> <outcome> [bucket] [severity] [command]
+#   outcome is one of: configured | skipped | failed | deferred
+record_outcome() {
+  local label="$1" outcome="$2" bucket="${3:-}" severity="${4:-}" command="${5:-}"
+  SUMMARY_RECORDS+=("${label}"$'\t'"${outcome}"$'\t'"${bucket}"$'\t'"${severity}"$'\t'"${command}")
+}
+
 # gh is confirmed installed + authenticated by the gate above. REPO/OWNER and
 # detect_owner_type were resolved non-fatally before the pass (so the
 # credentials/App detectors could consult them); a still-empty REPO now means the
@@ -556,6 +576,7 @@ fetch_template() {
 # 1. Pick a preset and write .flywheel.yml (skip if it already exists).
 if [[ -f .flywheel.yml ]]; then
   echo "  .flywheel.yml already exists — leaving it alone."
+  record_outcome ".flywheel.yml preset" configured
 else
   if [[ -z "$PRESET" ]]; then
     if [[ "$INTERACTIVE" -eq 0 ]]; then
@@ -581,6 +602,7 @@ else
   esac
   fetch_template "flywheel.${PRESET}.yml" .flywheel.yml
   echo "  wrote .flywheel.yml ($PRESET preset)"
+  record_outcome ".flywheel.yml preset" configured
 fi
 
 # 2. Write workflow files (skip each if it already exists; --force overwrites).
@@ -605,6 +627,9 @@ for wf in flywheel-pr.yml flywheel-push.yml; do
     echo "  wrote $dest"
   fi
 done
+# Both workflow files are present after the loop (written, force-overwritten, or
+# left in place), so the step is configured regardless of which branch each took.
+record_outcome "PR + push workflow files" configured
 
 # 2.5 Merge drivers for derived artifacts (CHANGELOG.md, release_files paths).
 #
@@ -665,6 +690,7 @@ git config merge.flywheel-changelog.driver \
 git config merge.flywheel-release-file.name "Flywheel release-file (keep ours)" >/dev/null
 git config merge.flywheel-release-file.driver true >/dev/null
 echo "  registered Flywheel merge drivers in .git/config"
+record_outcome ".gitattributes + merge drivers" configured
 
 # 3. App-token secrets.
 #
@@ -791,6 +817,7 @@ EOF
 
 if [[ "$SKIP_SECRETS" -eq 1 ]]; then
   echo "  --skip-secrets set; not touching App credentials."
+  record_outcome "App credentials" deferred
 else
   # Reuse the pre-flight credential probe (detect_credentials) instead of
   # re-listing variables/secrets: the pass already ran the repo-then-org lookup
@@ -806,6 +833,7 @@ else
     else
       echo "  FLYWHEEL_GH_APP_ID set at ${app_id_found_at}-level, FLYWHEEL_GH_APP_PRIVATE_KEY at ${app_key_found_at}-level — workflows will prefer the repo-level value when both exist."
     fi
+    record_outcome "App credentials" configured
   elif [[ "$INTERACTIVE" -eq 0 ]]; then
     echo "  non-interactive shell — skipping App-credential prompts. Set them manually:"
     if [[ "$SCOPE" == "org" ]]; then
@@ -815,6 +843,7 @@ else
       echo "    gh variable set FLYWHEEL_GH_APP_ID --body '<your-app-id>' --repo $REPO"
       echo "    gh secret set FLYWHEEL_GH_APP_PRIVATE_KEY < /path/to/private-key.pem --repo $REPO"
     fi
+    record_outcome "App credentials" deferred
   else
     # Resolve SCOPE before the App-source prompt so write_app_id_var /
     # write_app_key_secret know where to write. If the owner is a User
@@ -853,14 +882,35 @@ else
     read -r -u 3 -p "  Selection [1/2/3] (default 1): " app_choice
     case "${app_choice:-1}" in
       1)
-        if ! create_app_via_manifest; then
+        if create_app_via_manifest; then
+          record_outcome "App credentials" configured
+        else
           echo "  Falling back to manual prompts."
-          prompt_existing_app_credentials
+          # Only the credential-WRITE failures inside the helper return non-zero;
+          # the empty-input/skip paths return success, so a non-zero here is a
+          # genuine write failure.
+          if prompt_existing_app_credentials; then
+            record_outcome "App credentials" configured
+          else
+            record_outcome "App credentials" failed
+          fi
         fi
         ;;
-      2) prompt_existing_app_credentials ;;
-      3) echo "  Skipped — set FLYWHEEL_GH_APP_ID variable and FLYWHEEL_GH_APP_PRIVATE_KEY secret before any Flywheel workflow runs." ;;
-      *) echo "  invalid selection — skipping." ;;
+      2)
+        if prompt_existing_app_credentials; then
+          record_outcome "App credentials" configured
+        else
+          record_outcome "App credentials" failed
+        fi
+        ;;
+      3)
+        echo "  Skipped — set FLYWHEEL_GH_APP_ID variable and FLYWHEEL_GH_APP_PRIVATE_KEY secret before any Flywheel workflow runs."
+        record_outcome "App credentials" deferred
+        ;;
+      *)
+        echo "  invalid selection — skipping."
+        record_outcome "App credentials" deferred
+        ;;
     esac
   fi
 fi
@@ -946,13 +996,28 @@ if [[ "$SKIP_RULESETS" -eq 0 && -x "${SCRIPT_DIR:-}/apply-rulesets.sh" ]]; then
     args=("$REPO")
     [[ -n "$REQUIRED_CHECKS" ]] && args+=(--required-checks "$REQUIRED_CHECKS")
     [[ -n "${CREATED_APP_ID:-}" ]] && args+=(--app-id "$CREATED_APP_ID")
-    "$SCRIPT_DIR/apply-rulesets.sh" "${args[@]}"
+    # Record the apply outcome without altering the script's exit behavior: on a
+    # non-zero exit, record `failed` then re-exit with the same status (matching
+    # the pre-existing `set -e` abort); on success, record `configured`.
+    rulesets_status=0
+    "$SCRIPT_DIR/apply-rulesets.sh" "${args[@]}" || rulesets_status=$?
+    if [[ "$rulesets_status" -eq 0 ]]; then
+      record_outcome "Branch + tag protection rulesets" configured
+    else
+      record_outcome "Branch + tag protection rulesets" failed
+      exit "$rulesets_status"
+    fi
   else
     echo "  skipped ruleset apply. Run later with: scripts/apply-rulesets.sh $REPO${CREATED_APP_ID:+ --app-id $CREATED_APP_ID}"
+    record_outcome "Branch + tag protection rulesets" deferred
   fi
 elif [[ "$SKIP_RULESETS" -eq 0 ]]; then
   echo "  apply-rulesets.sh not adjacent to init.sh — fetch the repo or run:"
   echo "    curl -fsSL https://raw.githubusercontent.com/point-source/flywheel/main/scripts/apply-rulesets.sh | bash -s -- $REPO"
+  record_outcome "Branch + tag protection rulesets" deferred
+else
+  # --skip-rulesets passed: no apply attempted, deferred to the adopter.
+  record_outcome "Branch + tag protection rulesets" deferred
 fi
 
 cat <<EOF
