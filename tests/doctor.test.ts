@@ -95,6 +95,15 @@ interface StubOpts {
   /** If true, rulesets are present and protect main + v* tags;
    * if false, `repos/<REPO>/rulesets` returns `[]` (→ instance blocks). */
   hasRulesets?: boolean;
+  /** If true, the rulesets LIST still succeeds (so `hasRulesets` stays in
+   * effect) but the BRANCH ruleset DETAIL read (`repos/<REPO>/rulesets/1`)
+   * exits non-zero — modelling a permission gap where listing rulesets is
+   * allowed but reading one requires repo-admin. doctor must then emit a
+   * "could not verify ruleset" warn and downgrade the unmatched-branch BLOCK
+   * to a could-not-verify warn, instead of a false "no ruleset covers branch"
+   * (#239). The tag ruleset detail (id 2) is left readable, so v* protection
+   * still verifies cleanly and this path introduces no block-severity finding. */
+  rulesetDetailFails?: boolean;
 }
 
 /** Writes a `gh` stub into a temp bin dir and returns the dir + a cleanup.
@@ -117,6 +126,7 @@ function setupGhStub(opts: StubOpts = {}): { binDir: string; cleanup: () => void
     adminFieldsVisible = true,
     hasConfig = true,
     hasRulesets = true,
+    rulesetDetailFails = false,
   } = opts;
 
   const binDir = mkdtempSync(join(tmpdir(), "flywheel-doctor-bin-"));
@@ -198,7 +208,10 @@ case "$path" in
     ${hasRulesets ? `printf '%s\\n' '${rulesetsList}'` : `printf '%s\\n' '[]'`}
     ;;
   "repos/${REPO}/rulesets/1")
-    printf '%s\\n' '${branchRulesetDetail}'
+    # Branch ruleset detail. When rulesetDetailFails is set, exit non-zero to
+    # model a permission gap (LIST allowed, DETAIL repo-admin-gated) — doctor
+    # must surface this as could-not-verify, not a false coverage block (#239).
+    ${rulesetDetailFails ? "exit 1" : `printf '%s\\n' '${branchRulesetDetail}'`}
     ;;
   "repos/${REPO}/rulesets/2")
     printf '%s\\n' '${tagRulesetDetail}'
@@ -339,6 +352,73 @@ describe.skipIf(!depsAvailable)("doctor.sh — pre-flight classification (end-to
       expect(enabledLine, "expected an allow_auto_merge enabled finding").toBeDefined();
       expect(plain).not.toContain("allow_auto_merge disabled");
       expect(plain).not.toContain("could not verify allow_auto_merge");
+      expect(r.exitCode, `stderr:\n${r.stderr}\nstdout:\n${plain}`).toBe(0);
+    } finally {
+      stub.cleanup();
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("ruleset DETAIL unreadable → [local-env] could-not-verify, not a false 'no ruleset covers branch' block (#239)", () => {
+    // Permission gap: listing rulesets succeeds but reading a ruleset's detail
+    // requires repo-admin and 404s/403s. doctor must NOT collapse the empty
+    // includes into a false "no ruleset covers branch 'main'" instance BLOCK —
+    // it emits a could-not-verify warn for the ruleset and downgrades the
+    // unmatched-branch finding to a could-not-verify warn (both [local-env]).
+    // The tag ruleset detail stays readable, so this path alone introduces no
+    // block-severity finding and the run exits 0.
+    const stub = setupGhStub({ rulesetDetailFails: true });
+    const cwd = mkdtempSync(join(tmpdir(), "flywheel-doctor-cwd-"));
+    try {
+      const r = runDoctor(stub.binDir, cwd);
+      const plain = stripAnsi(r.stdout);
+      // The ruleset detail read failed → a could-not-verify warn on [local-env].
+      const rulesetLine = plain
+        .split("\n")
+        .find((l) =>
+          l.includes("could not verify ruleset 1 — reading it requires repo-admin"),
+        );
+      expect(
+        rulesetLine,
+        "expected a could-not-verify finding for the unreadable ruleset detail",
+      ).toBeDefined();
+      expect(rulesetLine).toContain("[local-env]");
+      // The unmatched branch downgrades to a could-not-verify warn on [local-env].
+      const branchLine = plain
+        .split("\n")
+        .find((l) =>
+          l.includes(
+            "could not verify branch 'main' is covered by a ruleset — reading rulesets requires repo-admin",
+          ),
+        );
+      expect(
+        branchLine,
+        "expected the downgraded could-not-verify branch-coverage finding",
+      ).toBeDefined();
+      expect(branchLine).toContain("[local-env]");
+      // The false BLOCK must be gone entirely.
+      expect(plain).not.toContain("no ruleset covers branch 'main'");
+      // could-not-verify is a warn, not a block — this path does not flip exit.
+      expect(r.exitCode, `stderr:\n${r.stderr}\nstdout:\n${plain}`).toBe(0);
+    } finally {
+      stub.cleanup();
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("readable ruleset details → coverage verified, no could-not-verify warn (regression guard) (#239)", () => {
+    // Clean default stub (details readable): the generalized could-not-verify
+    // path must stay dormant — branch + tag coverage verify exactly as before,
+    // and NO "could not verify ruleset" / "could not verify branch" warn fires.
+    const stub = setupGhStub();
+    const cwd = mkdtempSync(join(tmpdir(), "flywheel-doctor-cwd-"));
+    try {
+      const r = runDoctor(stub.binDir, cwd);
+      const plain = stripAnsi(r.stdout);
+      expect(plain).toContain("branch 'main' protected, requires PRs");
+      expect(plain).toContain("v* tag namespace protected");
+      expect(plain).not.toContain("could not verify ruleset");
+      expect(plain).not.toContain("could not verify branch");
       expect(r.exitCode, `stderr:\n${r.stderr}\nstdout:\n${plain}`).toBe(0);
     } finally {
       stub.cleanup();
