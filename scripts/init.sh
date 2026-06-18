@@ -543,16 +543,19 @@ record_outcome() {
 #
 # Prints a "Setup validation" heading, the canonical green/red headline (via
 # findings_validation_headline), and doctor's finding lines verbatim (already in
-# the shared [bucket]/glyph vocabulary). Echoes doctor's block count on its LAST
-# line as `VALIDATION_BLOCKS=<n>` so the caller can fold it into the verdict; on
-# an all-green run there are no finding lines, only the headline.
+# the shared [bucket]/glyph vocabulary); on an all-green run there are no finding
+# lines, only the headline. The block count doctor reported is returned to the
+# caller via the global VALIDATION_BLOCKS, keeping this function's stdout purely
+# the human-readable section (no machine marker for the caller to re-parse).
 #
 # Budget rationale (§req:sandbox-ci-budget): $REPO is already resolved, so doctor
 # skips its own `gh repo view`; --skip-credentials is passed because init's
 # pre-flight already probed the FLYWHEEL_GH_APP_ID/PRIVATE_KEY credentials, and
 # re-listing them needs an admin-PAT round trip the run already covered. doctor
 # stays read-only. Run identically in interactive and non-interactive runs.
+VALIDATION_BLOCKS=0
 run_setup_validation() {
+  VALIDATION_BLOCKS=0
   printf '\nSetup validation:\n'
 
   # Resolve the doctor command, mirroring the findings.sh source/curl fallback.
@@ -579,7 +582,6 @@ run_setup_validation() {
     # skip the rest of validation rather than aborting the run.
     format_finding instance warn "Setup validation — deferred (doctor.sh unavailable)"
     printf '      finish with: scripts/doctor.sh %s\n' "$REPO"
-    printf 'VALIDATION_BLOCKS=0\n'
     return 0
   fi
 
@@ -588,21 +590,20 @@ run_setup_validation() {
   out="$(bash "$doctor_cmd" "$REPO" --skip-credentials --summary 2>/dev/null || true)"
   [[ -n "$doctor_tmp" ]] && rm -f "$doctor_tmp"
 
-  # Split the trailing `DOCTOR_RESULT blocks=N warns=M` trailer off the output.
-  local blocks=0 warns=0 trailer body
-  trailer="$(printf '%s\n' "$out" | grep -E '^DOCTOR_RESULT blocks=[0-9]+ warns=[0-9]+$' | tail -n1)"
-  if [[ -n "$trailer" ]]; then
-    blocks="${trailer#DOCTOR_RESULT blocks=}"; blocks="${blocks%% *}"
-    warns="${trailer#*warns=}"
+  # The `DOCTOR_RESULT blocks=N warns=M` trailer is doctor's last line; read the
+  # counts from it and drop it from the finding lines shown to the adopter.
+  local blocks=0 warns=0 body
+  if [[ "$(printf '%s\n' "$out" | tail -n1)" =~ ^DOCTOR_RESULT\ blocks=([0-9]+)\ warns=([0-9]+)$ ]]; then
+    blocks="${BASH_REMATCH[1]}"
+    warns="${BASH_REMATCH[2]}"
   fi
-  # Everything except the trailer line is doctor's finding lines, verbatim.
   body="$(printf '%s\n' "$out" | grep -vE '^DOCTOR_RESULT blocks=[0-9]+ warns=[0-9]+$' || true)"
 
   findings_validation_headline "$blocks" "$warns"
   # Print the remaining finding lines verbatim (empty on an all-green run).
   [[ -n "$body" ]] && printf '%s\n' "$body"
 
-  printf 'VALIDATION_BLOCKS=%s\n' "$blocks"
+  VALIDATION_BLOCKS="$blocks"
 }
 
 # print_completion_summary — render the end-of-run outcome summary
@@ -649,15 +650,10 @@ print_completion_summary() {
   # Auto-run doctor and fold its blocking findings into the verdict so the run is
   # "complete" only when BOTH the scaffold steps AND doctor are clean
   # (SPEC.md §spec:setup-auto-validation). run_setup_validation prints the
-  # "Setup validation" section to stdout and echoes its block count on the LAST
-  # line as `VALIDATION_BLOCKS=<n>`; we surface the section verbatim and add the
-  # count to incomplete_count.
-  local validation_out validation_blocks=0
-  validation_out="$(run_setup_validation)"
-  validation_blocks="$(printf '%s\n' "$validation_out" | sed -n 's/^VALIDATION_BLOCKS=//p' | tail -n1)"
-  [[ -n "$validation_blocks" ]] || validation_blocks=0
-  printf '%s\n' "$validation_out" | grep -v '^VALIDATION_BLOCKS='
-  incomplete_count=$((incomplete_count + validation_blocks))
+  # "Setup validation" section to stdout and sets the global VALIDATION_BLOCKS to
+  # doctor's block count; add that to incomplete_count.
+  run_setup_validation
+  incomplete_count=$((incomplete_count + VALIDATION_BLOCKS))
 
   if [[ "$incomplete_count" -gt 0 ]]; then
     printf '\n\033[1;31mincomplete — %d item(s) remain\033[0m\n' "$incomplete_count"
