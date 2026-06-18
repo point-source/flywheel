@@ -140,6 +140,88 @@ describe("findings.sh — block counter / exit-code helper", () => {
   });
 });
 
+describe("findings.sh — format_finding (summary formatter)", () => {
+  it("renders the same `[<bucket>]` + glyph line as finding", () => {
+    // format_finding and finding must produce byte-identical output for the
+    // same (bucket, severity, message) — WS4 renders summary labels with the
+    // exact pre-flight style.
+    const r = runWithLib(
+      [
+        'finding config warn "shared message"',
+        'format_finding config warn "shared message"',
+      ].join("\n"),
+    );
+    expect(r.exitCode, r.stderr).toBe(0);
+    const lines = r.stdout.split("\n").filter(Boolean);
+    expect(lines).toHaveLength(2);
+    expect(lines[0]).toBe(lines[1]);
+
+    const plain = stripAnsi(r.stdout);
+    expect(plain).toContain("[config]");
+    expect(plain).toContain("shared message");
+  });
+
+  it("renders each severity with its distinct glyph", () => {
+    const r = runWithLib(
+      [
+        'format_finding instance block "blocked"',
+        'format_finding config warn "warned"',
+        'format_finding local-env info "noted"',
+      ].join("\n"),
+    );
+    expect(r.exitCode, r.stderr).toBe(0);
+    expect(r.stdout).toContain("✗");
+    expect(r.stdout).toContain("!");
+    expect(r.stdout).toMatch(/\x1b\[36mi\x1b\[0m/);
+
+    const plain = stripAnsi(r.stdout);
+    expect(plain).toContain("[instance]");
+    expect(plain).toContain("[config]");
+    expect(plain).toContain("[local-env]");
+  });
+
+  it("does NOT mutate FINDINGS_BLOCK_COUNT, even for block severity", () => {
+    const r = runWithLib(
+      [
+        'format_finding config block "b1"',
+        'format_finding instance block "b2"',
+        'echo "COUNT=$FINDINGS_BLOCK_COUNT"',
+        'echo "EXIT=$(findings_exit_code)"',
+      ].join("\n"),
+    );
+    expect(r.exitCode, r.stderr).toBe(0);
+    const plain = stripAnsi(r.stdout);
+    expect(plain).toContain("COUNT=0");
+    expect(plain).toContain("EXIT=0");
+  });
+
+  it("an invalid bucket returns non-zero and prints to stderr", () => {
+    const r = runWithLib(
+      [
+        "format_finding bogus block x; rc=$?",
+        'echo "RC=$rc"',
+      ].join("\n"),
+    );
+    const plain = stripAnsi(r.stdout);
+    expect(plain).toContain("RC=1");
+    expect(r.stderr).toContain("invalid bucket");
+    expect(r.stderr).toContain("bogus");
+  });
+
+  it("an invalid severity returns non-zero and prints to stderr", () => {
+    const r = runWithLib(
+      [
+        "format_finding config bogus x; rc=$?",
+        'echo "RC=$rc"',
+      ].join("\n"),
+    );
+    const plain = stripAnsi(r.stdout);
+    expect(plain).toContain("RC=1");
+    expect(r.stderr).toContain("invalid severity");
+    expect(r.stderr).toContain("bogus");
+  });
+});
+
 describe("findings.sh — invalid input rejected", () => {
   it("an invalid bucket returns non-zero, prints to stderr, and does not count", () => {
     const r = runWithLib(

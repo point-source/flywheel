@@ -32,6 +32,15 @@
 #       stderr and `return 1` (never exit). On a `block` severity, increment the
 #       global FINDINGS_BLOCK_COUNT.
 #
+#   format_finding <bucket> <severity> <message>
+#       Print the SAME `  <glyph> [<bucket>] <message>` line `finding` produces
+#       (identical glyph/label style), but WITHOUT mutating FINDINGS_BLOCK_COUNT.
+#       Used by the setup-completion summary (SPEC.md §spec:setup-completion-summary)
+#       to render deferred/failed step labels with the pre-flight vocabulary while
+#       computing its own verdict. Validates bucket/severity exactly like
+#       `finding`; on invalid input, prints an error to stderr and `return 1`
+#       (never exit, never count).
+#
 #   findings_exit_code
 #       Print 1 if any block-severity finding has been emitted, else 0.
 #
@@ -41,8 +50,12 @@
 # Number of block-severity findings emitted so far.
 FINDINGS_BLOCK_COUNT=0
 
-# finding <bucket> <severity> <message>
-finding() {
+# _finding_format <bucket> <severity> <message> — internal helper shared by the
+# public `finding` and `format_finding`. Validates bucket/severity and prints the
+# canonical `  <glyph> [<bucket>] <message>` line to stdout. On invalid input,
+# prints an error to stderr and returns 1. Does NOT mutate FINDINGS_BLOCK_COUNT —
+# counter bookkeeping is the caller's responsibility.
+_finding_format() {
   local bucket="$1"
   local severity="$2"
   local message="$3"
@@ -66,11 +79,21 @@ finding() {
       ;;
   esac
 
-  if [[ "$severity" == "block" ]]; then
+  printf "  ${glyph} [%s] %s\n" "$bucket" "$message"
+}
+
+# finding <bucket> <severity> <message>
+finding() {
+  _finding_format "$@" || return 1
+
+  if [[ "$2" == "block" ]]; then
     FINDINGS_BLOCK_COUNT=$((FINDINGS_BLOCK_COUNT + 1))
   fi
+}
 
-  printf "  ${glyph} [%s] %s\n" "$bucket" "$message"
+# format_finding <bucket> <severity> <message>
+format_finding() {
+  _finding_format "$@"
 }
 
 # findings_exit_code — print 1 if any block-severity finding was emitted, else 0.
