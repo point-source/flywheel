@@ -1077,15 +1077,11 @@ else
     fi
     record_outcome "App credentials" configured
   elif [[ "$INTERACTIVE" -eq 0 ]]; then
-    echo "  non-interactive shell — skipping App-credential prompts. Set them manually:"
-    if [[ "$SCOPE" == "org" ]]; then
-      echo "    gh variable set FLYWHEEL_GH_APP_ID --body '<your-app-id>' --org $OWNER --visibility all"
-      echo "    gh secret set FLYWHEEL_GH_APP_PRIVATE_KEY < /path/to/private-key.pem --org $OWNER --visibility all"
-    else
-      echo "    gh variable set FLYWHEEL_GH_APP_ID --body '<your-app-id>' --repo $REPO"
-      echo "    gh secret set FLYWHEEL_GH_APP_PRIVATE_KEY < /path/to/private-key.pem --repo $REPO"
-    fi
+    # Derive the displayed hint from app_creds_finish_cmd so the command form
+    # lives in exactly one place (it is also what gets recorded below).
     app_creds_cmd="$(app_creds_finish_cmd "$SCOPE")"
+    echo "  non-interactive shell — skipping App-credential prompts. Set them manually:"
+    echo "    $app_creds_cmd"
     record_outcome "App credentials" deferred config warn "$app_creds_cmd"
   else
     # Resolve SCOPE before the App-source prompt so write_app_id_var /
