@@ -38,6 +38,11 @@
 <!--     ruleset templates when read from stdin -->
 <!--     (§req:apply-rulesets-stdin, §req:apply-rulesets-stdin-criteria, -->
 <!--     §req:apply-rulesets-stdin-stories, §req:apply-rulesets-stdin-constraints) -->
+<!--   - doctor.sh repo-settings read — doctor reports allow_auto_merge / -->
+<!--     delete_branch_on_merge as disabled when an under-scoped token simply -->
+<!--     can't read them (false negative); severity reconciled to warn+config -->
+<!--     (§req:doctor-settings-read, §req:doctor-settings-read-criteria, -->
+<!--     §req:doctor-settings-read-stories, §req:doctor-settings-read-constraints) -->
 <!--   - Dependabot PR deadlock — when the app private key is empty on a -->
 <!--     Dependabot-triggered run, the conductor skips entirely and never posts -->
 <!--     the required flywheel/conventional-commit check, so the PR can never -->
@@ -1312,6 +1317,137 @@ that exercises the stdin path so this class of break cannot ship again.
   `apply-rulesets.sh` command work end to end; (2) keep the docs honest and audit
   every other documented one-liner for the same class of failure; (3) the cheap
   stdin regression guard.
+
+## doctor.sh repo-settings read §req:doctor-settings-read
+
+`scripts/doctor.sh` is the read-only validator an adopter runs to confirm a
+repository is correctly wired for flywheel. Under "Repo settings" it checks two
+GitHub repository options flywheel depends on: `allow_auto_merge` — without it
+flywheel cannot schedule native auto-merge, so eligible PRs fall back to a
+direct merge that bypasses required status checks (#147/#153) — and
+`delete_branch_on_merge`, without which head branches linger after every merge.
+
+doctor reads both off a single `gh api repos/<owner>/<repo>` call and treats a
+setting as enabled only when its field reads back exactly `true`. But GitHub
+omits these merge-setting fields from the repository object entirely when the
+caller's token lacks repo-admin permission: the API call itself still succeeds
+and returns the repo, just without the admin-only fields. doctor cannot tell
+that *absence* apart from a genuine `false`, so it reports the setting as
+**disabled** when the truth is "enabled, but this token can't see it." An
+adopter running doctor with a non-admin token — or an App installation token —
+is told to go re-enable settings that are already on. That false negative sends
+the adopter chasing a non-problem and erodes trust in the whole report; a check
+that confidently misdirects is worse than one that stays silent.
+
+This is the same conflation doctor already avoids everywhere else. Its variable,
+secret, and ruleset checks distinguish "could not read — needs admin" from
+"absent" by inspecting whether the API call succeeded (e.g. "could not list repo
+secrets — listing requires an admin PAT"). The repo-settings block is the one
+place that reads admin-gated fields off an otherwise-successful call and so
+silently mis-reports. The fix shall make every such read distinguish three
+states — enabled, disabled, and could-not-verify — not two.
+
+The two checks also carried inconsistent severity historically: `allow_auto_merge`
+reported as a hard fail while `delete_branch_on_merge` reported as a warn. The
+pre-flight-detection work (#250, §req:preflight-detection) already reconciled
+this — both now report at warn severity in the config bucket — and that is the
+intended, settled level. This requirement ratifies it rather than re-opening it.
+
+The users are the adopter validating their setup and the flywheel maintainer who
+owns doctor. The problem is frequent (any adopter who runs doctor without an
+admin token), self-inflicted (a reporting bug, not a release fault), and
+corrosive rather than blocking: nothing breaks, but the adopter is actively
+misdirected. It sits inside the setup-onboarding cluster and reuses the
+two-axis vocabulary — bucket × severity — established by §req:preflight-detection.
+
+## doctor.sh repo-settings read success criteria §req:doctor-settings-read-criteria
+
+- An adopter whose repo has the setting enabled and whose token *can* read it
+  sees it reported enabled, exactly as today.
+- An adopter whose token *cannot* read the setting (no repo-admin; the field is
+  absent from the API response) sees a distinct "could not verify
+  `<setting>` — reading it requires repo-admin" finding, never a "disabled"
+  claim. doctor does not assert a setting is off when it merely could not read
+  it.
+- When a setting is genuinely disabled and the token can read it, doctor reports
+  it disabled with the existing remediation guidance (re-run
+  `scripts/apply-rulesets.sh`, or the Settings path), unchanged.
+- The could-not-verify finding is classified **local-env** (it is about the
+  adopter's own token and permissions) at **warn** severity, consistent with how
+  doctor already reports the analogous "could not list repo secrets — requires
+  an admin PAT" case.
+- The same three-state treatment (enabled / disabled / could-not-verify) is
+  applied across **every** doctor check that reads a permission-gated field off
+  an otherwise-successful `gh api` response — not only the two settings named in
+  #239. No remaining check can silently report "disabled" or "absent" when the
+  real cause is a permission gap.
+- Both `allow_auto_merge` and `delete_branch_on_merge`, when genuinely disabled,
+  report at the **same** severity and bucket (warn / config), ratifying the
+  reconciliation #250 already made; doctor no longer reports one as a fail and
+  the other as a warn.
+- doctor's exit contract is unchanged: a could-not-verify finding is not a
+  block, so doctor still exits 1 only when a block-severity finding is present
+  and 0 otherwise (§req:preflight-detection-criteria).
+- A fast local test exercises the could-not-verify path — doctor fed a repo
+  response with the admin-gated fields absent reports "could not verify," not
+  "disabled" — so this false negative cannot silently return. The test needs no
+  live GitHub access and adds no load to the rate-limited sandbox installation
+  (§req:sandbox-ci-budget).
+
+## doctor.sh repo-settings read user stories §req:doctor-settings-read-stories
+
+- As an adopter running `doctor.sh` with a non-admin or App installation token, I
+  want doctor to tell me it couldn't read `allow_auto_merge` /
+  `delete_branch_on_merge` rather than claim they're disabled, so I don't waste
+  time re-enabling settings that are already on.
+- As an adopter, I want a could-not-read finding to read the same way as doctor's
+  other permission notes ("requires an admin PAT"), so I recognise it as a
+  visibility limit on my side, not a misconfiguration of my repo.
+- As an adopter with a genuinely disabled setting, I want doctor to still flag it
+  with the same remediation guidance as before, so the real-misconfiguration
+  case is unchanged.
+- As a flywheel maintainer, I want every doctor check that reads a
+  permission-gated repo field to distinguish "could not verify" from "off," so no
+  other check silently false-negatives the way the repo-settings block did.
+- As a flywheel maintainer, I want the two settings to share one severity (warn)
+  and bucket (config), so the report speaks one consistent language and the
+  historical fail-vs-warn mismatch stays closed.
+
+## doctor.sh repo-settings read quality attributes and constraints §req:doctor-settings-read-constraints
+
+- **Three states, not two.** Every repo-field read distinguishes enabled,
+  disabled, and could-not-verify. The absence of a field under insufficient
+  permission is never collapsed into "disabled."
+- **One vocabulary.** Findings use the bucket × severity vocabulary from
+  §req:preflight-detection: a genuinely-disabled setting is config + warn; a
+  could-not-verify finding is local-env + warn. No new severity or bucket names
+  are introduced.
+- **Severity reconciliation is ratification, not re-litigation.** #250 already
+  set both settings to warn + config; this requirement records that as the
+  intended end state rather than proposing a different level.
+- **Exit contract unchanged.** doctor stays read-only and keeps exit 1 only when
+  a block-severity finding is present, 0 otherwise. Neither the warn for a
+  disabled setting nor the could-not-verify finding is a block, so doctor's exit
+  behavior for these checks does not change.
+- **No new privilege.** The fix changes how doctor *interprets* what it already
+  reads; it requests no additional scopes. The whole point is to behave
+  correctly precisely when the token is under-scoped.
+- **Mechanism is open.** How doctor tells an absent field from a `false` one
+  (distinguishing JSON null from boolean false, probing for the field's presence,
+  or another means) is a SPEC design decision; the requirement fixes the
+  adopter-visible behavior — never a false "disabled."
+- **Low blast radius.** The change is confined to doctor.sh's reporting of
+  repo-field reads; it does not alter `apply-rulesets.sh`, the settings
+  themselves, or any release behavior.
+- **Cheap coverage only.** The regression test lives in the fast local/CI suite
+  and does not draw on the e2e sandbox's rate-limited installation
+  (§req:sandbox-ci-budget).
+- **Priority.** Low-severity, self-contained onboarding correctness. Nothing
+  breaks and no release is at risk, so it does not outrank the release-safety
+  (§req:release-safety-gate), composite-action (§req:composite-action-path), or
+  stdin (§req:apply-rulesets-stdin) work in this document. It is nonetheless a
+  direct trust-eroder — doctor actively misdirects under-scoped adopters — and is
+  cheap: a three-state read, an audit of sibling checks, and one local test.
 
 ## Dependabot PR deadlock §req:dependabot-deadlock
 
