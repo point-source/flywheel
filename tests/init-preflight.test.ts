@@ -81,6 +81,19 @@ function runInit(
   const defaultGhStub = `#!/usr/bin/env bash\nif [[ "$1" == "auth" && "$2" == "status" ]]; then echo "  - Token scopes: 'repo', 'read:org'"; exit 0; fi\nif [[ "$1" == "repo" && "$2" == "view" ]]; then echo "acme/widget"; exit 0; fi\necho "stub gh: unhandled: $*" >&2; exit 1\n`;
   writeFileSync(gh, opts.ghStub ?? defaultGhStub);
   chmodSync(gh, 0o755);
+  // Pin the end-of-run validation (§spec:setup-auto-validation) to a green
+  // doctor stub. This suite exercises the PRE-FLIGHT gate, not end-of-run
+  // validation; without the stub the real doctor.sh runs against the
+  // PATH-shadowed gh (which only answers `gh repo view`), reporting spurious
+  // block-severity findings that — under the end-of-run exit contract
+  // (§spec:setup-exit-contract) — would flip a clean/warn-only run's exit
+  // non-zero. The green stub keeps the gate's exit semantics observable.
+  const doctorStub = join(binDir, "doctor-stub.sh");
+  writeFileSync(
+    doctorStub,
+    "#!/usr/bin/env bash\nprintf 'DOCTOR_RESULT blocks=0 warns=0\\n'\nexit 0\n",
+  );
+  chmodSync(doctorStub, 0o755);
   execFileSync("git", ["init", "-q"], { cwd: work });
   const r = spawnSync("bash", [initSh, ...(opts.args ?? [])], {
     cwd: work,
@@ -93,6 +106,7 @@ function runInit(
       // Opt into the test-only pre-flight hooks (FLYWHEEL_ASSUME_INTERACTIVE /
       // FLYWHEEL_PREFLIGHT_INJECT), which init.sh ignores unless this is set.
       FLYWHEEL_TEST_HOOKS: "1",
+      FLYWHEEL_DOCTOR_OVERRIDE: doctorStub,
       ...(opts.env ?? {}),
     },
   });

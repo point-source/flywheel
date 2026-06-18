@@ -84,6 +84,15 @@ describe.skipIf(!ghAuthenticated())("init.sh deterministic file emission", () =>
           { cwd: work },
         );
 
+        // Pin end-of-run validation to a green doctor stub via the
+        // FLYWHEEL_TEST_HOOKS seam. Without it the real doctor inspects the
+        // live remote and reports genuine block-severity findings for preset
+        // branches that don't exist there (e.g. `staging`), which — under the
+        // end-of-run exit contract (§spec:setup-exit-contract) — makes init
+        // exit non-zero and execFileSync throw before any file assertion runs.
+        // This suite tests file EMISSION, not validation, so the green stub
+        // keeps it hermetic and focused.
+        const doctorStub = writeDoctorStub(work, { blocks: 0, warns: 0 });
         execFileSync(
           "bash",
           [
@@ -93,7 +102,15 @@ describe.skipIf(!ghAuthenticated())("init.sh deterministic file emission", () =>
             "--skip-secrets",
             "--skip-rulesets",
           ],
-          { cwd: work, stdio: "pipe" },
+          {
+            cwd: work,
+            stdio: "pipe",
+            env: {
+              ...process.env,
+              FLYWHEEL_TEST_HOOKS: "1",
+              FLYWHEEL_DOCTOR_OVERRIDE: doctorStub,
+            },
+          },
         );
 
         const writtenFw = readFileSync(join(work, ".flywheel.yml"), "utf8");
@@ -170,11 +187,13 @@ describe.skipIf(!ghAuthenticated())("init.sh completion summary", () => {
     return work;
   }
 
-  // Run init non-interactively (execFileSync gives it no TTY, mirroring how the
+  // Run init non-interactively (spawnSync gives it no TTY, mirroring how the
   // other suites drive it) against `work`, with the doctor validation pinned to
-  // `doctorStub` via the FLYWHEEL_TEST_HOOKS seam. Returns stdout.
-  function runInit(work: string, doctorStub: string): string {
-    return execFileSync(
+  // `doctorStub` via the FLYWHEEL_TEST_HOOKS seam. Returns stdout AND the exit
+  // status — spawnSync (unlike execFileSync) does not throw on a non-zero exit,
+  // so the end-of-run exit contract (§spec:setup-exit-contract) is assertable.
+  function runInit(work: string, doctorStub: string): { stdout: string; status: number | null } {
+    const r = spawnSync(
       "bash",
       [
         initSh,
@@ -192,7 +211,8 @@ describe.skipIf(!ghAuthenticated())("init.sh completion summary", () => {
           FLYWHEEL_DOCTOR_OVERRIDE: doctorStub,
         },
       },
-    ).toString();
+    );
+    return { stdout: (r.stdout ?? "").toString(), status: r.status };
   }
 
   // These cases shell out to a live `gh repo view` to resolve $REPO (init still
@@ -207,8 +227,13 @@ describe.skipIf(!ghAuthenticated())("init.sh completion summary", () => {
       // Green doctor stub: validation passes, so the verdict is driven purely by
       // the scaffold steps' (deferred) outcomes — hermetic, no live gh calls.
       const stub = writeDoctorStub(work, { blocks: 0, warns: 0 });
-      const stdout = runInit(work, stub);
+      const { stdout, status } = runInit(work, stub);
       const plain = stripAnsi(stdout);
+
+      // §spec:setup-exit-contract: a clean run that deferred steps by choice
+      // (--skip-* → deferred/warn) plus a green doctor exits 0 — deliberate
+      // deferrals are complete, not failures.
+      expect(status).toBe(0);
 
       // Every configured scaffold step is named and shown as configured.
       expect(plain).toContain(".flywheel.yml preset — configured");
@@ -254,7 +279,9 @@ describe.skipIf(!ghAuthenticated())("init.sh completion summary", () => {
     const work = makeAdopterRepo("validate-noninteractive");
     try {
       const stub = writeDoctorStub(work, { blocks: 0, warns: 0 });
-      const plain = stripAnsi(runInit(work, stub));
+      const { stdout, status } = runInit(work, stub);
+      const plain = stripAnsi(stdout);
+      expect(status).toBe(0);
       expect(plain).toContain("Setup validation:");
       expect(plain).toContain("Setup validation: all checks pass");
       expect(plain).toContain("complete");
@@ -275,7 +302,12 @@ describe.skipIf(!ghAuthenticated())("init.sh completion summary", () => {
         warns: 0,
         findingLines: [blockLine],
       });
-      const plain = stripAnsi(runInit(work, stub));
+      const { stdout, status } = runInit(work, stub);
+      const plain = stripAnsi(stdout);
+
+      // §spec:setup-exit-contract: an unresolved block-severity finding (here a
+      // doctor block) makes the run exit non-zero — concretely status 1.
+      expect(status).toBe(1);
 
       // Doctor's finding line is rendered verbatim in the summary.
       expect(plain).toContain("[instance] no ruleset covers branch 'main'");

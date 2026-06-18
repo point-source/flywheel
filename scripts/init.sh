@@ -530,6 +530,13 @@ preflight_gate
 # ---------------------------------------------------------------------------
 SUMMARY_RECORDS=()
 
+# FORCED_EXIT_STATUS — forced-status seam for print_completion_summary's
+# end-of-run exit (SPEC.md §spec:setup-exit-contract). Empty means derive the
+# exit code from the completion verdict; a non-empty value (set by a caller with
+# a genuine non-zero status to preserve, e.g. the rulesets-apply failure path)
+# is honored verbatim after the summary prints.
+FORCED_EXIT_STATUS=""
+
 # record_outcome <label> <outcome> [bucket] [severity] [command]
 #   outcome is one of: configured | skipped | failed | deferred
 record_outcome() {
@@ -660,6 +667,26 @@ print_completion_summary() {
   else
     printf '\n\033[1;32mcomplete\033[0m\n'
     printf 'Next: commit + push the new files and open a smoke-test PR to verify the wiring.\n'
+  fi
+
+  # End-of-run exit contract (SPEC.md §spec:setup-exit-contract). The function
+  # owns the script's terminal exit so the code reflects the verdict on the same
+  # severity vocabulary the summary speaks. This is strictly ADDITIVE beneath the
+  # pre-flight gate's block-exit (§spec:preflight-gate), which fires earlier.
+  #
+  # FORCED_EXIT_STATUS seam: a caller that already has a genuine non-zero status
+  # to preserve (e.g. the rulesets-apply failure path) sets it before calling, so
+  # the exact apply-rulesets status survives rather than being flattened to 1.
+  # Empty (the normal case) means derive the code from the verdict: non-zero when
+  # any step failed or an unresolved block remains, zero otherwise (deliberate
+  # deferrals are complete). Explicit `exit` keeps the EXIT-trap status gotcha at
+  # bay — the genuine terminal action, never a fall-through.
+  if [[ -n "$FORCED_EXIT_STATUS" ]]; then
+    exit "$FORCED_EXIT_STATUS"
+  elif [[ "$incomplete_count" -gt 0 ]]; then
+    exit 1
+  else
+    exit 0
   fi
 }
 
@@ -1146,20 +1173,21 @@ if [[ "$SKIP_RULESETS" -eq 0 && -x "${SCRIPT_DIR:-}/apply-rulesets.sh" ]]; then
     [[ -n "$REQUIRED_CHECKS" ]] && args+=(--required-checks "$REQUIRED_CHECKS")
     [[ -n "${CREATED_APP_ID:-}" ]] && args+=(--app-id "$CREATED_APP_ID")
     # Record the apply outcome. On a non-zero exit, record `failed`, then render
-    # the completion summary BEFORE re-exiting with the same status — the spec
-    # requires a failed step to appear in the summary with an "incomplete"
-    # verdict (SPEC.md §spec:setup-completion-summary), so the summary must print
-    # ahead of the early exit. The non-zero exit is preserved AFTER the summary
-    # so the genuine failure is not silently swallowed (the pre-existing `set -e`
-    # abort behavior is retained as the exit status).
+    # the completion summary BEFORE exiting — the spec requires a failed step to
+    # appear in the summary with an "incomplete" verdict
+    # (SPEC.md §spec:setup-completion-summary), so the summary must print ahead of
+    # the exit. The genuine apply-rulesets status is preserved via the
+    # FORCED_EXIT_STATUS seam: print_completion_summary now owns the terminal exit
+    # (§spec:setup-exit-contract) and honors the forced status after printing, so
+    # the failure is not silently swallowed.
     rulesets_status=0
     "$SCRIPT_DIR/apply-rulesets.sh" "${args[@]}" || rulesets_status=$?
     if [[ "$rulesets_status" -eq 0 ]]; then
       record_outcome "Branch + tag protection rulesets" configured
     else
       record_outcome "Branch + tag protection rulesets" failed instance block "scripts/apply-rulesets.sh $REPO${CREATED_APP_ID:+ --app-id $CREATED_APP_ID}"
+      FORCED_EXIT_STATUS="$rulesets_status"
       print_completion_summary
-      exit "$rulesets_status"
     fi
   else
     # One string for both the printed hint and the recorded finishing command,
