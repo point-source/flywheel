@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { FLYWHEEL_TITLE_CHECK, runPrFlow } from "../src/pr-flow.js";
+import { runPrFlow } from "../src/pr-flow.js";
 import {
   FLYWHEEL_AUTO_MERGE_LABEL,
   FLYWHEEL_NEEDS_REVIEW_LABEL,

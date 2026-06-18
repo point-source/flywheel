@@ -1804,7 +1804,7 @@ holds no state between runs and waits on nothing after posting.
 
 ## Dependabot full conductor opt-in §spec:dependabot-full-conductor-optin
 
-*Status: not started*
+*Status: complete*
 
 When the adopter registers `FLYWHEEL_GH_APP_PRIVATE_KEY` in the repository's
 (or organisation's) **Dependabot** secret store — alongside the existing
