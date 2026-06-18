@@ -317,3 +317,108 @@ describe.skipIf(!depsAvailable)("doctor.sh — pre-flight classification (end-to
     }
   });
 });
+
+// --summary mode (SPEC.md §spec:setup-auto-validation, WS1). The read-only seam
+// init.sh consumes: doctor still emits every finding through the shared `finding`
+// vocabulary (glyph + [<bucket>] label intact) but drops all decoration —
+// no bold section headers, no green ok lines, no FAIL/OK summary block — and
+// prints a single machine-readable trailer as its LAST line:
+//   DOCTOR_RESULT blocks=<n> warns=<m>
+// Exit contract is unchanged (1 iff a block fired, else 0).
+describe.skipIf(!depsAvailable)("doctor.sh — --summary mode (machine seam)", () => {
+  /** Parse the trailing DOCTOR_RESULT line out of summary-mode stdout. */
+  function parseTrailer(plain: string): { last: string; blocks: number; warns: number } {
+    const lines = plain.split("\n").filter((l) => l.length > 0);
+    const last = lines[lines.length - 1] ?? "";
+    const m = last.match(/^DOCTOR_RESULT blocks=(\d+) warns=(\d+)$/);
+    expect(m, `last line was not a DOCTOR_RESULT trailer: ${JSON.stringify(last)}`).not.toBeNull();
+    return { last, blocks: Number(m![1]), warns: Number(m![2]) };
+  }
+
+  it("suppresses headers and ok lines but keeps findings + emits the trailer", () => {
+    // allow_auto_merge disabled (a [config] warn) and no rulesets (instance
+    // blocks): findings of both severities fire, so we can prove they survive.
+    const stub = setupGhStub({ allowAutoMerge: false, hasRulesets: false });
+    const cwd = mkdtempSync(join(tmpdir(), "flywheel-doctor-cwd-"));
+    try {
+      const r = runDoctor(stub.binDir, cwd, ["--summary"]);
+      const plain = stripAnsi(r.stdout);
+
+      // No section-header decoration and no green ok lines.
+      expect(plain).not.toContain("Flywheel doctor — ");
+      expect(plain).not.toContain(".flywheel.yml");
+      expect(plain).not.toContain("✓");
+      // No human FAIL/OK summary block.
+      expect(plain).not.toMatch(/FAIL/);
+      expect(plain).not.toMatch(/OK with warnings/);
+      expect(plain).not.toMatch(/all checks pass/);
+
+      // Findings still render with their bucket labels.
+      expect(plain).toContain("[config]");
+      expect(plain).toContain("[instance]");
+
+      // The last line is the machine trailer, and its counts match the run.
+      const { blocks, warns } = parseTrailer(plain);
+      expect(blocks).toBeGreaterThan(0);
+      expect(warns).toBeGreaterThan(0);
+      // A block fired → exit 1 (findings_exit_code is 1 iff blocks>0).
+      expect(r.exitCode, `stdout:\n${plain}\nstderr:\n${r.stderr}`).toBe(1);
+    } finally {
+      stub.cleanup();
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("zero blocks → trailer blocks=0 and exit 0", () => {
+    // Fully-clean stub: no findings at all. Trailer reports blocks=0 warns=0.
+    const stub = setupGhStub();
+    const cwd = mkdtempSync(join(tmpdir(), "flywheel-doctor-cwd-"));
+    try {
+      const r = runDoctor(stub.binDir, cwd, ["--summary"]);
+      const plain = stripAnsi(r.stdout);
+      const { blocks, warns } = parseTrailer(plain);
+      expect(blocks).toBe(0);
+      expect(warns).toBe(0);
+      expect(r.exitCode, `stdout:\n${plain}\nstderr:\n${r.stderr}`).toBe(0);
+      // Still no decoration even on a clean run.
+      expect(plain).not.toContain("✓");
+      expect(plain).not.toMatch(/all checks pass/);
+    } finally {
+      stub.cleanup();
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("a warn-only run → trailer blocks=0 warns>0 and exit 0", () => {
+    // allow_auto_merge disabled is the only finding (config + warn). The exit
+    // code stays 0 because no block fired; the trailer records the warn.
+    const stub = setupGhStub({ allowAutoMerge: false });
+    const cwd = mkdtempSync(join(tmpdir(), "flywheel-doctor-cwd-"));
+    try {
+      const r = runDoctor(stub.binDir, cwd, ["--summary"]);
+      const plain = stripAnsi(r.stdout);
+      const { blocks, warns } = parseTrailer(plain);
+      expect(blocks).toBe(0);
+      expect(warns).toBeGreaterThan(0);
+      expect(r.exitCode, `stdout:\n${plain}\nstderr:\n${r.stderr}`).toBe(0);
+    } finally {
+      stub.cleanup();
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("is read-only in --summary mode — writes nothing into its cwd", () => {
+    const stub = setupGhStub({ allowAutoMerge: false, hasRulesets: false });
+    const cwd = mkdtempSync(join(tmpdir(), "flywheel-doctor-cwd-"));
+    try {
+      const before = readdirSync(cwd);
+      expect(before).toEqual([]);
+      runDoctor(stub.binDir, cwd, ["--summary"]);
+      const after = readdirSync(cwd);
+      expect(after, `doctor wrote into its cwd: ${after.join(", ")}`).toEqual([]);
+    } finally {
+      stub.cleanup();
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+});
