@@ -1,3 +1,10 @@
+# [2.1.0-dev.7](https://github.com/point-source/flywheel/compare/v2.1.0-dev.6...v2.1.0-dev.7) (2026-06-18)
+
+
+### Features
+
+* doctor fix-script remediation matches invocation mode ([#257](https://github.com/point-source/flywheel/issues/257)) ([941b315](https://github.com/point-source/flywheel/commit/941b31524c4173aac44c40490d73ff47d5b6bdf7)), closes [#238](https://github.com/point-source/flywheel/issues/238) [#238](https://github.com/point-source/flywheel/issues/238) [#238](https://github.com/point-source/flywheel/issues/238) [#238](https://github.com/point-source/flywheel/issues/238) [#238](https://github.com/point-source/flywheel/issues/238) [#238](https://github.com/point-source/flywheel/issues/238) [#238](https://github.com/point-source/flywheel/issues/238) [#238](https://github.com/point-source/flywheel/issues/238) [#238](https://github.com/point-source/flywheel/issues/238) [#238](https://github.com/point-source/flywheel/issues/238)
+
 # [2.1.0-dev.6](https://github.com/point-source/flywheel/compare/v2.1.0-dev.5...v2.1.0-dev.6) (2026-06-18)
 
 
