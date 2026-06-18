@@ -914,7 +914,7 @@ post-hoc check only after the mistakes are already committed to the repo.
 Two classes of problem are entirely undetected today and bite hardest.
 First, **the local environment**: whether `gh` is installed,
 authenticated, and — critically — carries the *specific* scopes and
-permissions the path the adopter chose will need (repo-admin to write the
+permissions the path the adopter chose requires (repo-admin to write the
 App-ID variable and private-key secret and to apply rulesets; `admin:org`
 when credentials are scoped org-wide; the ability to create a GitHub App
 when the adopter asks init to create one). Setup proceeds optimistically
@@ -932,7 +932,7 @@ reports a problem, is it **theirs to fix on their own machine**
 install** (instance — an install-time concern), or **an ongoing
 configuration matter that lives on** (config — a long-term concern)?
 Without that classification the adopter cannot tell who owns a fix or
-whether it will recur, and the same finding reads differently coming out
+whether it recurs, and the same finding reads differently coming out
 of init than out of doctor.
 
 The users are the adopter wiring flywheel into a repo — greenfield or
@@ -1071,7 +1071,7 @@ the prompts and messaging that consume it.
 `scripts/apply-rulesets.sh` is the one-shot setup step an adopter runs once
 per repository — `docs/adopter/setup.md` §5 documents it as a
 `curl … | bash -s -- …` one-liner — to apply Flywheel's branch- and
-tag-protection rulesets. To enumerate the managed branches it must read
+tag-protection rulesets. To enumerate the managed branches it needs to read
 `.flywheel.yml`, which it does with two small Python parses (a managed-branch
 list and a production-release-branch list) that depend on **PyYAML**.
 
@@ -1094,7 +1094,7 @@ the script about why.
 The users are two: the adopter onboarding a repository, for whom this is the
 first thing they run and therefore a first-impression adoption barrier; and the
 flywheel maintainer, who owns a script whose documented dependencies no longer
-match reality. The problem is mandatory (the script will not run without the
+match reality. The problem is mandatory (the script does not run without the
 parse), frequent on macOS (the default interpreter lacks the package), and
 self-inflicted by a stale assumption. It blocks no *existing* adopter mid-flow —
 it bites at setup time — but it taxes exactly the moment flywheel most wants to
@@ -1168,6 +1168,7 @@ feel frictionless.
   sequenced ahead of the functional defects in this document (e.g.
   §req:composite-action-path), but it is low-cost polish that removes a
   first-impression barrier.
+
 ## apply-rulesets.sh stdin invocation §req:apply-rulesets-stdin
 
 `docs/adopter/setup.md` §5 documents applying Flywheel's branch and tag
@@ -1496,6 +1497,7 @@ matches the language of the first.
   the adopter gets a green/red confirmation without a second command; (3) the
   non-interactive exit-code contract and strict-mode flag; (4) aligning the
   §0 manual walkthrough's completion check with the script's.
+
 ## doctor.sh repo-settings read §req:doctor-settings-read
 
 `scripts/doctor.sh` is the read-only validator an adopter runs to confirm a
@@ -1642,8 +1644,8 @@ present on a Dependabot-triggered run, so it arrives empty. Flywheel's
 conductor cannot mint an app token without it, so it skips the run entirely —
 and skipping means the required `flywheel/conventional-commit` check is never
 posted. The PR sits at `BLOCKED` with that check showing **Expected**
-indefinitely: it is waiting on a check that, by construction, will never
-arrive. A routine `build(deps)` bump is stranded with no obvious cause.
+indefinitely: it is waiting on a check that, by construction, never
+arrives. A routine `build(deps)` bump is stranded with no obvious cause.
 
 The skip notice makes this worse by being wrong. It says the PR "can still be
 merged manually" — language written for the era before the check was required.
@@ -1676,7 +1678,7 @@ This requirement covers the **Dependabot** trigger only. Fork PRs are the
 sibling instance of the same empty-key root cause and remain tracked separately
 by #162; a fix here shares a seam with that case and may relieve it, but
 fork-specific behaviour, documentation, and verification are out of scope and
-#162 stays open.
+issue #162 stays open.
 
 ## Dependabot PR deadlock success criteria §req:dependabot-deadlock-criteria
 

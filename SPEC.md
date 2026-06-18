@@ -1491,7 +1491,7 @@ workaround the reporter of #245 performed by hand: stand up a disposable
 PyYAML, use it, tear it down. §req:apply-rulesets-pyyaml
 §req:apply-rulesets-pyyaml-stories
 
-**Why keep PyYAML rather than drop it.** The two reads must stay byte-for-byte
+**Why keep PyYAML rather than drop it.** The two reads shall stay byte-for-byte
 equivalent to today's output — the same complete list of managed branch refs
 and the same `release: production` subset, feeding the same ruleset behavior.
 PyYAML is what computes that result now; continuing to parse `.flywheel.yml`
@@ -1576,6 +1576,7 @@ index but no persistent footprint and no new credential surface.
   assumption of local project tooling.
 
 §req:apply-rulesets-pyyaml-constraints §req:apply-rulesets-pyyaml-stories
+
 ## Stdin-safe ruleset application §spec:apply-rulesets-stdin
 
 *Status: complete*
@@ -1999,6 +2000,7 @@ reach one definition of finished. §req:setup-completion-summary-stories
   was rejected: it leaves the manual adopter without the confirmation the
   scripted adopter gets, and lets the two paths diverge on what "done"
   means.
+
 ## doctor repo-field reads are three-state §spec:doctor-settings-read
 
 *Status: complete*
@@ -2050,7 +2052,7 @@ under-scoped token is a condition on the adopter's own account, not a
 misconfiguration of their repo — the same shape as doctor's existing
 "could not list repo secrets — listing requires an admin PAT" finding,
 which is already `local-env`. It is `warn`, not `block`: doctor cannot
-confirm the setting either way, and a visibility limit must not halt a
+confirm the setting either way, and a visibility limit shall not halt a
 read-only validator. This reuses the bucket × severity vocabulary of
 §spec:preflight-classification (§req:preflight-detection) without inventing
 a new severity or bucket name. §req:doctor-settings-read-criteria
@@ -2471,7 +2473,7 @@ complete the suggested commands so a paste applies the fix.
 
 ## init.sh preset wording §spec:init-preset-wording
 
-*Status: not started*
+*Status: in progress*
 
 The preset descriptions `init.sh` shows an adopter — at the interactive
 menu, in the `--preset` validation/usage text, and in the adopter docs —
@@ -2534,7 +2536,7 @@ the least recoverable point at which to be unclear. A line that names a
 shape ("main-line + a customer-acme variant") tells an adopter what the
 preset *is* but not whether it is what they *want*; faced with a choice
 they cannot parse, they default to `minimal` and discover the gap later, or
-guess `multi-stream` and inherit a `customer-acme` branch they must rename
+guess `multi-stream` and inherit a `customer-acme` branch they have to rename
 or tear out. Describing each preset by what it is for lets the adopter
 decide correctly at the prompt. This is pure first-run friction, not a
 release-correctness fault — every preset still works once chosen — but it
