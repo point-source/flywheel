@@ -117,3 +117,61 @@ describe.skipIf(!ghAuthenticated())("init.sh deterministic file emission", () =>
     });
   }
 });
+
+// scripts/init.sh's end-of-run outcome summary (SPEC.md
+// §spec:setup-completion-summary). A clean greenfield run that defers App
+// credentials and rulesets via --skip-* must end with a per-step summary —
+// every scaffold step named with its real outcome — and a "complete" verdict,
+// because deliberate skips are deferred, not failed. The old static
+// "Next steps:" block must be gone.
+describe.skipIf(!ghAuthenticated())("init.sh completion summary", () => {
+  it("renders every step's outcome and a complete verdict on a clean --skip-* run", () => {
+    const work = mkdtempSync(join(tmpdir(), "flywheel-init-summary-"));
+    try {
+      execFileSync("git", ["init", "-q"], { cwd: work });
+      execFileSync(
+        "git",
+        ["remote", "add", "origin", "git@github.com:point-source/flywheel.git"],
+        { cwd: work },
+      );
+
+      // execFileSync returns stdout (stdio: "pipe"); init.sh renders the
+      // summary to stdout.
+      const stdout = execFileSync(
+        "bash",
+        [
+          initSh,
+          "--preset", "minimal",
+          "--version", TEST_VERSION,
+          "--skip-secrets",
+          "--skip-rulesets",
+        ],
+        { cwd: work, stdio: "pipe" },
+      ).toString();
+
+      // Every configured scaffold step is named and shown as configured.
+      expect(stdout).toContain(".flywheel.yml preset — configured");
+      expect(stdout).toContain("PR + push workflow files — configured");
+      expect(stdout).toContain(".gitattributes + merge drivers — configured");
+
+      // App credentials: deferred, [config] bucket, with its finishing command.
+      expect(stdout).toContain("App credentials — deferred");
+      expect(stdout).toContain("[config]");
+      expect(stdout).toContain("gh variable set FLYWHEEL_GH_APP_ID");
+
+      // Rulesets: deferred, [instance] bucket, with its finishing command.
+      expect(stdout).toContain("Branch + tag protection rulesets — deferred");
+      expect(stdout).toContain("[instance]");
+      expect(stdout).toContain("scripts/apply-rulesets.sh");
+
+      // Deliberate --skip-* deferrals keep the verdict "complete".
+      expect(stdout).toContain("complete");
+      expect(stdout).not.toContain("incomplete");
+
+      // The old static checklist is gone.
+      expect(stdout).not.toContain("Next steps:");
+    } finally {
+      rmSync(work, { recursive: true, force: true });
+    }
+  });
+});

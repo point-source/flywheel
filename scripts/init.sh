@@ -526,7 +526,6 @@ preflight_gate
 # commands never contain a literal tab. bucket/severity/command are filled in
 # by later workstreams and may be empty for now.
 # ---------------------------------------------------------------------------
-# shellcheck disable=SC2034  # read by a later workstream's summary renderer
 SUMMARY_RECORDS=()
 
 # record_outcome <label> <outcome> [bucket] [severity] [command]
@@ -534,6 +533,55 @@ SUMMARY_RECORDS=()
 record_outcome() {
   local label="$1" outcome="$2" bucket="${3:-}" severity="${4:-}" command="${5:-}"
   SUMMARY_RECORDS+=("${label}"$'\t'"${outcome}"$'\t'"${bucket}"$'\t'"${severity}"$'\t'"${command}")
+}
+
+# print_completion_summary — render the end-of-run outcome summary
+# (SPEC.md §spec:setup-completion-summary). Lists every scaffold step init can
+# touch with its real outcome, then closes with a complete/incomplete verdict.
+# Renders to stdout in the same bucket/severity vocabulary the pre-flight pass
+# and doctor.sh speak: `configured` steps print a green check; `deferred`/`failed`
+# steps reuse format_finding (so an item reads identically at completion as it
+# did at pre-flight) followed by the exact finishing command.
+print_completion_summary() {
+  local rec label outcome bucket severity command
+  local incomplete_count=0
+
+  printf '\nFlywheel scaffold written to %s.\n' "$REPO_ROOT"
+  printf 'Flywheel setup summary for %s:\n\n' "$REPO"
+
+  # bash 3.2-safe iteration: guard the empty case so `set -u` does not abort on
+  # an unset array expansion.
+  if [[ "${#SUMMARY_RECORDS[@]}" -gt 0 ]]; then
+    for rec in "${SUMMARY_RECORDS[@]}"; do
+      IFS=$'\t' read -r label outcome bucket severity command <<< "$rec"
+      case "$outcome" in
+        configured)
+          printf '  \033[32m✓\033[0m %s — configured\n' "$label"
+          ;;
+        *)
+          # deferred / failed / skipped: render in the pre-flight vocabulary, then
+          # surface the finishing command on the next indented line if present.
+          format_finding "$bucket" "$severity" "$label — $outcome"
+          [[ -n "$command" ]] && printf '      finish with: %s\n' "$command"
+          ;;
+      esac
+      # N (the count that drives "incomplete") = records whose outcome is `failed`
+      # OR whose severity is `block`. A deliberate skip (deferred warn/info) never
+      # counts. SPEC.md §spec:setup-completion-summary: "only a step that was meant
+      # to run and failed, or an unresolved block-severity finding, makes the
+      # verdict incomplete".
+      if [[ "$outcome" == "failed" || "$severity" == "block" ]]; then
+        incomplete_count=$((incomplete_count + 1))
+      fi
+    done
+  fi
+
+  if [[ "$incomplete_count" -gt 0 ]]; then
+    printf '\n\033[1;31mincomplete — %d item(s) remain\033[0m\n' "$incomplete_count"
+  else
+    printf '\n\033[1;32mcomplete\033[0m\n'
+    printf 'Next: commit + push the new files and open a smoke-test PR to verify the wiring.\n'
+  fi
 }
 
 # gh is confirmed installed + authenticated by the gate above. REPO/OWNER and
@@ -1010,15 +1058,20 @@ if [[ "$SKIP_RULESETS" -eq 0 && -x "${SCRIPT_DIR:-}/apply-rulesets.sh" ]]; then
     args=("$REPO")
     [[ -n "$REQUIRED_CHECKS" ]] && args+=(--required-checks "$REQUIRED_CHECKS")
     [[ -n "${CREATED_APP_ID:-}" ]] && args+=(--app-id "$CREATED_APP_ID")
-    # Record the apply outcome without altering the script's exit behavior: on a
-    # non-zero exit, record `failed` then re-exit with the same status (matching
-    # the pre-existing `set -e` abort); on success, record `configured`.
+    # Record the apply outcome. On a non-zero exit, record `failed`, then render
+    # the completion summary BEFORE re-exiting with the same status — the spec
+    # requires a failed step to appear in the summary with an "incomplete"
+    # verdict (SPEC.md §spec:setup-completion-summary), so the summary must print
+    # ahead of the early exit. The non-zero exit is preserved AFTER the summary
+    # so the genuine failure is not silently swallowed (the pre-existing `set -e`
+    # abort behavior is retained as the exit status).
     rulesets_status=0
     "$SCRIPT_DIR/apply-rulesets.sh" "${args[@]}" || rulesets_status=$?
     if [[ "$rulesets_status" -eq 0 ]]; then
       record_outcome "Branch + tag protection rulesets" configured
     else
       record_outcome "Branch + tag protection rulesets" failed instance block "scripts/apply-rulesets.sh $REPO${CREATED_APP_ID:+ --app-id $CREATED_APP_ID}"
+      print_completion_summary
       exit "$rulesets_status"
     fi
   else
@@ -1034,12 +1087,4 @@ else
   record_outcome "Branch + tag protection rulesets" deferred instance warn "scripts/apply-rulesets.sh $REPO${CREATED_APP_ID:+ --app-id $CREATED_APP_ID}"
 fi
 
-cat <<EOF
-
-Flywheel scaffold written to $REPO_ROOT.
-Next steps:
-  1. Review .flywheel.yml and adjust auto_merge lists for your team.
-  2. Commit + push the new files.
-  3. Open a 'chore: smoke test' PR to verify the wiring.
-  4. Run scripts/doctor.sh (or curl|bash equivalent) to validate the setup.
-EOF
+print_completion_summary
