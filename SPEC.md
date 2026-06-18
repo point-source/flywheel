@@ -1719,7 +1719,7 @@ class. §req:apply-rulesets-stdin-criteria
 
 ## Setup completion summary §spec:setup-completion-summary
 
-*Status: not started*
+*Status: complete*
 
 `init.sh` ends with an **outcome summary** that reports what the run
 actually did, not a fixed "Next steps" list. Today the run closes with a
