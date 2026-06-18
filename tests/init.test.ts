@@ -1,10 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { execFileSync, spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { stripAnsi } from "./helpers/ansi.js";
+import { writeDoctorStub } from "./helpers/doctorStub.js";
 
 // scripts/init.sh's deterministic file-emission slice: given a preset and
 // --version, it should write the matching template to the adopter repo
@@ -26,35 +27,6 @@ const TEST_VERSION = "v9.99.0-init-test";
 function ghAuthenticated(): boolean {
   const r = spawnSync("gh", ["auth", "status"], { stdio: "ignore" });
   return r.status === 0;
-}
-
-// Write an executable doctor stub into `dir` that ignores its args, prints the
-// given finding lines, and ends with the `DOCTOR_RESULT blocks=N warns=M`
-// trailer init.sh's run_setup_validation parses. It exits 1 iff blocks>0,
-// mirroring real doctor.sh's block-severity exit code. Driving validation
-// through this stub (FLYWHEEL_TEST_HOOKS=1 + FLYWHEEL_DOCTOR_OVERRIDE) keeps the
-// completion-summary tests hermetic — no live `gh` calls from doctor, no verdict
-// that depends on the parent repo's real state (§req:sandbox-ci-budget).
-function writeDoctorStub(
-  dir: string,
-  opts: { blocks: number; warns: number; findingLines?: string[] },
-): string {
-  const path = join(dir, "doctor-stub.sh");
-  const findings = (opts.findingLines ?? [])
-    .map((l) => `printf '%s\\n' ${JSON.stringify(l)}`)
-    .join("\n");
-  const body = [
-    "#!/usr/bin/env bash",
-    "set -euo pipefail",
-    "# Args (repo, --skip-credentials, --summary) are intentionally ignored.",
-    findings,
-    `printf 'DOCTOR_RESULT blocks=%s warns=%s\\n' ${opts.blocks} ${opts.warns}`,
-    `exit ${opts.blocks > 0 ? 1 : 0}`,
-    "",
-  ].join("\n");
-  writeFileSync(path, body);
-  chmodSync(path, 0o755);
-  return path;
 }
 
 interface Case {

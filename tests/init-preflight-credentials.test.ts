@@ -6,6 +6,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { stripAnsi } from "./helpers/ansi.js";
+import { writeDoctorStub } from "./helpers/doctorStub.js";
 
 // End-to-end exercise of scripts/init.sh's READ-ONLY pre-flight App-credentials
 // and GitHub-App detector (SPEC.md §spec:preflight-credentials-app). The detector
@@ -118,19 +119,10 @@ function runInit(opts: { args?: string[]; env?: Record<string, string> } = {}): 
   const gh = join(binDir, "gh");
   writeFileSync(gh, GH_STUB);
   chmodSync(gh, 0o755);
-  // Pin the end-of-run validation (§spec:setup-auto-validation) to a green
-  // doctor stub. This suite exercises the PRE-FLIGHT credentials gate, not
-  // end-of-run validation; without the stub the real doctor.sh runs against the
-  // PATH-shadowed gh (which only answers a few subcommands), reporting spurious
-  // block-severity findings that — under the end-of-run exit contract
-  // (§spec:setup-exit-contract) — would flip a clean/warn-only run's exit
-  // non-zero. The green stub keeps the gate's exit semantics observable.
-  const doctorStub = join(binDir, "doctor-stub.sh");
-  writeFileSync(
-    doctorStub,
-    "#!/usr/bin/env bash\nprintf 'DOCTOR_RESULT blocks=0 warns=0\\n'\nexit 0\n",
-  );
-  chmodSync(doctorStub, 0o755);
+  // Pin end-of-run validation to a green doctor stub so this PRE-FLIGHT suite
+  // isn't flipped non-zero by spurious doctor blocks under the exit contract
+  // (§spec:setup-exit-contract); see writeDoctorStub for the full rationale.
+  const doctorStub = writeDoctorStub(binDir, { blocks: 0, warns: 0 });
   execFileSync("git", ["init", "-q"], { cwd: work });
   const r = spawnSync("bash", [initSh, ...(opts.args ?? SCAFFOLD_ARGS)], {
     cwd: work,

@@ -13,6 +13,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { stripAnsi } from "./helpers/ansi.js";
+import { writeDoctorStub } from "./helpers/doctorStub.js";
 
 // End-to-end exercise of scripts/init.sh's READ-ONLY pre-flight pass + gate
 // (SPEC.md §spec:preflight-gate). The pass runs as the first substantive thing
@@ -81,19 +82,10 @@ function runInit(
   const defaultGhStub = `#!/usr/bin/env bash\nif [[ "$1" == "auth" && "$2" == "status" ]]; then echo "  - Token scopes: 'repo', 'read:org'"; exit 0; fi\nif [[ "$1" == "repo" && "$2" == "view" ]]; then echo "acme/widget"; exit 0; fi\necho "stub gh: unhandled: $*" >&2; exit 1\n`;
   writeFileSync(gh, opts.ghStub ?? defaultGhStub);
   chmodSync(gh, 0o755);
-  // Pin the end-of-run validation (§spec:setup-auto-validation) to a green
-  // doctor stub. This suite exercises the PRE-FLIGHT gate, not end-of-run
-  // validation; without the stub the real doctor.sh runs against the
-  // PATH-shadowed gh (which only answers `gh repo view`), reporting spurious
-  // block-severity findings that — under the end-of-run exit contract
-  // (§spec:setup-exit-contract) — would flip a clean/warn-only run's exit
-  // non-zero. The green stub keeps the gate's exit semantics observable.
-  const doctorStub = join(binDir, "doctor-stub.sh");
-  writeFileSync(
-    doctorStub,
-    "#!/usr/bin/env bash\nprintf 'DOCTOR_RESULT blocks=0 warns=0\\n'\nexit 0\n",
-  );
-  chmodSync(doctorStub, 0o755);
+  // Pin end-of-run validation to a green doctor stub so this PRE-FLIGHT suite
+  // isn't flipped non-zero by spurious doctor blocks under the exit contract
+  // (§spec:setup-exit-contract); see writeDoctorStub for the full rationale.
+  const doctorStub = writeDoctorStub(binDir, { blocks: 0, warns: 0 });
   execFileSync("git", ["init", "-q"], { cwd: work });
   const r = spawnSync("bash", [initSh, ...(opts.args ?? [])], {
     cwd: work,
