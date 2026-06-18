@@ -817,7 +817,10 @@ EOF
 
 if [[ "$SKIP_SECRETS" -eq 1 ]]; then
   echo "  --skip-secrets set; not touching App credentials."
-  record_outcome "App credentials" deferred config warn
+  # SCOPE is not yet resolved this early; default to the repo form (matches the
+  # non-interactive branch's fallback below).
+  app_creds_cmd="gh variable set FLYWHEEL_GH_APP_ID --body '<your-app-id>' --repo $REPO && gh secret set FLYWHEEL_GH_APP_PRIVATE_KEY < /path/to/private-key.pem --repo $REPO"
+  record_outcome "App credentials" deferred config warn "$app_creds_cmd"
 else
   # Reuse the pre-flight credential probe (detect_credentials) instead of
   # re-listing variables/secrets: the pass already ran the repo-then-org lookup
@@ -839,11 +842,13 @@ else
     if [[ "$SCOPE" == "org" ]]; then
       echo "    gh variable set FLYWHEEL_GH_APP_ID --body '<your-app-id>' --org $OWNER --visibility all"
       echo "    gh secret set FLYWHEEL_GH_APP_PRIVATE_KEY < /path/to/private-key.pem --org $OWNER --visibility all"
+      app_creds_cmd="gh variable set FLYWHEEL_GH_APP_ID --body '<your-app-id>' --org $OWNER --visibility all && gh secret set FLYWHEEL_GH_APP_PRIVATE_KEY < /path/to/private-key.pem --org $OWNER --visibility all"
     else
       echo "    gh variable set FLYWHEEL_GH_APP_ID --body '<your-app-id>' --repo $REPO"
       echo "    gh secret set FLYWHEEL_GH_APP_PRIVATE_KEY < /path/to/private-key.pem --repo $REPO"
+      app_creds_cmd="gh variable set FLYWHEEL_GH_APP_ID --body '<your-app-id>' --repo $REPO && gh secret set FLYWHEEL_GH_APP_PRIVATE_KEY < /path/to/private-key.pem --repo $REPO"
     fi
-    record_outcome "App credentials" deferred config warn
+    record_outcome "App credentials" deferred config warn "$app_creds_cmd"
   else
     # Resolve SCOPE before the App-source prompt so write_app_id_var /
     # write_app_key_secret know where to write. If the owner is a User
@@ -874,6 +879,15 @@ else
       fi
     fi
 
+    # Finishing command for any deferred/failed App-credential outcome below,
+    # in the same form the non-interactive branch prints, keyed off the now-
+    # resolved SCOPE so it's copy-pasteable.
+    if [[ "$SCOPE" == "org" ]]; then
+      app_creds_cmd="gh variable set FLYWHEEL_GH_APP_ID --body '<your-app-id>' --org $OWNER --visibility all && gh secret set FLYWHEEL_GH_APP_PRIVATE_KEY < /path/to/private-key.pem --org $OWNER --visibility all"
+    else
+      app_creds_cmd="gh variable set FLYWHEEL_GH_APP_ID --body '<your-app-id>' --repo $REPO && gh secret set FLYWHEEL_GH_APP_PRIVATE_KEY < /path/to/private-key.pem --repo $REPO"
+    fi
+
     echo
     echo "  Flywheel needs a GitHub App for installation tokens. Pick a setup path:"
     echo "    1) Create the App for me  — opens browser, ~30s round-trip"
@@ -892,7 +906,7 @@ else
           if prompt_existing_app_credentials; then
             record_outcome "App credentials" configured
           else
-            record_outcome "App credentials" failed config block
+            record_outcome "App credentials" failed config block "$app_creds_cmd"
           fi
         fi
         ;;
@@ -900,16 +914,16 @@ else
         if prompt_existing_app_credentials; then
           record_outcome "App credentials" configured
         else
-          record_outcome "App credentials" failed config block
+          record_outcome "App credentials" failed config block "$app_creds_cmd"
         fi
         ;;
       3)
         echo "  Skipped — set FLYWHEEL_GH_APP_ID variable and FLYWHEEL_GH_APP_PRIVATE_KEY secret before any Flywheel workflow runs."
-        record_outcome "App credentials" deferred config warn
+        record_outcome "App credentials" deferred config warn "$app_creds_cmd"
         ;;
       *)
         echo "  invalid selection — skipping."
-        record_outcome "App credentials" deferred config warn
+        record_outcome "App credentials" deferred config warn "$app_creds_cmd"
         ;;
     esac
   fi
@@ -1004,20 +1018,20 @@ if [[ "$SKIP_RULESETS" -eq 0 && -x "${SCRIPT_DIR:-}/apply-rulesets.sh" ]]; then
     if [[ "$rulesets_status" -eq 0 ]]; then
       record_outcome "Branch + tag protection rulesets" configured
     else
-      record_outcome "Branch + tag protection rulesets" failed instance block
+      record_outcome "Branch + tag protection rulesets" failed instance block "scripts/apply-rulesets.sh $REPO${CREATED_APP_ID:+ --app-id $CREATED_APP_ID}"
       exit "$rulesets_status"
     fi
   else
     echo "  skipped ruleset apply. Run later with: scripts/apply-rulesets.sh $REPO${CREATED_APP_ID:+ --app-id $CREATED_APP_ID}"
-    record_outcome "Branch + tag protection rulesets" deferred instance warn
+    record_outcome "Branch + tag protection rulesets" deferred instance warn "scripts/apply-rulesets.sh $REPO${CREATED_APP_ID:+ --app-id $CREATED_APP_ID}"
   fi
 elif [[ "$SKIP_RULESETS" -eq 0 ]]; then
   echo "  apply-rulesets.sh not adjacent to init.sh — fetch the repo or run:"
   echo "    curl -fsSL https://raw.githubusercontent.com/point-source/flywheel/main/scripts/apply-rulesets.sh | bash -s -- $REPO"
-  record_outcome "Branch + tag protection rulesets" deferred instance warn
+  record_outcome "Branch + tag protection rulesets" deferred instance warn "curl -fsSL https://raw.githubusercontent.com/point-source/flywheel/main/scripts/apply-rulesets.sh | bash -s -- $REPO"
 else
   # --skip-rulesets passed: no apply attempted, deferred to the adopter.
-  record_outcome "Branch + tag protection rulesets" deferred instance warn
+  record_outcome "Branch + tag protection rulesets" deferred instance warn "scripts/apply-rulesets.sh $REPO${CREATED_APP_ID:+ --app-id $CREATED_APP_ID}"
 fi
 
 cat <<EOF
