@@ -82,6 +82,13 @@ interface StubOpts {
   allowAutoMerge?: boolean;
   /** delete_branch_on_merge value in the repos/<REPO> settings response. */
   deleteBranchOnMerge?: boolean;
+  /** If true (default), the repos/<REPO> settings response includes the
+   * admin-gated `allow_auto_merge` + `delete_branch_on_merge` fields. If
+   * false, both are OMITTED from the (still-successful) response — modelling
+   * an under-scoped / App-installation token, where GitHub drops admin-gated
+   * fields from the repo object rather than failing the call. doctor must
+   * then read them as "could not verify" (absent), not "disabled" (false). */
+  adminFieldsVisible?: boolean;
   /** If true, `repos/<REPO>/contents/.flywheel.yml` returns the config;
    * if false, it 404s (→ instance block "no .flywheel.yml"). */
   hasConfig?: boolean;
@@ -107,6 +114,7 @@ function setupGhStub(opts: StubOpts = {}): { binDir: string; cleanup: () => void
   const {
     allowAutoMerge = true,
     deleteBranchOnMerge = true,
+    adminFieldsVisible = true,
     hasConfig = true,
     hasRulesets = true,
   } = opts;
@@ -115,11 +123,18 @@ function setupGhStub(opts: StubOpts = {}): { binDir: string; cleanup: () => void
 
   const b64 = (s: string): string => Buffer.from(s, "utf8").toString("base64");
 
-  const settingsJson = JSON.stringify({
-    allow_auto_merge: allowAutoMerge,
-    delete_branch_on_merge: deleteBranchOnMerge,
-    private: false,
-  });
+  // When adminFieldsVisible is false, omit the two admin-gated fields entirely
+  // (an under-scoped/App token sees a successful response without them), while
+  // keeping `private: false` so the object is still a valid non-empty repo.
+  const settingsJson = JSON.stringify(
+    adminFieldsVisible
+      ? {
+          allow_auto_merge: allowAutoMerge,
+          delete_branch_on_merge: deleteBranchOnMerge,
+          private: false,
+        }
+      : { private: false },
+  );
 
   // One branch ruleset (id 1) covering refs/heads/main with a pull_request
   // rule, plus one tag ruleset (id 2) covering refs/tags/v*.
@@ -256,6 +271,75 @@ describe.skipIf(!depsAvailable)("doctor.sh — pre-flight classification (end-to
       // …and it is a warn, not a block — it does not flip the exit code.
       expect(r.exitCode, `stderr:\n${r.stderr}\nstdout:\n${plain}`).toBe(0);
       expect(plain).toMatch(/OK with warnings/);
+    } finally {
+      stub.cleanup();
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("admin-gated settings absent → [local-env] could-not-verify, not [config] disabled (#239)", () => {
+    // Under-scoped / App token: the repos/<REPO> call succeeds but GitHub omits
+    // allow_auto_merge + delete_branch_on_merge. doctor must read these as
+    // "could not verify" (a local-env warn), NOT misreport them as "disabled".
+    const stub = setupGhStub({ adminFieldsVisible: false });
+    const cwd = mkdtempSync(join(tmpdir(), "flywheel-doctor-cwd-"));
+    try {
+      const r = runDoctor(stub.binDir, cwd);
+      const plain = stripAnsi(r.stdout);
+      // Both could-not-verify lines surface on [local-env] lines.
+      const autoMergeLine = plain
+        .split("\n")
+        .find((l) =>
+          l.includes("could not verify allow_auto_merge — reading it requires repo-admin"),
+        );
+      expect(
+        autoMergeLine,
+        "expected an allow_auto_merge could-not-verify finding",
+      ).toBeDefined();
+      expect(autoMergeLine).toContain("[local-env]");
+      const deleteBranchLine = plain
+        .split("\n")
+        .find((l) =>
+          l.includes(
+            "could not verify delete_branch_on_merge — reading it requires repo-admin",
+          ),
+        );
+      expect(
+        deleteBranchLine,
+        "expected a delete_branch_on_merge could-not-verify finding",
+      ).toBeDefined();
+      expect(deleteBranchLine).toContain("[local-env]");
+      // Absence must NOT be misreported as "disabled".
+      const disabledLine = plain
+        .split("\n")
+        .find((l) => l.includes("allow_auto_merge") && l.includes("disabled"));
+      expect(
+        disabledLine,
+        "absent allow_auto_merge must not be reported as disabled",
+      ).toBeUndefined();
+      // could-not-verify is a warn, not a block — exit stays 0.
+      expect(r.exitCode, `stderr:\n${r.stderr}\nstdout:\n${plain}`).toBe(0);
+    } finally {
+      stub.cleanup();
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("admin-gated settings present+true → ok 'allow_auto_merge enabled', no warn (#239)", () => {
+    // Clean default stub: the field is present and true, so doctor emits the
+    // ok "enabled" line — never a "disabled" or "could not verify" warn.
+    const stub = setupGhStub();
+    const cwd = mkdtempSync(join(tmpdir(), "flywheel-doctor-cwd-"));
+    try {
+      const r = runDoctor(stub.binDir, cwd);
+      const plain = stripAnsi(r.stdout);
+      const enabledLine = plain
+        .split("\n")
+        .find((l) => l.includes("allow_auto_merge enabled"));
+      expect(enabledLine, "expected an allow_auto_merge enabled finding").toBeDefined();
+      expect(plain).not.toContain("allow_auto_merge disabled");
+      expect(plain).not.toContain("could not verify allow_auto_merge");
+      expect(r.exitCode, `stderr:\n${r.stderr}\nstdout:\n${plain}`).toBe(0);
     } finally {
       stub.cleanup();
       rmSync(cwd, { recursive: true, force: true });
