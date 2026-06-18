@@ -1,3 +1,10 @@
+# [2.1.0-dev.4](https://github.com/point-source/flywheel/compare/v2.1.0-dev.3...v2.1.0-dev.4) (2026-06-18)
+
+
+### Features
+
+* break Dependabot PR deadlock on required conventional-commit check ([#254](https://github.com/point-source/flywheel/issues/254)) ([58f9cfc](https://github.com/point-source/flywheel/commit/58f9cfc505a3b8540340077bf68231c00ca34f2a)), closes [#243](https://github.com/point-source/flywheel/issues/243) [#243](https://github.com/point-source/flywheel/issues/243)
+
 # [2.1.0-dev.3](https://github.com/point-source/flywheel/compare/v2.1.0-dev.2...v2.1.0-dev.3) (2026-06-13)
 
 

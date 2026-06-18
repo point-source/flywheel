@@ -1847,3 +1847,201 @@ so doctor still exits 1 only when a `block`-severity finding is present and
   field-absence pattern can recur in any future repo-field read, so the
   three-state treatment is a property of every such check, not a patch to
   two lines.
+
+## Dependabot deadlock: degraded-mode required check §spec:dependabot-degraded-check
+
+*Status: complete*
+
+When the conductor runs on a `pull_request` event and the App private key
+arrives empty, it validates the PR title and posts the
+`flywheel/conventional-commit` check — `success` or `failure`, reflecting the
+title — and then exits without performing any App-privileged action. The
+empty-key path is no longer "do nothing and skip"; it is "post the required
+check, do nothing privileged, exit." This is what breaks the Dependabot
+deadlock with zero adopter configuration: a Dependabot PR in a repo that
+requires `flywheel/conventional-commit`, whose run cannot reach the App key,
+still gets a concluded check instead of a permanently `Expected` one, so a
+maintainer can merge it once it is green and reviewed. §req:dependabot-deadlock
+§req:dependabot-deadlock-criteria
+
+**Why posting the check is separable from granting auto-merge — and always
+safe.** Posting a check needs only the low-privilege `checks: write`
+capability the workflow's built-in `GITHUB_TOKEN` can carry; it needs none of
+the App's authority. Auto-merge, title rewrite, label application, and
+promotion-PR upserts need the App. Splitting the empty-key path so it posts the
+check from the built-in token but mints no App token and runs no App-only
+action satisfies *safe by default*: breaking the deadlock and granting
+auto-merge become separate outcomes with separate triggers — the former
+unconditional, the latter gated on the key being reachable
+(§spec:dependabot-full-conductor-optin). A secret-less run gains exactly one
+new ability: to post a pass/fail verdict on its own title — the very gate it
+needs to pass — with no path to merge, label, or rewrite. §req:dependabot-deadlock
+§req:dependabot-deadlock-constraints
+
+**Why this fixes Dependabot but not forks — the same seam, a different token
+reach.** Dependabot opens its PRs from branches in the *same* repository
+(`dependabot/…`), so the PR workflow can grant the built-in token
+`checks: write` and the degraded post succeeds. A fork PR's built-in token is
+forced read-only by GitHub regardless of the workflow's `permissions:` block,
+so the post cannot succeed there. The degraded path attempts the post on any
+empty-key run and degrades gracefully when the token is read-only — so it
+shares a seam with the fork case (#162) and may relieve it, but it makes no
+claim to fix forks, whose residual read-only-token problem stays #162's.
+§req:dependabot-deadlock §req:dependabot-deadlock-constraints
+
+**Verdict parity.** The degraded path runs the title through the same
+conventional-commit parser a first-party PR uses, so a Dependabot
+`build(deps): …` or `chore(deps): …` receives the identical pass/fail verdict
+it would receive on a first-party PR. The check is the same check
+(`flywheel/conventional-commit`); only the token that posts it and the absence
+of any follow-on action differ. §req:dependabot-deadlock-criteria
+
+**Statelessness preserved.** The degraded path posts one check and returns; it
+holds no state between runs and waits on nothing after posting.
+§req:dependabot-deadlock-constraints
+
+**Criteria.**
+
+- When the App private key is empty on a `pull_request` run, the conductor
+  shall post a `flywheel/conventional-commit` check whose conclusion reflects
+  the title, using the workflow's built-in token rather than an App token.
+- On that same empty-key run the conductor shall mint no App token and perform
+  no App-only action — no title rewrite, no `flywheel:auto-merge` /
+  `flywheel:needs-review` label, no native auto-merge, no promotion-PR upsert.
+  The PR is made mergeable, not merged.
+- The pass/fail verdict a Dependabot title receives shall equal the verdict the
+  same title would receive on a first-party PR.
+- The `apply-rulesets.sh` default that makes `flywheel/conventional-commit`
+  required is unchanged; the fix posts the check, it does not weaken the
+  default.
+- Where the built-in token is read-only (the fork case), the path shall fail to
+  post gracefully rather than error the run; fork-specific behaviour remains out
+  of scope (#162).
+
+**Scope and alternatives.**
+
+- *Relaxing the `apply-rulesets.sh` default so the check is no longer required*
+  is rejected: the defect is the unposted check, not the requirement. Weakening
+  the default would let malformed titles through and remove the guard for every
+  adopter, first-party PRs included.
+- *Posting the check via the App token through a fallback secret, or
+  auto-granting App powers to secret-less runs* is rejected: minting the App
+  token is exactly what is impossible without the key, and handing App authority
+  to an untrusted actor is the repository-compromise vector the requirement
+  forbids.
+- *Marking the check advisory (non-required) only for Dependabot* is rejected:
+  Flywheel cannot un-require a ruleset check per-PR without weakening the
+  ruleset for everyone, and it would re-open the malformed-title gap.
+
+## Dependabot full conductor opt-in §spec:dependabot-full-conductor-optin
+
+*Status: complete*
+
+When the adopter registers `FLYWHEEL_GH_APP_PRIVATE_KEY` in the repository's
+(or organisation's) **Dependabot** secret store — alongside the existing
+Actions secret — a Dependabot-triggered run resolves the key non-empty
+(GitHub sources `secrets.*` from the Dependabot store for Dependabot runs), the
+empty-key path is not taken, and the conductor runs the full flow exactly as it
+does for a first-party PR: the title is validated and rewritten if malformed,
+the `flywheel:auto-merge` or `flywheel:needs-review` label is applied, native
+auto-merge is enabled, and the PR auto-merges when its title type is in the
+target branch's `auto_merge` set and every other required gate (other checks,
+required reviews) is satisfied. A Dependabot PR is **never** auto-merged unless
+the key is reachable on that run. §req:dependabot-deadlock
+§req:dependabot-deadlock-criteria §req:dependabot-deadlock-stories
+
+**The Dependabot secret store *is* the actor allowlist.** Trust is
+GitHub-enforced, not Flywheel-configured. An external fork can never write to a
+repository's Dependabot secret store, so a fork can never present the key, so a
+fork can never auto-merge — the same gate, with no Flywheel-side list to
+maintain. Adding a second trust mechanism (an `allowed_bots:` config, a
+hardcoded `dependabot[bot]` allowlist) is rejected: it would duplicate GitHub's
+trust boundary and risk drifting out of sync with it. Registering the secret is
+a deliberate, GitHub-native act of trust; that act, and only that act, opts
+Dependabot into the full flow. §req:dependabot-deadlock-constraints
+
+**No new mechanism on this path — the opt-in is secret placement, not config.**
+Once `FLYWHEEL_GH_APP_PRIVATE_KEY` resolves from the Dependabot store, the
+existing conductor proceeds unchanged; nothing about the full flow is
+Dependabot-specific. Auto-merge fires through the existing `auto_merge`
+title-type matching with no special-casing of which dependency types merge — so
+a `build(deps)` / `chore(deps)` bump auto-merges only if the adopter lists that
+type in the branch's `auto_merge` set. The deliverable here is therefore the
+documentation of the opt-in and the explicit, tested invariant that no
+auto-merge occurs without the key — not a new code path for the keyed case.
+§req:dependabot-deadlock-criteria §req:dependabot-deadlock-constraints
+
+**Documented opt-in.** `docs/adopter/setup.md` documents registering the App
+private key in the Dependabot secret store, alongside the Actions secret, as
+the step that enables full Flywheel behaviour — auto-merge included — for
+Dependabot PRs, so adopters enable it from the docs rather than discovering the
+deadlock through a bug report. §req:dependabot-deadlock-criteria
+§req:dependabot-deadlock-stories
+
+**Supply-chain risk is the adopter's to accept, and off by default.**
+Auto-merging Dependabot means a dependency update that passes checks can merge
+without human review — the standard supply-chain tradeoff. Flywheel makes that
+lever explicit and double-gated: it activates only when the adopter both
+registers the Dependabot secret *and* lists the relevant types in a branch's
+`auto_merge` set. Flywheel does not decide dependency trust on the adopter's
+behalf. §req:dependabot-deadlock-constraints
+
+**Criteria.**
+
+- With the App key registered in the Dependabot secret store, a Dependabot PR
+  shall run the full conductor identically to a first-party PR: title validated
+  and rewritten if malformed, auto-merge/needs-review label applied, and
+  auto-merge enabled when the title type is in the target branch's `auto_merge`
+  set and all other required gates pass.
+- A Dependabot PR shall never auto-merge unless the App key is reachable on the
+  run; absent the Dependabot secret it receives the degraded check
+  (§spec:dependabot-degraded-check) and waits for a human.
+- Flywheel shall introduce no actor allowlist of its own; the Dependabot secret
+  store is the sole opt-in marking Dependabot trusted.
+- `docs/adopter/setup.md` shall document the Dependabot-secret registration as
+  the step that enables full Flywheel behaviour, including auto-merge, for
+  Dependabot PRs.
+
+**Scope and alternatives.**
+
+- *A Flywheel-side actor allowlist* is rejected: it duplicates the secret-store
+  trust boundary and can drift out of sync with GitHub's.
+- *Auto-merging Dependabot by default, without the secret opt-in* is rejected:
+  it would auto-merge on the secret-less path, violating "never auto-merge
+  without the key" and granting repository write to any secret-less actor.
+
+## Dependabot empty-key regression guard §spec:dependabot-deadlock-test
+
+*Status: complete*
+
+A fast unit/CI test reproduces the empty-key Dependabot path and asserts the
+two halves of the contract: a well-formed Dependabot title posts a `success`
+`flywheel/conventional-commit` check and a malformed one posts `failure`, while
+in both cases no `flywheel:auto-merge` / `flywheel:needs-review` label is
+applied and no other App-only action runs. The test draws on no rate-limited
+e2e sandbox installation. §req:dependabot-deadlock-criteria
+§req:dependabot-deadlock-constraints
+
+**Why a unit guard, not e2e.** The deadlock is silent, permanent, and
+near-universal for its trigger, so it needs a guard that runs on every PR — not
+one gated behind the rate-limited sandbox budget (§spec:sandbox-test-budget,
+§req:sandbox-ci-budget). A deterministic unit test on the conductor's degraded
+branch, mirroring §spec:apply-rulesets-stdin-test, catches a regression that
+re-strands Dependabot PRs at the cheapest possible cost; the e2e suite stays a
+backstop, not the first line of defence for this class of deadlock.
+§req:dependabot-deadlock-constraints
+
+**Criteria.**
+
+- A unit/CI test shall exercise the empty-key path and assert the required
+  check is posted with the correct conclusion for both a well-formed and a
+  malformed Dependabot title.
+- The same test shall assert no auto-merge/needs-review label is applied and no
+  App-only action runs on that path.
+- The test shall not consume the e2e sandbox installation.
+
+**Scope and alternatives.**
+
+- *Relying on the e2e sandbox to catch this regression* is rejected: it draws on
+  the rate-limited installation and is slow, whereas the degraded path is a pure
+  conductor branch a unit test can cover deterministically.

@@ -1,13 +1,10 @@
 import type { Branch, FlywheelConfig, IncrementType, ParsedTitle } from "./types.js";
+import { computeIncrement, detectBreakingInBody, parseTitle } from "./conventional.js";
 import {
-  computeIncrement,
-  detectBreakingInBody,
-  parseTitle,
-  VALID_TYPES,
-} from "./conventional.js";
-import {
+  buildTitleCheck,
   FLYWHEEL_AUTO_MERGE_LABEL,
   FLYWHEEL_NEEDS_REVIEW_LABEL,
+  FLYWHEEL_TITLE_CHECK,
   type Commit,
   type GitHubClient,
   type MergeMethod,
@@ -31,7 +28,10 @@ export type PrFlowOutcome =
       directMergeReason?: string;
     };
 
-export const FLYWHEEL_TITLE_CHECK = "flywheel/conventional-commit";
+// Re-exported from ./github.js (where the constant now lives, so the degraded
+// empty-key path can post the same check) — existing importers of
+// FLYWHEEL_TITLE_CHECK from this module keep resolving.
+export { FLYWHEEL_TITLE_CHECK };
 
 export interface PrFlowDeps {
   pr: PullRequest;
@@ -54,14 +54,7 @@ export async function runPrFlow({ pr, config, gh, log }: PrFlowDeps): Promise<Pr
 
   const parsed = parseTitle(pr.title);
   if (!parsed) {
-    const summary = `Title is not a valid conventional commit. Expected \`<type>[(<scope>)][!]: <description>\` where type is one of ${VALID_TYPES.join(", ")}.`;
-    await gh.createCheck({
-      name: FLYWHEEL_TITLE_CHECK,
-      conclusion: "failure",
-      summary,
-      details: `Got: ${pr.title}`,
-      headSha: pr.headSha,
-    });
+    await gh.createCheck(buildTitleCheck(pr.title, pr.headSha));
     log.warning(`PR #${pr.number}: invalid conventional commit title — failing check posted.`);
     return { kind: "parse-failed" };
   }
@@ -75,12 +68,7 @@ export async function runPrFlow({ pr, config, gh, log }: PrFlowDeps): Promise<Pr
   // can require it in branch protection without stalling the promotion, and
   // exit.
   if (isPromotionPR(config, pr.headRef, pr.baseRef, pr.title)) {
-    await gh.createCheck({
-      name: FLYWHEEL_TITLE_CHECK,
-      conclusion: "success",
-      summary: `Valid conventional commit title.`,
-      headSha: pr.headSha,
-    });
+    await gh.createCheck(buildTitleCheck(pr.title, pr.headSha));
     log.info(`PR #${pr.number}: promotion PR — owned by runPromotion, skipping pr-flow rewrite.`);
     return { kind: "promotion-pr" };
   }
@@ -95,12 +83,7 @@ export async function runPrFlow({ pr, config, gh, log }: PrFlowDeps): Promise<Pr
   // resolves the conflicts and uses GitHub's "Create a merge commit" option
   // to produce a true two-parent merge that preserves lineage.
   if (isBackMergePR(config, pr.headRef, pr.baseRef)) {
-    await gh.createCheck({
-      name: FLYWHEEL_TITLE_CHECK,
-      conclusion: "success",
-      summary: `Valid conventional commit title.`,
-      headSha: pr.headSha,
-    });
+    await gh.createCheck(buildTitleCheck(pr.title, pr.headSha));
     log.info(
       `PR #${pr.number}: back-merge fallback PR — needs human resolution + true merge, skipping pr-flow rewrite.`,
     );
@@ -189,12 +172,7 @@ export async function runPrFlow({ pr, config, gh, log }: PrFlowDeps): Promise<Pr
     // and bypasses required checks via the review ruleset's `bypass_actors`
     // entry (#147).
     const result = await gh.enableAutoMerge(pr.nodeId, method);
-    await gh.createCheck({
-      name: FLYWHEEL_TITLE_CHECK,
-      conclusion: "success",
-      summary: `Valid conventional commit title.`,
-      headSha: pr.headSha,
-    });
+    await gh.createCheck(buildTitleCheck(pr.title, pr.headSha));
     if (result.ok) {
       log.info(`PR #${pr.number}: auto-merge enabled (${method.toLowerCase()}).`);
       return {
@@ -276,12 +254,7 @@ export async function runPrFlow({ pr, config, gh, log }: PrFlowDeps): Promise<Pr
   // schedule on this path, so ordering relative to the check doesn't matter
   // here — but the check must still be posted so an adopter requiring it in
   // branch protection doesn't see a permanent "Expected — Waiting for status".
-  await gh.createCheck({
-    name: FLYWHEEL_TITLE_CHECK,
-    conclusion: "success",
-    summary: `Valid conventional commit title.`,
-    headSha: pr.headSha,
-  });
+  await gh.createCheck(buildTitleCheck(pr.title, pr.headSha));
   log.info(`PR #${pr.number}: ${matchKey} not in auto_merge list for ${branch.name} → needs review.`);
   return {
     kind: "labeled",
