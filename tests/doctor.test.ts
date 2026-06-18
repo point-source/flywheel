@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { spawnSync } from "node:child_process";
 import {
   chmodSync,
+  copyFileSync,
   existsSync,
   mkdtempSync,
   readdirSync,
@@ -113,6 +114,13 @@ interface StubOpts {
    * a false `fail instance` block (#239). The tag ruleset (id 2) stays readable,
    * so this path introduces no block-severity finding and the run exits 0. */
   branchPrUnreadable?: boolean;
+  /** If true, `gh repo view` prints `${REPO}` instead of nothing, so doctor's
+   * cwd-detection sets `cwd_repo == REPO` → `remote_only=0` (the LOCAL path).
+   * That unlocks doctor's local-only sections — notably the .gitattributes
+   * merge-driver scan (gated on `remote_only -eq 0 && -n "$yml"`). Default
+   * false keeps every existing test on the remote path (stub emits nothing),
+   * byte-for-byte unchanged. */
+  localRepo?: boolean;
 }
 
 /** Writes a `gh` stub into a temp bin dir and returns the dir + a cleanup.
@@ -137,6 +145,7 @@ function setupGhStub(opts: StubOpts = {}): { binDir: string; cleanup: () => void
     hasRulesets = true,
     rulesetDetailFails = false,
     branchPrUnreadable = false,
+    localRepo = false,
   } = opts;
 
   const binDir = mkdtempSync(join(tmpdir(), "flywheel-doctor-bin-"));
@@ -187,9 +196,16 @@ function setupGhStub(opts: StubOpts = {}): { binDir: string; cleanup: () => void
 sub="$1"
 
 if [[ "$sub" == "repo" ]]; then
-  # 'gh repo view …' — emit nothing so doctor falls back to its REPO arg
+  ${
+    localRepo
+      ? `# 'gh repo view …' — print REPO so cwd_repo == REPO → remote_only=0
+  # (LOCAL path), unlocking doctor's local-only .gitattributes scan.
+  printf '%s\\n' "${REPO}"
+  exit 0`
+      : `# 'gh repo view …' — emit nothing so doctor falls back to its REPO arg
   # and treats the run as remote_only.
-  exit 0
+  exit 0`
+  }
 fi
 
 if [[ "$sub" != "api" ]]; then
@@ -648,3 +664,185 @@ describe.skipIf(!depsAvailable)("doctor.sh — --summary mode (machine seam)", (
     }
   });
 });
+
+// Run a sibling-less COPY of doctor.sh, modelling the documented
+// `curl -fsSL …/doctor.sh | bash` path where nothing of flywheel is on disk.
+// We copy ONLY doctor.sh + the linter into a throwaway dir and deliberately
+// omit `lib/findings.sh`, so doctor's single invocation-mode seam reads
+// "no on-disk siblings" (doctor_local=0) and both its findings.sh fetch AND
+// its recommended-fix remediation take the network/curl path. FLYWHEEL_TEMPLATES_BASE
+// is pointed at the repo's own scripts/templates via a `file://` URL so the
+// findings.sh fetch resolves locally — the test never touches the network or
+// the rate-limited e2e sandbox (§spec:sandbox-test-budget, §req:sandbox-ci-budget),
+// and the same base flows into the emitted curl remediation URL, which lets us
+// assert the fix URL honors the configured ref rather than hard-coding `main`.
+function runDoctorNoSiblings(
+  binDir: string,
+  cwd: string,
+  templatesBase: string,
+): RunResult {
+  const isolated = mkdtempSync(join(tmpdir(), "flywheel-doctor-curl-"));
+  try {
+    const isolatedScript = join(isolated, "doctor.sh");
+    copyFileSync(scriptPath, isolatedScript);
+    // Copy the linter as a sibling so its own (separate) lookup resolves
+    // locally too — keeping the run fully offline — while findings.sh stays
+    // absent so the invocation-mode seam still reports the curl path.
+    copyFileSync(
+      join(repoRoot, "scripts/lint-flywheel-config.py"),
+      join(isolated, "lint-flywheel-config.py"),
+    );
+    const r = spawnSync("bash", [isolatedScript, "--skip-credentials", REPO], {
+      cwd,
+      env: {
+        ...process.env,
+        PATH: `${binDir}:${process.env.PATH ?? ""}`,
+        FLYWHEEL_TEMPLATES_BASE: templatesBase,
+      },
+      encoding: "utf8",
+    });
+    return { exitCode: r.status ?? -1, stdout: r.stdout ?? "", stderr: r.stderr ?? "" };
+  } finally {
+    rmSync(isolated, { recursive: true, force: true });
+  }
+}
+
+describe.skipIf(!depsAvailable)(
+  "doctor.sh — apply-rulesets remediation matches invocation mode (#238)",
+  () => {
+    // We use the "no branch rulesets defined" finding (hasRulesets:false) as a
+    // representative apply-rulesets remediation site; all six route through the
+    // same fix_script_cmd helper.
+    const findRulesetsLine = (plain: string): string | undefined =>
+      plain.split("\n").find((l) => l.includes("no branch rulesets defined"));
+
+    it("checkout mode (on-disk siblings) → local scripts/ path WITH --app-id, no curl", () => {
+      // runDoctor invokes the real scripts/doctor.sh, so lib/findings.sh is on
+      // disk → doctor_local=1 → remediation is the local path form.
+      const stub = setupGhStub({ hasRulesets: false });
+      const cwd = mkdtempSync(join(tmpdir(), "flywheel-doctor-cwd-"));
+      try {
+        const r = runDoctor(stub.binDir, cwd);
+        const plain = stripAnsi(r.stdout);
+        const line = findRulesetsLine(plain);
+        expect(line, `expected a no-rulesets finding\n${plain}`).toBeDefined();
+        // Local path, complete with the App-ID flag the script requires and the
+        // resolved repo target — not the bare path that omitted --app-id before.
+        expect(line).toContain("scripts/apply-rulesets.sh");
+        expect(line).toContain("--app-id <your-app-id>");
+        expect(line).toContain(REPO);
+        // A checkout user is NOT pushed to re-download a script they already have.
+        expect(line).not.toContain("curl");
+      } finally {
+        stub.cleanup();
+        rmSync(cwd, { recursive: true, force: true });
+      }
+    });
+
+    it("curl mode (no on-disk siblings) → network curl form honoring the configured ref, not main", () => {
+      const stub = setupGhStub({ hasRulesets: false });
+      const cwd = mkdtempSync(join(tmpdir(), "flywheel-doctor-cwd-"));
+      // file:// base = the repo's own templates dir; %/templates → …/scripts, so
+      // both findings.sh and the emitted apply-rulesets URL resolve against it.
+      const templatesBase = `file://${repoRoot}/scripts/templates`;
+      const expectedBase = `file://${repoRoot}/scripts`;
+      try {
+        const r = runDoctorNoSiblings(stub.binDir, cwd, templatesBase);
+        const plain = stripAnsi(r.stdout);
+        const line = findRulesetsLine(plain);
+        expect(
+          line,
+          `expected a no-rulesets finding under curl mode\nexit=${r.exitCode}\nstdout:\n${plain}\nstderr:\n${r.stderr}`,
+        ).toBeDefined();
+        // The paste-able network one-liner: fetch the named script and run it.
+        expect(line).toContain(`curl -fsSL ${expectedBase}/apply-rulesets.sh`);
+        expect(line).toContain("| bash -s --");
+        // Same arguments the local form carries.
+        expect(line).toContain("--app-id <your-app-id>");
+        expect(line).toContain(REPO);
+        // Version-consistency: the URL resolves against the configured base
+        // (here the file:// pin), NOT a hard-coded github.com/.../main path.
+        expect(line).not.toContain("raw.githubusercontent.com");
+        expect(line).not.toContain("/main/");
+      } finally {
+        stub.cleanup();
+        rmSync(cwd, { recursive: true, force: true });
+      }
+    });
+  },
+);
+
+describe.skipIf(!depsAvailable)(
+  "doctor.sh — .gitattributes/init.sh remediation matches invocation mode (#238)",
+  () => {
+    // The .gitattributes merge-driver scan is doctor's local-only section 8,
+    // gated on `remote_only -eq 0 && -n "$yml"`. To exercise it we drive doctor
+    // into LOCAL mode: localRepo:true makes `gh repo view` print REPO so
+    // cwd_repo == REPO → remote_only=0, and a local .flywheel.yml sets $yml.
+    // With .gitattributes ABSENT, the representative ".gitattributes missing"
+    // finding fires, routing through fix_script_cmd init.sh — the converted
+    // remediation site we want to pin across invocation modes.
+    const setupLocalCwd = (): string => {
+      const cwd = mkdtempSync(join(tmpdir(), "flywheel-doctor-cwd-"));
+      // $yml: a valid config on disk so doctor's local branch sets
+      // yml=".flywheel.yml" and section 8 runs (the config also validates
+      // against the linter, which is on disk / copied as a sibling).
+      writeFileSync(join(cwd, ".flywheel.yml"), SINGLE_BRANCH_YAML);
+      // Leave .gitattributes ABSENT so the missing-file finding fires.
+      return cwd;
+    };
+
+    const findGitattributesLine = (plain: string): string | undefined =>
+      plain.split("\n").find((l) => l.includes(".gitattributes missing"));
+
+    it("checkout mode (on-disk siblings) → local scripts/init.sh path, no curl", () => {
+      // runDoctor invokes the real scripts/doctor.sh, so lib/findings.sh is on
+      // disk → doctor_local=1 → remediation is the local path form.
+      const stub = setupGhStub({ localRepo: true });
+      const cwd = setupLocalCwd();
+      try {
+        const r = runDoctor(stub.binDir, cwd);
+        const plain = stripAnsi(r.stdout);
+        const line = findGitattributesLine(plain);
+        expect(
+          line,
+          `expected a .gitattributes-missing finding\nexit=${r.exitCode}\nstdout:\n${plain}\nstderr:\n${r.stderr}`,
+        ).toBeDefined();
+        // A checkout user re-runs the script they already have, by local path.
+        expect(line).toContain("scripts/init.sh");
+        expect(line).not.toContain("curl");
+      } finally {
+        stub.cleanup();
+        rmSync(cwd, { recursive: true, force: true });
+      }
+    });
+
+    it("curl mode (no on-disk siblings) → network curl form honoring the configured ref, not main", () => {
+      const stub = setupGhStub({ localRepo: true });
+      const cwd = setupLocalCwd();
+      // file:// base = the repo's own templates dir; %/templates → …/scripts, so
+      // both findings.sh and the emitted init.sh URL resolve against it.
+      const templatesBase = `file://${repoRoot}/scripts/templates`;
+      const expectedBase = `file://${repoRoot}/scripts`;
+      try {
+        const r = runDoctorNoSiblings(stub.binDir, cwd, templatesBase);
+        const plain = stripAnsi(r.stdout);
+        const line = findGitattributesLine(plain);
+        expect(
+          line,
+          `expected a .gitattributes-missing finding under curl mode\nexit=${r.exitCode}\nstdout:\n${plain}\nstderr:\n${r.stderr}`,
+        ).toBeDefined();
+        // The paste-able network one-liner: fetch the named script and run it.
+        expect(line).toContain(`curl -fsSL ${expectedBase}/init.sh`);
+        expect(line).toContain("| bash");
+        // Version-consistency: the URL resolves against the configured base
+        // (here the file:// pin), NOT a hard-coded github.com/.../main path.
+        expect(line).not.toContain("raw.githubusercontent.com");
+        expect(line).not.toContain("/main/");
+      } finally {
+        stub.cleanup();
+        rmSync(cwd, { recursive: true, force: true });
+      }
+    });
+  },
+);

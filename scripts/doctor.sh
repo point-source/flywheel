@@ -82,19 +82,56 @@ if [[ -n "$doctor_src" ]]; then
   doctor_dir="$(cd "$(dirname "$doctor_src")" 2>/dev/null && pwd || true)"
 fi
 
+# The single invocation-mode flag. Derived from the one seam — on-disk siblings
+# next to this script. Both dependency-loading (below) and remediation
+# references (fix_script_cmd) branch on this so there is exactly one notion of
+# how doctor was invoked.
+if [[ -n "$doctor_dir" && -f "$doctor_dir/lib/findings.sh" ]]; then
+  doctor_local=1   # checkout: on-disk siblings present
+else
+  doctor_local=0   # curl … | bash: fetch over the network
+fi
+
+# Resolve the flywheel scripts base URL for network fetches, honoring a pinned
+# consumer (FLYWHEEL_TEMPLATES_BASE) and defaulting to main. Returns …/scripts.
+flywheel_scripts_base() {
+  local tb="${FLYWHEEL_TEMPLATES_BASE:-https://raw.githubusercontent.com/point-source/flywheel/main/scripts/templates}"
+  printf '%s' "${tb%/templates}"
+}
+
+# Emit a remediation reference to a flywheel fix script in the same invocation
+# mode doctor was run from. $1 = script filename (e.g. apply-rulesets.sh);
+# remaining args = the arguments the script needs. Under a checkout (on-disk
+# siblings present) emits the local scripts/… path; under curl emits the
+# version-consistent network one-liner against the ref doctor was fetched from.
+fix_script_cmd() {
+  local script="$1"; shift
+  local args="$*"
+  # Emit the base command per mode, then append the args as a pure suffix only
+  # when present — so an arg-less call (e.g. init.sh) yields a clean
+  # `scripts/init.sh` / `curl … | bash` with no trailing space or dangling
+  # `-s --`, while arg-bearing callers (apply-rulesets.sh) are byte-identical.
+  if [[ "$doctor_local" == 1 ]]; then
+    printf 'scripts/%s' "$script"
+    [[ -n "$args" ]] && printf ' %s' "$args"
+  else
+    printf 'curl -fsSL %s/%s | bash' "$(flywheel_scripts_base)" "$script"
+    [[ -n "$args" ]] && printf ' -s -- %s' "$args"
+  fi
+}
+
 # Source the shared finding vocabulary (scripts/lib/findings.sh). Locate it next
 # to this script; otherwise fetch it. The fetch ref follows FLYWHEEL_TEMPLATES_BASE
 # when set (so a pinned consumer gets the matching findings.sh, not main),
 # defaulting to main otherwise. Without it doctor cannot emit vocabulary
 # findings — that is a hard error.
 # shellcheck source=scripts/lib/findings.sh
-if [[ -n "$doctor_dir" && -f "$doctor_dir/lib/findings.sh" ]]; then
+if [[ "$doctor_local" == 1 ]]; then
   # shellcheck disable=SC1091
   . "$doctor_dir/lib/findings.sh"
 else
-  findings_base="${FLYWHEEL_TEMPLATES_BASE:-https://raw.githubusercontent.com/point-source/flywheel/main/scripts/templates}"
   findings_tmp="$(mktemp)"
-  if curl -fsSL "${findings_base%/templates}/lib/findings.sh" -o "$findings_tmp" 2>/dev/null; then
+  if curl -fsSL "$(flywheel_scripts_base)/lib/findings.sh" -o "$findings_tmp" 2>/dev/null; then
     # shellcheck disable=SC1090
     . "$findings_tmp"
     rm -f "$findings_tmp"
@@ -357,13 +394,13 @@ bold "Repo settings"
 if repo_settings="$(gh api "repos/$REPO" 2>/dev/null)"; then
   case "$(classify_repo_field "$repo_settings" allow_auto_merge)" in
     true)  ok "allow_auto_merge enabled" ;;
-    false) warn config "allow_auto_merge disabled — flywheel cannot schedule native auto-merge, so eligible PRs fall back to a direct merge that bypasses required status checks (#147). Re-run scripts/apply-rulesets.sh $REPO, or enable in Settings → General → Pull Requests → Allow auto-merge" ;;
+    false) warn config "allow_auto_merge disabled — flywheel cannot schedule native auto-merge, so eligible PRs fall back to a direct merge that bypasses required status checks (#147). Re-run $(fix_script_cmd apply-rulesets.sh "$REPO --app-id <your-app-id>"), or enable in Settings → General → Pull Requests → Allow auto-merge" ;;
     absent) warn local-env "could not verify allow_auto_merge — reading it requires repo-admin" ;;
     *) warn local-env "could not verify allow_auto_merge — unexpected response from repos/$REPO" ;;
   esac
   case "$(classify_repo_field "$repo_settings" delete_branch_on_merge)" in
     true)  ok "delete_branch_on_merge enabled (head branches auto-delete on merge)" ;;
-    false) warn config "delete_branch_on_merge disabled — apply-rulesets.sh enables this alongside the deletion-blocking ruleset (re-run scripts/apply-rulesets.sh $REPO), or flip manually in Settings → General → 'Automatically delete head branches'" ;;
+    false) warn config "delete_branch_on_merge disabled — apply-rulesets.sh enables this alongside the deletion-blocking ruleset (re-run $(fix_script_cmd apply-rulesets.sh "$REPO --app-id <your-app-id>")), or flip manually in Settings → General → 'Automatically delete head branches'" ;;
     absent) warn local-env "could not verify delete_branch_on_merge — reading it requires repo-admin" ;;
     *) warn local-env "could not verify delete_branch_on_merge — unexpected response from repos/$REPO" ;;
   esac
@@ -428,7 +465,7 @@ bold "Branch protection rulesets"
 if rulesets_json="$(gh api "repos/$REPO/rulesets" 2>/dev/null)"; then
   branch_ruleset_ids="$(echo "$rulesets_json" | jq -r '.[] | select(.target == "branch") | .id')"
   if [[ -z "$branch_ruleset_ids" ]]; then
-    fail instance "no branch rulesets defined — run scripts/apply-rulesets.sh $REPO"
+    fail instance "no branch rulesets defined — run $(fix_script_cmd apply-rulesets.sh "$REPO --app-id <your-app-id>")"
   else
     # Parallel arrays (bash 3.2 compatible — no associative arrays).
     ruleset_includes=()
@@ -470,7 +507,7 @@ if rulesets_json="$(gh api "repos/$REPO/rulesets" 2>/dev/null)"; then
         if [[ $ruleset_detail_unreadable -eq 1 ]]; then
           warn local-env "could not verify branch '$b' is covered by a ruleset — reading rulesets requires repo-admin"
         else
-          fail instance "no ruleset covers branch '$b' — run scripts/apply-rulesets.sh $REPO"
+          fail instance "no ruleset covers branch '$b' — run $(fix_script_cmd apply-rulesets.sh "$REPO --app-id <your-app-id>")"
         fi
       elif [[ $pr_required -eq 0 ]]; then
         if [[ $ruleset_detail_unreadable -eq 1 ]]; then
@@ -480,7 +517,7 @@ if rulesets_json="$(gh api "repos/$REPO/rulesets" 2>/dev/null)"; then
           # rather than a false block (#239).
           warn local-env "could not verify branch '$b' pull_request requirement — reading rulesets requires repo-admin"
         else
-          fail instance "branch '$b' is in a ruleset but no pull_request requirement — re-run scripts/apply-rulesets.sh"
+          fail instance "branch '$b' is in a ruleset but no pull_request requirement — re-run $(fix_script_cmd apply-rulesets.sh "$REPO --app-id <your-app-id>")"
         fi
       else
         ok "branch '$b' protected, requires PRs"
@@ -513,7 +550,7 @@ if [[ -n "${rulesets_json:-}" ]]; then
   elif [[ $tag_ruleset_detail_unreadable -eq 1 ]]; then
     warn local-env "could not verify 'refs/tags/v*' protection — reading rulesets requires repo-admin"
   else
-    fail instance "no ruleset protects 'refs/tags/v*' — run scripts/apply-rulesets.sh $REPO"
+    fail instance "no ruleset protects 'refs/tags/v*' — run $(fix_script_cmd apply-rulesets.sh "$REPO --app-id <your-app-id>")"
   fi
 fi
 
@@ -525,14 +562,14 @@ fi
 if [[ $remote_only -eq 0 && -n "$yml" ]]; then
   bold ".gitattributes merge drivers"
   if [[ ! -f .gitattributes ]]; then
-    warn instance ".gitattributes missing — local merges of CHANGELOG.md will fall back to text merge (CI is unaffected). Re-run scripts/init.sh to write the managed block."
+    warn instance ".gitattributes missing — local merges of CHANGELOG.md will fall back to text merge (CI is unaffected). Re-run $(fix_script_cmd init.sh) to write the managed block."
   elif ! grep -qF "flywheel: managed merge-driver attributes" .gitattributes; then
-    warn instance ".gitattributes lacks Flywheel-managed block — re-run scripts/init.sh to add it."
+    warn instance ".gitattributes lacks Flywheel-managed block — re-run $(fix_script_cmd init.sh) to add it."
   else
     if grep -qE '^CHANGELOG\.md[[:space:]]+merge=flywheel-changelog' .gitattributes; then
       ok "CHANGELOG.md mapped to flywheel-changelog driver"
     else
-      warn instance ".gitattributes block exists but missing 'CHANGELOG.md merge=flywheel-changelog' — re-run scripts/init.sh."
+      warn instance ".gitattributes block exists but missing 'CHANGELOG.md merge=flywheel-changelog' — re-run $(fix_script_cmd init.sh)."
     fi
     # Each release_files entry in .flywheel.yml should also have a
     # merge=flywheel-release-file mapping. Init writes a comment template
