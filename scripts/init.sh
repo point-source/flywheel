@@ -16,6 +16,11 @@
 #   --skip-secrets        do not prompt for App credentials (FLYWHEEL_GH_APP_ID
 #                         variable, FLYWHEEL_GH_APP_PRIVATE_KEY secret)
 #   --skip-rulesets       do not offer to run apply-rulesets.sh
+#   --strict              treat warn-severity outstanding items (e.g. deferred
+#                         App credentials from --skip-secrets, deferred rulesets
+#                         from --skip-rulesets, doctor warnings) as a non-zero
+#                         exit. Off by default: deliberate skips/warns keep the
+#                         run green; opt in when every warn must be resolved.
 #   --required-checks "quality,build"   passed through to apply-rulesets.sh
 #   --force               overwrite flywheel-pr.yml / flywheel-push.yml even
 #                         if they already exist (for upgrading workflows
@@ -47,6 +52,10 @@ set -euo pipefail
 PRESET=""
 SKIP_SECRETS=0
 SKIP_RULESETS=0
+# Opt-in: when 1, warn-severity outstanding items (deferred App creds / rulesets,
+# doctor warnings) elevate the end-of-run exit to non-zero. Default 0 keeps
+# deliberate skips green (SPEC.md §spec:setup-exit-contract, strict-mode criterion).
+STRICT=0
 REQUIRED_CHECKS=""
 FORCE=0
 FLYWHEEL_VERSION=""
@@ -69,6 +78,7 @@ while [[ $# -gt 0 ]]; do
     --preset) PRESET="$2"; shift 2 ;;
     --skip-secrets) SKIP_SECRETS=1; shift ;;
     --skip-rulesets) SKIP_RULESETS=1; shift ;;
+    --strict) STRICT=1; shift ;;
     --required-checks) REQUIRED_CHECKS="$2"; shift 2 ;;
     --force) FORCE=1; shift ;;
     --override-release-conflict) PREFLIGHT_OVERRIDE_release_conflict=1; shift ;;
@@ -80,7 +90,7 @@ while [[ $# -gt 0 ]]; do
       esac
       shift 2
       ;;
-    -h|--help) sed -n '2,43p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,48p' "$0"; exit 0 ;;
     *) echo "Unknown argument: $1" >&2; exit 2 ;;
   esac
 done
@@ -530,6 +540,13 @@ preflight_gate
 # ---------------------------------------------------------------------------
 SUMMARY_RECORDS=()
 
+# FORCED_EXIT_STATUS — forced-status seam for print_completion_summary's
+# end-of-run exit (SPEC.md §spec:setup-exit-contract). Empty means derive the
+# exit code from the completion verdict; a non-empty value (set by a caller with
+# a genuine non-zero status to preserve, e.g. the rulesets-apply failure path)
+# is honored verbatim after the summary prints.
+FORCED_EXIT_STATUS=""
+
 # record_outcome <label> <outcome> [bucket] [severity] [command]
 #   outcome is one of: configured | skipped | failed | deferred
 record_outcome() {
@@ -554,8 +571,13 @@ record_outcome() {
 # re-listing them needs an admin-PAT round trip the run already covered. doctor
 # stays read-only. Run identically in interactive and non-interactive runs.
 VALIDATION_BLOCKS=0
+# Doctor's warn count from the same `DOCTOR_RESULT ... warns=M` trailer. Folded
+# into print_completion_summary's warn_count so --strict elevates doctor warnings
+# too (SPEC.md §spec:setup-exit-contract).
+VALIDATION_WARNS=0
 run_setup_validation() {
   VALIDATION_BLOCKS=0
+  VALIDATION_WARNS=0
   printf '\nSetup validation:\n'
 
   # Resolve the doctor command, mirroring the findings.sh source/curl fallback.
@@ -604,6 +626,7 @@ run_setup_validation() {
   [[ -n "$body" ]] && printf '%s\n' "$body"
 
   VALIDATION_BLOCKS="$blocks"
+  VALIDATION_WARNS="$warns"
 }
 
 # print_completion_summary — render the end-of-run outcome summary
@@ -616,26 +639,56 @@ run_setup_validation() {
 print_completion_summary() {
   local rec label outcome bucket severity command
   local incomplete_count=0
+  # warn-severity outstanding items (deliberate deferrals: App creds, rulesets).
+  # These never touch incomplete_count / the verdict — they drive the --strict
+  # exit only (SPEC.md §spec:setup-exit-contract, strict-mode criterion).
+  local warn_count=0
 
-  printf '\nFlywheel scaffold written to %s.\n' "$REPO_ROOT"
-  printf 'Flywheel setup summary for %s:\n\n' "$REPO"
+  # One summary, two audiences (SPEC.md §spec:setup-exit-contract). Interactive
+  # runs (a real TTY) get today's human prose; non-interactive runs (curl|bash,
+  # CI, no TTY — INTERACTIVE -eq 0) get a stable, greppable rendering of the SAME
+  # data. The machine path emits one `FLYWHEEL_SETUP_STEP` line per scaffold step
+  # and a final `FLYWHEEL_SETUP_RESULT` trailer; the verdict token is derived from
+  # the very same incomplete_count that drives the exit code below, so the two can
+  # never disagree. This is NOT a divorced second output mode — it is the interactive
+  # summary rendered for the reader at hand.
+  local machine=0
+  [[ "$INTERACTIVE" -eq 0 ]] && machine=1
+
+  if [[ "$machine" -eq 0 ]]; then
+    printf '\nFlywheel scaffold written to %s.\n' "$REPO_ROOT"
+    printf 'Flywheel setup summary for %s:\n\n' "$REPO"
+  fi
 
   # bash 3.2-safe iteration: guard the empty case so `set -u` does not abort on
   # an unset array expansion.
   if [[ "${#SUMMARY_RECORDS[@]}" -gt 0 ]]; then
     for rec in "${SUMMARY_RECORDS[@]}"; do
       IFS=$'\t' read -r label outcome bucket severity command <<< "$rec"
-      case "$outcome" in
-        configured)
-          printf '  \033[32m✓\033[0m %s — configured\n' "$label"
-          ;;
-        *)
-          # deferred / failed / skipped: render in the pre-flight vocabulary, then
-          # surface the finishing command on the next indented line if present.
-          format_finding "$bucket" "$severity" "$label — $outcome"
-          [[ -n "$command" ]] && printf '      finish with: %s\n' "$command"
-          ;;
-      esac
+      if [[ "$machine" -eq 1 ]]; then
+        # Machine rendering: one logical line per step. The free-text fields
+        # (command, label) come LAST and are double-quoted so a value containing
+        # spaces/quotes stays parseable on a single line; embedded double quotes
+        # are backslash-escaped. bucket/severity/command stay present with empty
+        # values for `configured` steps so the column set is stable to grep/awk.
+        local q_command q_label
+        q_command="${command//\"/\\\"}"
+        q_label="${label//\"/\\\"}"
+        printf 'FLYWHEEL_SETUP_STEP outcome=%s bucket=%s severity=%s command="%s" label="%s"\n' \
+          "$outcome" "$bucket" "$severity" "$q_command" "$q_label"
+      else
+        case "$outcome" in
+          configured)
+            printf '  \033[32m✓\033[0m %s — configured\n' "$label"
+            ;;
+          *)
+            # deferred / failed / skipped: render in the pre-flight vocabulary, then
+            # surface the finishing command on the next indented line if present.
+            format_finding "$bucket" "$severity" "$label — $outcome"
+            [[ -n "$command" ]] && printf '      finish with: %s\n' "$command"
+            ;;
+        esac
+      fi
       # N (the count that drives "incomplete") = records whose outcome is `failed`
       # OR whose severity is `block`. A deliberate skip (deferred warn/info) never
       # counts. SPEC.md §spec:setup-completion-summary: "only a step that was meant
@@ -643,6 +696,11 @@ print_completion_summary() {
       # verdict incomplete".
       if [[ "$outcome" == "failed" || "$severity" == "block" ]]; then
         incomplete_count=$((incomplete_count + 1))
+      fi
+      # warn-severity items (deliberate deferrals like skipped App creds /
+      # rulesets) are tallied separately — they fail the run only under --strict.
+      if [[ "$severity" == "warn" ]]; then
+        warn_count=$((warn_count + 1))
       fi
     done
   fi
@@ -654,12 +712,53 @@ print_completion_summary() {
   # doctor's block count; add that to incomplete_count.
   run_setup_validation
   incomplete_count=$((incomplete_count + VALIDATION_BLOCKS))
+  # Doctor's warn count folds into warn_count so --strict elevates doctor
+  # warnings the same as deferred scaffold items; never into incomplete_count.
+  warn_count=$((warn_count + VALIDATION_WARNS))
 
-  if [[ "$incomplete_count" -gt 0 ]]; then
+  if [[ "$machine" -eq 1 ]]; then
+    # Machine trailer: the verdict token is derived from the SAME incomplete_count
+    # that selects the exit code below, so verdict=incomplete <=> non-zero exit.
+    local verdict="complete"
+    [[ "$incomplete_count" -gt 0 ]] && verdict="incomplete"
+    # verdict=/items= keep their block/failure-driven meaning (warns never move
+    # them). strict=/warn_items= are additive: they expose the strict-mode inputs
+    # so a consumer can see why the exit code went non-zero under --strict.
+    printf 'FLYWHEEL_SETUP_RESULT verdict=%s items=%d strict=%d warn_items=%d\n' \
+      "$verdict" "$incomplete_count" "$STRICT" "$warn_count"
+  elif [[ "$incomplete_count" -gt 0 ]]; then
     printf '\n\033[1;31mincomplete — %d item(s) remain\033[0m\n' "$incomplete_count"
   else
     printf '\n\033[1;32mcomplete\033[0m\n'
     printf 'Next: commit + push the new files and open a smoke-test PR to verify the wiring.\n'
+  fi
+
+  # End-of-run exit contract (SPEC.md §spec:setup-exit-contract). The function
+  # owns the script's terminal exit so the code reflects the verdict on the same
+  # severity vocabulary the summary speaks. This is strictly ADDITIVE beneath the
+  # pre-flight gate's block-exit (§spec:preflight-gate), which fires earlier.
+  #
+  # FORCED_EXIT_STATUS seam: a caller that already has a genuine non-zero status
+  # to preserve (e.g. the rulesets-apply failure path) sets it before calling, so
+  # the exact apply-rulesets status survives rather than being flattened to 1.
+  # Empty (the normal case) means derive the code from the verdict: non-zero when
+  # any step failed or an unresolved block remains, zero otherwise (deliberate
+  # deferrals are complete). Explicit `exit` keeps the EXIT-trap status gotcha at
+  # bay — the genuine terminal action, never a fall-through.
+  #
+  # Strict-mode criterion: --strict (STRICT=1) elevates warn-severity outstanding
+  # items (warn_count) to a non-zero exit. Without it, warns never fail the run —
+  # most adopters deliberately defer steps, so the default stays green and strict
+  # is opt-in (SPEC.md §spec:setup-exit-contract, "Why a strict mode…"). This
+  # affects the EXIT CODE only; the verdict text/machine fields are unchanged.
+  if [[ -n "$FORCED_EXIT_STATUS" ]]; then
+    exit "$FORCED_EXIT_STATUS"
+  elif [[ "$incomplete_count" -gt 0 ]]; then
+    exit 1
+  elif [[ "$STRICT" -eq 1 && "$warn_count" -gt 0 ]]; then
+    exit 1
+  else
+    exit 0
   fi
 }
 
@@ -1146,20 +1245,21 @@ if [[ "$SKIP_RULESETS" -eq 0 && -x "${SCRIPT_DIR:-}/apply-rulesets.sh" ]]; then
     [[ -n "$REQUIRED_CHECKS" ]] && args+=(--required-checks "$REQUIRED_CHECKS")
     [[ -n "${CREATED_APP_ID:-}" ]] && args+=(--app-id "$CREATED_APP_ID")
     # Record the apply outcome. On a non-zero exit, record `failed`, then render
-    # the completion summary BEFORE re-exiting with the same status — the spec
-    # requires a failed step to appear in the summary with an "incomplete"
-    # verdict (SPEC.md §spec:setup-completion-summary), so the summary must print
-    # ahead of the early exit. The non-zero exit is preserved AFTER the summary
-    # so the genuine failure is not silently swallowed (the pre-existing `set -e`
-    # abort behavior is retained as the exit status).
+    # the completion summary BEFORE exiting — the spec requires a failed step to
+    # appear in the summary with an "incomplete" verdict
+    # (SPEC.md §spec:setup-completion-summary), so the summary must print ahead of
+    # the exit. The genuine apply-rulesets status is preserved via the
+    # FORCED_EXIT_STATUS seam: print_completion_summary now owns the terminal exit
+    # (§spec:setup-exit-contract) and honors the forced status after printing, so
+    # the failure is not silently swallowed.
     rulesets_status=0
     "$SCRIPT_DIR/apply-rulesets.sh" "${args[@]}" || rulesets_status=$?
     if [[ "$rulesets_status" -eq 0 ]]; then
       record_outcome "Branch + tag protection rulesets" configured
     else
       record_outcome "Branch + tag protection rulesets" failed instance block "scripts/apply-rulesets.sh $REPO${CREATED_APP_ID:+ --app-id $CREATED_APP_ID}"
+      FORCED_EXIT_STATUS="$rulesets_status"
       print_completion_summary
-      exit "$rulesets_status"
     fi
   else
     # One string for both the printed hint and the recorded finishing command,

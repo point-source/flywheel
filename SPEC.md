@@ -1883,7 +1883,7 @@ say otherwise. §req:setup-completion-summary-criteria
 
 ## Non-interactive completion contract §spec:setup-exit-contract
 
-*Status: not started*
+*Status: complete*
 
 In a **non-interactive run** (`curl … | bash`, CI) the completion summary
 is **machine-readable** and `init.sh` **exits with a meaningful code**: zero

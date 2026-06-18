@@ -6,6 +6,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { stripAnsi } from "./helpers/ansi.js";
+import { writeDoctorStub } from "./helpers/doctorStub.js";
 
 // End-to-end exercise of scripts/init.sh's READ-ONLY pre-flight App-credentials
 // and GitHub-App detector (SPEC.md §spec:preflight-credentials-app). The detector
@@ -118,6 +119,10 @@ function runInit(opts: { args?: string[]; env?: Record<string, string> } = {}): 
   const gh = join(binDir, "gh");
   writeFileSync(gh, GH_STUB);
   chmodSync(gh, 0o755);
+  // Pin end-of-run validation to a green doctor stub so this PRE-FLIGHT suite
+  // isn't flipped non-zero by spurious doctor blocks under the exit contract
+  // (§spec:setup-exit-contract); see writeDoctorStub for the full rationale.
+  const doctorStub = writeDoctorStub(binDir, { blocks: 0, warns: 0 });
   execFileSync("git", ["init", "-q"], { cwd: work });
   const r = spawnSync("bash", [initSh, ...(opts.args ?? SCAFFOLD_ARGS)], {
     cwd: work,
@@ -127,6 +132,8 @@ function runInit(opts: { args?: string[]; env?: Record<string, string> } = {}): 
     env: {
       ...process.env,
       PATH: `${binDir}:${process.env.PATH}`,
+      FLYWHEEL_TEST_HOOKS: "1",
+      FLYWHEEL_DOCTOR_OVERRIDE: doctorStub,
       ...(opts.env ?? {}),
     },
   });

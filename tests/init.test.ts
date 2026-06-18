@@ -1,10 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { execFileSync, spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { stripAnsi } from "./helpers/ansi.js";
+import { writeDoctorStub } from "./helpers/doctorStub.js";
 
 // scripts/init.sh's deterministic file-emission slice: given a preset and
 // --version, it should write the matching template to the adopter repo
@@ -26,35 +27,6 @@ const TEST_VERSION = "v9.99.0-init-test";
 function ghAuthenticated(): boolean {
   const r = spawnSync("gh", ["auth", "status"], { stdio: "ignore" });
   return r.status === 0;
-}
-
-// Write an executable doctor stub into `dir` that ignores its args, prints the
-// given finding lines, and ends with the `DOCTOR_RESULT blocks=N warns=M`
-// trailer init.sh's run_setup_validation parses. It exits 1 iff blocks>0,
-// mirroring real doctor.sh's block-severity exit code. Driving validation
-// through this stub (FLYWHEEL_TEST_HOOKS=1 + FLYWHEEL_DOCTOR_OVERRIDE) keeps the
-// completion-summary tests hermetic — no live `gh` calls from doctor, no verdict
-// that depends on the parent repo's real state (§req:sandbox-ci-budget).
-function writeDoctorStub(
-  dir: string,
-  opts: { blocks: number; warns: number; findingLines?: string[] },
-): string {
-  const path = join(dir, "doctor-stub.sh");
-  const findings = (opts.findingLines ?? [])
-    .map((l) => `printf '%s\\n' ${JSON.stringify(l)}`)
-    .join("\n");
-  const body = [
-    "#!/usr/bin/env bash",
-    "set -euo pipefail",
-    "# Args (repo, --skip-credentials, --summary) are intentionally ignored.",
-    findings,
-    `printf 'DOCTOR_RESULT blocks=%s warns=%s\\n' ${opts.blocks} ${opts.warns}`,
-    `exit ${opts.blocks > 0 ? 1 : 0}`,
-    "",
-  ].join("\n");
-  writeFileSync(path, body);
-  chmodSync(path, 0o755);
-  return path;
 }
 
 interface Case {
@@ -84,6 +56,15 @@ describe.skipIf(!ghAuthenticated())("init.sh deterministic file emission", () =>
           { cwd: work },
         );
 
+        // Pin end-of-run validation to a green doctor stub via the
+        // FLYWHEEL_TEST_HOOKS seam. Without it the real doctor inspects the
+        // live remote and reports genuine block-severity findings for preset
+        // branches that don't exist there (e.g. `staging`), which — under the
+        // end-of-run exit contract (§spec:setup-exit-contract) — makes init
+        // exit non-zero and execFileSync throw before any file assertion runs.
+        // This suite tests file EMISSION, not validation, so the green stub
+        // keeps it hermetic and focused.
+        const doctorStub = writeDoctorStub(work, { blocks: 0, warns: 0 });
         execFileSync(
           "bash",
           [
@@ -93,7 +74,15 @@ describe.skipIf(!ghAuthenticated())("init.sh deterministic file emission", () =>
             "--skip-secrets",
             "--skip-rulesets",
           ],
-          { cwd: work, stdio: "pipe" },
+          {
+            cwd: work,
+            stdio: "pipe",
+            env: {
+              ...process.env,
+              FLYWHEEL_TEST_HOOKS: "1",
+              FLYWHEEL_DOCTOR_OVERRIDE: doctorStub,
+            },
+          },
         );
 
         const writtenFw = readFileSync(join(work, ".flywheel.yml"), "utf8");
@@ -170,11 +159,26 @@ describe.skipIf(!ghAuthenticated())("init.sh completion summary", () => {
     return work;
   }
 
-  // Run init non-interactively (execFileSync gives it no TTY, mirroring how the
-  // other suites drive it) against `work`, with the doctor validation pinned to
-  // `doctorStub` via the FLYWHEEL_TEST_HOOKS seam. Returns stdout.
-  function runInit(work: string, doctorStub: string): string {
-    return execFileSync(
+  // Run init against `work`, with the doctor validation pinned to `doctorStub`
+  // via the FLYWHEEL_TEST_HOOKS seam. Returns stdout AND the exit status —
+  // spawnSync (unlike execFileSync) does not throw on a non-zero exit, so the
+  // end-of-run exit contract (§spec:setup-exit-contract) is assertable.
+  //
+  // `interactive` selects which completion rendering to exercise
+  // (§spec:setup-exit-contract — one summary, two audiences). spawnSync gives the
+  // child no TTY, so by default INTERACTIVE=0 and init emits the MACHINE summary
+  // (FLYWHEEL_SETUP_STEP / FLYWHEEL_SETUP_RESULT lines). Passing interactive:true
+  // forces the human-prose path via FLYWHEEL_ASSUME_INTERACTIVE (gated on
+  // FLYWHEEL_TEST_HOOKS). That hook does NOT open fd 3, so it is only safe on a
+  // path that exits before any `read -u 3`; the `--preset minimal --skip-secrets
+  // --skip-rulesets` scaffold run below reaches the summary without one (verified
+  // not to hang), so forcing it here is safe.
+  function runInit(
+    work: string,
+    doctorStub: string,
+    opts: { interactive?: boolean; extraArgs?: string[] } = {},
+  ): { stdout: string; status: number | null } {
+    const r = spawnSync(
       "bash",
       [
         initSh,
@@ -182,6 +186,7 @@ describe.skipIf(!ghAuthenticated())("init.sh completion summary", () => {
         "--version", TEST_VERSION,
         "--skip-secrets",
         "--skip-rulesets",
+        ...(opts.extraArgs ?? []),
       ],
       {
         cwd: work,
@@ -190,9 +195,11 @@ describe.skipIf(!ghAuthenticated())("init.sh completion summary", () => {
           ...process.env,
           FLYWHEEL_TEST_HOOKS: "1",
           FLYWHEEL_DOCTOR_OVERRIDE: doctorStub,
+          ...(opts.interactive ? { FLYWHEEL_ASSUME_INTERACTIVE: "1" } : {}),
         },
       },
-    ).toString();
+    );
+    return { stdout: (r.stdout ?? "").toString(), status: r.status };
   }
 
   // These cases shell out to a live `gh repo view` to resolve $REPO (init still
@@ -207,8 +214,16 @@ describe.skipIf(!ghAuthenticated())("init.sh completion summary", () => {
       // Green doctor stub: validation passes, so the verdict is driven purely by
       // the scaffold steps' (deferred) outcomes — hermetic, no live gh calls.
       const stub = writeDoctorStub(work, { blocks: 0, warns: 0 });
-      const stdout = runInit(work, stub);
+      // Human-prose rendering (§spec:setup-exit-contract — one summary, two
+      // audiences): force the interactive path so the glyph/verdict prose is
+      // emitted rather than the machine summary asserted by the dedicated case.
+      const { stdout, status } = runInit(work, stub, { interactive: true });
       const plain = stripAnsi(stdout);
+
+      // §spec:setup-exit-contract: a clean run that deferred steps by choice
+      // (--skip-* → deferred/warn) plus a green doctor exits 0 — deliberate
+      // deferrals are complete, not failures.
+      expect(status).toBe(0);
 
       // Every configured scaffold step is named and shown as configured.
       expect(plain).toContain(".flywheel.yml preset — configured");
@@ -254,7 +269,9 @@ describe.skipIf(!ghAuthenticated())("init.sh completion summary", () => {
     const work = makeAdopterRepo("validate-noninteractive");
     try {
       const stub = writeDoctorStub(work, { blocks: 0, warns: 0 });
-      const plain = stripAnsi(runInit(work, stub));
+      const { stdout, status } = runInit(work, stub, { interactive: true });
+      const plain = stripAnsi(stdout);
+      expect(status).toBe(0);
       expect(plain).toContain("Setup validation:");
       expect(plain).toContain("Setup validation: all checks pass");
       expect(plain).toContain("complete");
@@ -275,7 +292,12 @@ describe.skipIf(!ghAuthenticated())("init.sh completion summary", () => {
         warns: 0,
         findingLines: [blockLine],
       });
-      const plain = stripAnsi(runInit(work, stub));
+      const { stdout, status } = runInit(work, stub, { interactive: true });
+      const plain = stripAnsi(stdout);
+
+      // §spec:setup-exit-contract: an unresolved block-severity finding (here a
+      // doctor block) makes the run exit non-zero — concretely status 1.
+      expect(status).toBe(1);
 
       // Doctor's finding line is rendered verbatim in the summary.
       expect(plain).toContain("[instance] no ruleset covers branch 'main'");
@@ -283,6 +305,135 @@ describe.skipIf(!ghAuthenticated())("init.sh completion summary", () => {
       expect(plain).toContain("incomplete");
       // The green all-clear headline must NOT appear.
       expect(plain).not.toContain("Setup validation: all checks pass");
+    } finally {
+      rmSync(work, { recursive: true, force: true });
+    }
+  }, INIT_E2E_TIMEOUT);
+
+  it("emits a machine-readable summary in a non-interactive run (§spec:setup-exit-contract)", () => {
+    // The default spawnSync run has no TTY → INTERACTIVE=0 → init renders the
+    // MACHINE summary instead of human prose. An unattended pipeline greps these
+    // stable lines to tell a finished setup from a half-finished one.
+    const work = makeAdopterRepo("machine-summary");
+    try {
+      const stub = writeDoctorStub(work, { blocks: 0, warns: 0 });
+      const { stdout, status } = runInit(work, stub);
+      const plain = stripAnsi(stdout);
+
+      // The verdict trailer is greppable and, on a clean --skip-* run + green
+      // doctor, reports complete with zero outstanding items.
+      expect(plain).toMatch(/FLYWHEEL_SETUP_RESULT verdict=complete items=0/);
+
+      // At least one per-step machine line is emitted, in the documented shape:
+      // outcome/bucket/severity columns followed by quoted command/label.
+      expect(plain).toMatch(/FLYWHEEL_SETUP_STEP /);
+      expect(plain).toMatch(
+        /FLYWHEEL_SETUP_STEP outcome=configured bucket= severity= command="" label="\.flywheel\.yml preset"/,
+      );
+      // A deferred step carries its actionable finishing command on the same
+      // logical line — quoted so the embedded spaces/quotes stay parseable.
+      expect(plain).toMatch(
+        /FLYWHEEL_SETUP_STEP outcome=deferred bucket=config severity=warn command="gh variable set FLYWHEEL_GH_APP_ID[^\n]*" label="App credentials"/,
+      );
+
+      // §spec:setup-exit-contract: the verdict token agrees with the exit code —
+      // verdict=complete ⇒ status 0. The two are derived from one incomplete_count.
+      expect(status).toBe(0);
+
+      // The interactive-only prose verdict must NOT leak into machine output.
+      expect(plain).not.toContain("Flywheel setup summary for");
+      expect(plain).not.toMatch(/^complete$/m);
+    } finally {
+      rmSync(work, { recursive: true, force: true });
+    }
+  }, INIT_E2E_TIMEOUT);
+
+  it("does NOT emit machine lines in an interactive run (prose only)", () => {
+    // The companion to the machine-summary case: forcing the interactive path
+    // (FLYWHEEL_ASSUME_INTERACTIVE, gated on FLYWHEEL_TEST_HOOKS) must keep the
+    // FLYWHEEL_SETUP_* machine lines suppressed — they are gated on INTERACTIVE.
+    const work = makeAdopterRepo("interactive-no-machine");
+    try {
+      const stub = writeDoctorStub(work, { blocks: 0, warns: 0 });
+      const { stdout, status } = runInit(work, stub, { interactive: true });
+      const plain = stripAnsi(stdout);
+      expect(status).toBe(0);
+      expect(plain).not.toContain("FLYWHEEL_SETUP_RESULT");
+      expect(plain).not.toContain("FLYWHEEL_SETUP_STEP");
+      // Prose verdict is present instead.
+      expect(plain).toContain("complete");
+    } finally {
+      rmSync(work, { recursive: true, force: true });
+    }
+  }, INIT_E2E_TIMEOUT);
+
+  it("--strict elevates warn-severity deferrals to a non-zero exit (§spec:setup-exit-contract)", () => {
+    // --skip-secrets defers App creds (config/warn) and --skip-rulesets defers
+    // rulesets (instance/warn): two warn-severity outstanding items. With a green
+    // doctor (blocks=0, warns=0) there is no block/failure, so incomplete_count is
+    // 0 — but --strict elevates the warn_count>0 to a non-zero exit.
+    const work = makeAdopterRepo("strict-warns");
+    try {
+      const stub = writeDoctorStub(work, { blocks: 0, warns: 0 });
+      const { stdout, status } = runInit(work, stub, { extraArgs: ["--strict"] });
+      const plain = stripAnsi(stdout);
+
+      // Strict elevates the deliberate deferrals to a non-zero (status 1) exit.
+      expect(status).toBe(1);
+
+      // Strict affects the EXIT CODE only: the verdict still reads complete and
+      // items stays 0 (warns never count toward incomplete_count). The additive
+      // strict=/warn_items= fields expose why the exit went non-zero.
+      expect(plain).toMatch(
+        /FLYWHEEL_SETUP_RESULT verdict=complete items=0 strict=1 warn_items=2/,
+      );
+    } finally {
+      rmSync(work, { recursive: true, force: true });
+    }
+  }, INIT_E2E_TIMEOUT);
+
+  it("the SAME run without --strict stays green (default exits 0)", () => {
+    // Regression guard: the identical --skip-secrets/--skip-rulesets run + green
+    // doctor must exit 0 without --strict. Deliberate deferrals keep the default
+    // green; strict is strictly opt-in (SPEC.md §spec:setup-exit-contract).
+    const work = makeAdopterRepo("strict-default-green");
+    try {
+      const stub = writeDoctorStub(work, { blocks: 0, warns: 0 });
+      const { stdout, status } = runInit(work, stub);
+      const plain = stripAnsi(stdout);
+
+      expect(status).toBe(0);
+      // verdict=complete with items=0, and strict=0 records the default mode.
+      expect(plain).toMatch(
+        /FLYWHEEL_SETUP_RESULT verdict=complete items=0 strict=0 warn_items=2/,
+      );
+    } finally {
+      rmSync(work, { recursive: true, force: true });
+    }
+  }, INIT_E2E_TIMEOUT);
+
+  it("--strict folds doctor warns into the warn_count exit decision", () => {
+    // A doctor stub reporting warns=2, blocks=0 contributes to warn_count (on top
+    // of the two scaffold deferrals). With no blocks/failures incomplete_count is
+    // 0, so without --strict this would exit 0 — but --strict elevates the warns.
+    const work = makeAdopterRepo("strict-doctor-warns");
+    try {
+      const warnLine = "  ! [instance] ruleset is missing a required check";
+      const stub = writeDoctorStub(work, {
+        blocks: 0,
+        warns: 2,
+        findingLines: [warnLine],
+      });
+      const { stdout, status } = runInit(work, stub, { extraArgs: ["--strict"] });
+      const plain = stripAnsi(stdout);
+
+      // Doctor warns fold into warn_count, so --strict exits non-zero (status 1).
+      expect(status).toBe(1);
+      // verdict stays complete (warns/doctor-warns don't move it); warn_items
+      // tallies the two scaffold deferrals plus doctor's two warns.
+      expect(plain).toMatch(
+        /FLYWHEEL_SETUP_RESULT verdict=complete items=0 strict=1 warn_items=4/,
+      );
     } finally {
       rmSync(work, { recursive: true, force: true });
     }
