@@ -35,9 +35,9 @@ import { createFakeGh, makeCommit, silentLogger } from "./helpers/fakeGh.js";
 
 const HEAD_SHA = "abcdef01234567890abcdef01234567890abcdef";
 
-// develop auto-merges `build`/`chore` (the Dependabot title types) but NOT
-// `feat`; main auto-merges nothing. This lets us drive both an eligible and an
-// ineligible Dependabot bump off the same config.
+// develop auto-merges the Dependabot title types (`build`/`chore`); main
+// auto-merges nothing. Retargeting the same bump from develop to main is how
+// these tests drive an eligible vs. an ineligible Dependabot PR off one config.
 const config: FlywheelConfig = {
   streams: [
     {
@@ -47,13 +47,19 @@ const config: FlywheelConfig = {
           name: "develop",
           release: "prerelease",
           suffix: "dev",
-          auto_merge: ["build", "chore", "fix", "feat"],
+          auto_merge: ["build", "chore"],
         },
         { name: "main", release: "production", auto_merge: [] },
       ],
     },
   ],
 };
+
+// Most HALF-2 tests load a single head commit whose message matches the PR
+// title; this builds a fake gh client pre-loaded with that commit.
+function ghWithCommit(message: string) {
+  return createFakeGh({ pullCommits: { 7: [makeCommit("aaaaaaa", message)] } });
+}
 
 function makePR(overrides: Partial<PullRequest> = {}): PullRequest {
   return {
@@ -121,11 +127,7 @@ describe("Dependabot never auto-merges without the App key (§spec:dependabot-fu
     // tests drive runPrFlow with real Dependabot titles to prove that.
 
     it("(a) auto-merges a build(deps) bump whose type IS in the target auto_merge set — same as a first-party PR", async () => {
-      const gh = createFakeGh({
-        pullCommits: {
-          7: [makeCommit("aaaaaaa", "build(deps): bump actions/checkout from 4 to 5")],
-        },
-      });
+      const gh = ghWithCommit("build(deps): bump actions/checkout from 4 to 5");
       const { log } = silentLogger();
 
       const outcome = await runPrFlow({ pr: makePR(), config, gh, log });
@@ -144,11 +146,7 @@ describe("Dependabot never auto-merges without the App key (§spec:dependabot-fu
       // type is no longer eligible, so the conductor applies needs-review and
       // schedules no auto-merge — exactly as it would for a first-party
       // `build:` PR into main.
-      const gh = createFakeGh({
-        pullCommits: {
-          7: [makeCommit("aaaaaaa", "build(deps): bump actions/checkout from 4 to 5")],
-        },
-      });
+      const gh = ghWithCommit("build(deps): bump actions/checkout from 4 to 5");
       const { log } = silentLogger();
 
       const outcome = await runPrFlow({
@@ -173,12 +171,8 @@ describe("Dependabot never auto-merges without the App key (§spec:dependabot-fu
       // one first-party (feature branch, hand-written body) — yield the same
       // auto-merge decision. The conductor cannot tell them apart, and doesn't
       // try.
-      const dependabotGh = createFakeGh({
-        pullCommits: { 7: [makeCommit("aaaaaaa", "chore(deps): bump lodash from 4.17.20 to 4.17.21")] },
-      });
-      const firstPartyGh = createFakeGh({
-        pullCommits: { 7: [makeCommit("aaaaaaa", "chore(deps): bump lodash from 4.17.20 to 4.17.21")] },
-      });
+      const dependabotGh = ghWithCommit("chore(deps): bump lodash from 4.17.20 to 4.17.21");
+      const firstPartyGh = ghWithCommit("chore(deps): bump lodash from 4.17.20 to 4.17.21");
       const { log } = silentLogger();
 
       const dependabotOutcome = await runPrFlow({
