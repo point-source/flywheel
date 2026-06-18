@@ -16,6 +16,11 @@
 #   --skip-secrets        do not prompt for App credentials (FLYWHEEL_GH_APP_ID
 #                         variable, FLYWHEEL_GH_APP_PRIVATE_KEY secret)
 #   --skip-rulesets       do not offer to run apply-rulesets.sh
+#   --strict              treat warn-severity outstanding items (e.g. deferred
+#                         App credentials from --skip-secrets, deferred rulesets
+#                         from --skip-rulesets, doctor warnings) as a non-zero
+#                         exit. Off by default: deliberate skips/warns keep the
+#                         run green; opt in when every warn must be resolved.
 #   --required-checks "quality,build"   passed through to apply-rulesets.sh
 #   --force               overwrite flywheel-pr.yml / flywheel-push.yml even
 #                         if they already exist (for upgrading workflows
@@ -47,6 +52,10 @@ set -euo pipefail
 PRESET=""
 SKIP_SECRETS=0
 SKIP_RULESETS=0
+# Opt-in: when 1, warn-severity outstanding items (deferred App creds / rulesets,
+# doctor warnings) elevate the end-of-run exit to non-zero. Default 0 keeps
+# deliberate skips green (SPEC.md §spec:setup-exit-contract, strict-mode criterion).
+STRICT=0
 REQUIRED_CHECKS=""
 FORCE=0
 FLYWHEEL_VERSION=""
@@ -69,6 +78,7 @@ while [[ $# -gt 0 ]]; do
     --preset) PRESET="$2"; shift 2 ;;
     --skip-secrets) SKIP_SECRETS=1; shift ;;
     --skip-rulesets) SKIP_RULESETS=1; shift ;;
+    --strict) STRICT=1; shift ;;
     --required-checks) REQUIRED_CHECKS="$2"; shift 2 ;;
     --force) FORCE=1; shift ;;
     --override-release-conflict) PREFLIGHT_OVERRIDE_release_conflict=1; shift ;;
@@ -80,7 +90,7 @@ while [[ $# -gt 0 ]]; do
       esac
       shift 2
       ;;
-    -h|--help) sed -n '2,43p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,48p' "$0"; exit 0 ;;
     *) echo "Unknown argument: $1" >&2; exit 2 ;;
   esac
 done
@@ -116,10 +126,12 @@ elif { exec 3</dev/tty; } 2>/dev/null; then
   INTERACTIVE=1
 fi
 
-# Test hooks (FLYWHEEL_ASSUME_INTERACTIVE, FLYWHEEL_PREFLIGHT_INJECT) are INERT
-# unless FLYWHEEL_TEST_HOOKS=1 is explicitly set. This keeps them usable by the
-# test suite while ensuring a stray or maliciously-injected env var in a real
-# adopter run can neither fake a TTY nor forge/suppress pre-flight findings.
+# Test hooks (FLYWHEEL_ASSUME_INTERACTIVE, FLYWHEEL_PREFLIGHT_INJECT,
+# FLYWHEEL_DOCTOR_OVERRIDE) are INERT unless FLYWHEEL_TEST_HOOKS=1 is explicitly
+# set. This keeps them usable by the test suite while ensuring a stray or
+# maliciously-injected env var in a real adopter run can neither fake a TTY,
+# forge/suppress pre-flight findings, nor redirect the end-of-run validation to
+# an attacker-controlled script.
 FLYWHEEL_TEST_HOOKS="${FLYWHEEL_TEST_HOOKS:-0}"
 
 # Test-only override: force the interactive gate branch without a real TTY. Used
@@ -516,6 +528,240 @@ preflight_gate() {
 preflight_run
 preflight_gate
 
+# ---------------------------------------------------------------------------
+# Setup outcome tracking (SPEC.md §spec:setup-completion-summary).
+#
+# Every scaffold step records its real outcome here. The end-of-run summary
+# (added by a later workstream) renders these records and derives the
+# complete/incomplete verdict. bash 3.2-safe: a single indexed array of
+# tab-separated records (label, outcome, bucket, severity, command); finishing
+# commands never contain a literal tab. bucket/severity/command are filled in
+# by later workstreams and may be empty for now.
+# ---------------------------------------------------------------------------
+SUMMARY_RECORDS=()
+
+# FORCED_EXIT_STATUS — forced-status seam for print_completion_summary's
+# end-of-run exit (SPEC.md §spec:setup-exit-contract). Empty means derive the
+# exit code from the completion verdict; a non-empty value (set by a caller with
+# a genuine non-zero status to preserve, e.g. the rulesets-apply failure path)
+# is honored verbatim after the summary prints.
+FORCED_EXIT_STATUS=""
+
+# record_outcome <label> <outcome> [bucket] [severity] [command]
+#   outcome is one of: configured | skipped | failed | deferred
+record_outcome() {
+  local label="$1" outcome="$2" bucket="${3:-}" severity="${4:-}" command="${5:-}"
+  SUMMARY_RECORDS+=("${label}"$'\t'"${outcome}"$'\t'"${bucket}"$'\t'"${severity}"$'\t'"${command}")
+}
+
+# run_setup_validation — auto-run doctor.sh at the end of the run and fold its
+# findings into the completion summary (SPEC.md §spec:setup-auto-validation), so
+# init and doctor produce ONE picture of "done". Read-only; never aborts the run.
+#
+# Prints a "Setup validation" heading, the canonical green/red headline (via
+# findings_validation_headline), and doctor's finding lines verbatim (already in
+# the shared [bucket]/glyph vocabulary); on an all-green run there are no finding
+# lines, only the headline. The block count doctor reported is returned to the
+# caller via the global VALIDATION_BLOCKS, keeping this function's stdout purely
+# the human-readable section (no machine marker for the caller to re-parse).
+#
+# Budget rationale (§req:sandbox-ci-budget): $REPO is already resolved, so doctor
+# skips its own `gh repo view`; --skip-credentials is passed because init's
+# pre-flight already probed the FLYWHEEL_GH_APP_ID/PRIVATE_KEY credentials, and
+# re-listing them needs an admin-PAT round trip the run already covered. doctor
+# stays read-only. Run identically in interactive and non-interactive runs.
+VALIDATION_BLOCKS=0
+# Doctor's warn count from the same `DOCTOR_RESULT ... warns=M` trailer. Folded
+# into print_completion_summary's warn_count so --strict elevates doctor warnings
+# too (SPEC.md §spec:setup-exit-contract).
+VALIDATION_WARNS=0
+run_setup_validation() {
+  VALIDATION_BLOCKS=0
+  VALIDATION_WARNS=0
+  printf '\nSetup validation:\n'
+
+  # Resolve the doctor command, mirroring the findings.sh source/curl fallback.
+  local doctor_cmd="" doctor_tmp=""
+  # Test seam: FLYWHEEL_DOCTOR_OVERRIDE points the validation at a stub doctor.
+  # INERT in real runs (gated on FLYWHEEL_TEST_HOOKS), exactly like
+  # FLYWHEEL_ASSUME_INTERACTIVE / FLYWHEEL_PREFLIGHT_INJECT.
+  if [[ "$FLYWHEEL_TEST_HOOKS" == "1" && -n "${FLYWHEEL_DOCTOR_OVERRIDE:-}" ]]; then
+    doctor_cmd="$FLYWHEEL_DOCTOR_OVERRIDE"
+  elif [[ -n "$SCRIPT_DIR" && -f "$SCRIPT_DIR/doctor.sh" ]]; then
+    doctor_cmd="$SCRIPT_DIR/doctor.sh"
+  else
+    doctor_tmp="$(mktemp)"
+    if curl -fsSL "${TEMPLATES_BASE%/templates}/doctor.sh" -o "$doctor_tmp" 2>/dev/null; then
+      doctor_cmd="$doctor_tmp"
+    else
+      rm -f "$doctor_tmp"
+      doctor_tmp=""
+    fi
+  fi
+
+  if [[ -z "$doctor_cmd" ]]; then
+    # Could not locate or fetch doctor — surface a deferred (non-block) line and
+    # skip the rest of validation rather than aborting the run.
+    format_finding instance warn "Setup validation — deferred (doctor.sh unavailable)"
+    printf '      finish with: scripts/doctor.sh %s\n' "$REPO"
+    return 0
+  fi
+
+  # Run doctor read-only. Capture stdout + exit code without tripping `set -e`.
+  local out=""
+  out="$(bash "$doctor_cmd" "$REPO" --skip-credentials --summary 2>/dev/null || true)"
+  [[ -n "$doctor_tmp" ]] && rm -f "$doctor_tmp"
+
+  # The `DOCTOR_RESULT blocks=N warns=M` trailer is doctor's last line; read the
+  # counts from it and drop it from the finding lines shown to the adopter.
+  local blocks=0 warns=0 body
+  if [[ "$(printf '%s\n' "$out" | tail -n1)" =~ ^DOCTOR_RESULT\ blocks=([0-9]+)\ warns=([0-9]+)$ ]]; then
+    blocks="${BASH_REMATCH[1]}"
+    warns="${BASH_REMATCH[2]}"
+  fi
+  body="$(printf '%s\n' "$out" | grep -vE '^DOCTOR_RESULT blocks=[0-9]+ warns=[0-9]+$' || true)"
+
+  findings_validation_headline "$blocks" "$warns"
+  # Print the remaining finding lines verbatim (empty on an all-green run).
+  [[ -n "$body" ]] && printf '%s\n' "$body"
+
+  VALIDATION_BLOCKS="$blocks"
+  VALIDATION_WARNS="$warns"
+}
+
+# print_completion_summary — render the end-of-run outcome summary
+# (SPEC.md §spec:setup-completion-summary). Lists every scaffold step init can
+# touch with its real outcome, then closes with a complete/incomplete verdict.
+# Renders to stdout in the same bucket/severity vocabulary the pre-flight pass
+# and doctor.sh speak: `configured` steps print a green check; `deferred`/`failed`
+# steps reuse format_finding (so an item reads identically at completion as it
+# did at pre-flight) followed by the exact finishing command.
+print_completion_summary() {
+  local rec label outcome bucket severity command
+  local incomplete_count=0
+  # warn-severity outstanding items (deliberate deferrals: App creds, rulesets).
+  # These never touch incomplete_count / the verdict — they drive the --strict
+  # exit only (SPEC.md §spec:setup-exit-contract, strict-mode criterion).
+  local warn_count=0
+
+  # One summary, two audiences (SPEC.md §spec:setup-exit-contract). Interactive
+  # runs (a real TTY) get today's human prose; non-interactive runs (curl|bash,
+  # CI, no TTY — INTERACTIVE -eq 0) get a stable, greppable rendering of the SAME
+  # data. The machine path emits one `FLYWHEEL_SETUP_STEP` line per scaffold step
+  # and a final `FLYWHEEL_SETUP_RESULT` trailer; the verdict token is derived from
+  # the very same incomplete_count that drives the exit code below, so the two can
+  # never disagree. This is NOT a divorced second output mode — it is the interactive
+  # summary rendered for the reader at hand.
+  local machine=0
+  [[ "$INTERACTIVE" -eq 0 ]] && machine=1
+
+  if [[ "$machine" -eq 0 ]]; then
+    printf '\nFlywheel scaffold written to %s.\n' "$REPO_ROOT"
+    printf 'Flywheel setup summary for %s:\n\n' "$REPO"
+  fi
+
+  # bash 3.2-safe iteration: guard the empty case so `set -u` does not abort on
+  # an unset array expansion.
+  if [[ "${#SUMMARY_RECORDS[@]}" -gt 0 ]]; then
+    for rec in "${SUMMARY_RECORDS[@]}"; do
+      IFS=$'\t' read -r label outcome bucket severity command <<< "$rec"
+      if [[ "$machine" -eq 1 ]]; then
+        # Machine rendering: one logical line per step. The free-text fields
+        # (command, label) come LAST and are double-quoted so a value containing
+        # spaces/quotes stays parseable on a single line; embedded double quotes
+        # are backslash-escaped. bucket/severity/command stay present with empty
+        # values for `configured` steps so the column set is stable to grep/awk.
+        local q_command q_label
+        q_command="${command//\"/\\\"}"
+        q_label="${label//\"/\\\"}"
+        printf 'FLYWHEEL_SETUP_STEP outcome=%s bucket=%s severity=%s command="%s" label="%s"\n' \
+          "$outcome" "$bucket" "$severity" "$q_command" "$q_label"
+      else
+        case "$outcome" in
+          configured)
+            printf '  \033[32m✓\033[0m %s — configured\n' "$label"
+            ;;
+          *)
+            # deferred / failed / skipped: render in the pre-flight vocabulary, then
+            # surface the finishing command on the next indented line if present.
+            format_finding "$bucket" "$severity" "$label — $outcome"
+            [[ -n "$command" ]] && printf '      finish with: %s\n' "$command"
+            ;;
+        esac
+      fi
+      # N (the count that drives "incomplete") = records whose outcome is `failed`
+      # OR whose severity is `block`. A deliberate skip (deferred warn/info) never
+      # counts. SPEC.md §spec:setup-completion-summary: "only a step that was meant
+      # to run and failed, or an unresolved block-severity finding, makes the
+      # verdict incomplete".
+      if [[ "$outcome" == "failed" || "$severity" == "block" ]]; then
+        incomplete_count=$((incomplete_count + 1))
+      fi
+      # warn-severity items (deliberate deferrals like skipped App creds /
+      # rulesets) are tallied separately — they fail the run only under --strict.
+      if [[ "$severity" == "warn" ]]; then
+        warn_count=$((warn_count + 1))
+      fi
+    done
+  fi
+
+  # Auto-run doctor and fold its blocking findings into the verdict so the run is
+  # "complete" only when BOTH the scaffold steps AND doctor are clean
+  # (SPEC.md §spec:setup-auto-validation). run_setup_validation prints the
+  # "Setup validation" section to stdout and sets the global VALIDATION_BLOCKS to
+  # doctor's block count; add that to incomplete_count.
+  run_setup_validation
+  incomplete_count=$((incomplete_count + VALIDATION_BLOCKS))
+  # Doctor's warn count folds into warn_count so --strict elevates doctor
+  # warnings the same as deferred scaffold items; never into incomplete_count.
+  warn_count=$((warn_count + VALIDATION_WARNS))
+
+  if [[ "$machine" -eq 1 ]]; then
+    # Machine trailer: the verdict token is derived from the SAME incomplete_count
+    # that selects the exit code below, so verdict=incomplete <=> non-zero exit.
+    local verdict="complete"
+    [[ "$incomplete_count" -gt 0 ]] && verdict="incomplete"
+    # verdict=/items= keep their block/failure-driven meaning (warns never move
+    # them). strict=/warn_items= are additive: they expose the strict-mode inputs
+    # so a consumer can see why the exit code went non-zero under --strict.
+    printf 'FLYWHEEL_SETUP_RESULT verdict=%s items=%d strict=%d warn_items=%d\n' \
+      "$verdict" "$incomplete_count" "$STRICT" "$warn_count"
+  elif [[ "$incomplete_count" -gt 0 ]]; then
+    printf '\n\033[1;31mincomplete — %d item(s) remain\033[0m\n' "$incomplete_count"
+  else
+    printf '\n\033[1;32mcomplete\033[0m\n'
+    printf 'Next: commit + push the new files and open a smoke-test PR to verify the wiring.\n'
+  fi
+
+  # End-of-run exit contract (SPEC.md §spec:setup-exit-contract). The function
+  # owns the script's terminal exit so the code reflects the verdict on the same
+  # severity vocabulary the summary speaks. This is strictly ADDITIVE beneath the
+  # pre-flight gate's block-exit (§spec:preflight-gate), which fires earlier.
+  #
+  # FORCED_EXIT_STATUS seam: a caller that already has a genuine non-zero status
+  # to preserve (e.g. the rulesets-apply failure path) sets it before calling, so
+  # the exact apply-rulesets status survives rather than being flattened to 1.
+  # Empty (the normal case) means derive the code from the verdict: non-zero when
+  # any step failed or an unresolved block remains, zero otherwise (deliberate
+  # deferrals are complete). Explicit `exit` keeps the EXIT-trap status gotcha at
+  # bay — the genuine terminal action, never a fall-through.
+  #
+  # Strict-mode criterion: --strict (STRICT=1) elevates warn-severity outstanding
+  # items (warn_count) to a non-zero exit. Without it, warns never fail the run —
+  # most adopters deliberately defer steps, so the default stays green and strict
+  # is opt-in (SPEC.md §spec:setup-exit-contract, "Why a strict mode…"). This
+  # affects the EXIT CODE only; the verdict text/machine fields are unchanged.
+  if [[ -n "$FORCED_EXIT_STATUS" ]]; then
+    exit "$FORCED_EXIT_STATUS"
+  elif [[ "$incomplete_count" -gt 0 ]]; then
+    exit 1
+  elif [[ "$STRICT" -eq 1 && "$warn_count" -gt 0 ]]; then
+    exit 1
+  else
+    exit 0
+  fi
+}
+
 # gh is confirmed installed + authenticated by the gate above. REPO/OWNER and
 # detect_owner_type were resolved non-fatally before the pass (so the
 # credentials/App detectors could consult them); a still-empty REPO now means the
@@ -556,6 +802,7 @@ fetch_template() {
 # 1. Pick a preset and write .flywheel.yml (skip if it already exists).
 if [[ -f .flywheel.yml ]]; then
   echo "  .flywheel.yml already exists — leaving it alone."
+  record_outcome ".flywheel.yml preset" configured
 else
   if [[ -z "$PRESET" ]]; then
     if [[ "$INTERACTIVE" -eq 0 ]]; then
@@ -581,6 +828,7 @@ else
   esac
   fetch_template "flywheel.${PRESET}.yml" .flywheel.yml
   echo "  wrote .flywheel.yml ($PRESET preset)"
+  record_outcome ".flywheel.yml preset" configured
 fi
 
 # 2. Write workflow files (skip each if it already exists; --force overwrites).
@@ -605,6 +853,9 @@ for wf in flywheel-pr.yml flywheel-push.yml; do
     echo "  wrote $dest"
   fi
 done
+# Both workflow files are present after the loop (written, force-overwritten, or
+# left in place), so the step is configured regardless of which branch each took.
+record_outcome "PR + push workflow files" configured
 
 # 2.5 Merge drivers for derived artifacts (CHANGELOG.md, release_files paths).
 #
@@ -665,6 +916,7 @@ git config merge.flywheel-changelog.driver \
 git config merge.flywheel-release-file.name "Flywheel release-file (keep ours)" >/dev/null
 git config merge.flywheel-release-file.driver true >/dev/null
 echo "  registered Flywheel merge drivers in .git/config"
+record_outcome ".gitattributes + merge drivers" configured
 
 # 3. App-token secrets.
 #
@@ -789,8 +1041,25 @@ EOF
   fi
 }
 
+# app_creds_finish_cmd <scope> — emit the exact gh commands that set the App
+# credentials (the FLYWHEEL_GH_APP_ID variable + FLYWHEEL_GH_APP_PRIVATE_KEY
+# secret) at the given scope (org|repo). Single source of truth for the
+# finishing command recorded against every deferred/failed App-credential
+# outcome; $REPO/$OWNER expand at call time.
+app_creds_finish_cmd() {
+  if [[ "$1" == "org" ]]; then
+    printf '%s' "gh variable set FLYWHEEL_GH_APP_ID --body '<your-app-id>' --org $OWNER --visibility all && gh secret set FLYWHEEL_GH_APP_PRIVATE_KEY < /path/to/private-key.pem --org $OWNER --visibility all"
+  else
+    printf '%s' "gh variable set FLYWHEEL_GH_APP_ID --body '<your-app-id>' --repo $REPO && gh secret set FLYWHEEL_GH_APP_PRIVATE_KEY < /path/to/private-key.pem --repo $REPO"
+  fi
+}
+
 if [[ "$SKIP_SECRETS" -eq 1 ]]; then
   echo "  --skip-secrets set; not touching App credentials."
+  # SCOPE is not yet resolved this early; default to the repo form (matches the
+  # non-interactive branch's fallback below).
+  app_creds_cmd="$(app_creds_finish_cmd repo)"
+  record_outcome "App credentials" deferred config warn "$app_creds_cmd"
 else
   # Reuse the pre-flight credential probe (detect_credentials) instead of
   # re-listing variables/secrets: the pass already ran the repo-then-org lookup
@@ -806,15 +1075,14 @@ else
     else
       echo "  FLYWHEEL_GH_APP_ID set at ${app_id_found_at}-level, FLYWHEEL_GH_APP_PRIVATE_KEY at ${app_key_found_at}-level — workflows will prefer the repo-level value when both exist."
     fi
+    record_outcome "App credentials" configured
   elif [[ "$INTERACTIVE" -eq 0 ]]; then
+    # Derive the displayed hint from app_creds_finish_cmd so the command form
+    # lives in exactly one place (it is also what gets recorded below).
+    app_creds_cmd="$(app_creds_finish_cmd "$SCOPE")"
     echo "  non-interactive shell — skipping App-credential prompts. Set them manually:"
-    if [[ "$SCOPE" == "org" ]]; then
-      echo "    gh variable set FLYWHEEL_GH_APP_ID --body '<your-app-id>' --org $OWNER --visibility all"
-      echo "    gh secret set FLYWHEEL_GH_APP_PRIVATE_KEY < /path/to/private-key.pem --org $OWNER --visibility all"
-    else
-      echo "    gh variable set FLYWHEEL_GH_APP_ID --body '<your-app-id>' --repo $REPO"
-      echo "    gh secret set FLYWHEEL_GH_APP_PRIVATE_KEY < /path/to/private-key.pem --repo $REPO"
-    fi
+    echo "    $app_creds_cmd"
+    record_outcome "App credentials" deferred config warn "$app_creds_cmd"
   else
     # Resolve SCOPE before the App-source prompt so write_app_id_var /
     # write_app_key_secret know where to write. If the owner is a User
@@ -845,6 +1113,11 @@ else
       fi
     fi
 
+    # Finishing command for any deferred/failed App-credential outcome below,
+    # in the same form the non-interactive branch prints, keyed off the now-
+    # resolved SCOPE so it's copy-pasteable.
+    app_creds_cmd="$(app_creds_finish_cmd "$SCOPE")"
+
     echo
     echo "  Flywheel needs a GitHub App for installation tokens. Pick a setup path:"
     echo "    1) Create the App for me  — opens browser, ~30s round-trip"
@@ -853,14 +1126,35 @@ else
     read -r -u 3 -p "  Selection [1/2/3] (default 1): " app_choice
     case "${app_choice:-1}" in
       1)
-        if ! create_app_via_manifest; then
+        if create_app_via_manifest; then
+          record_outcome "App credentials" configured
+        else
           echo "  Falling back to manual prompts."
-          prompt_existing_app_credentials
+          # Only the credential-WRITE failures inside the helper return non-zero;
+          # the empty-input/skip paths return success, so a non-zero here is a
+          # genuine write failure.
+          if prompt_existing_app_credentials; then
+            record_outcome "App credentials" configured
+          else
+            record_outcome "App credentials" failed config block "$app_creds_cmd"
+          fi
         fi
         ;;
-      2) prompt_existing_app_credentials ;;
-      3) echo "  Skipped — set FLYWHEEL_GH_APP_ID variable and FLYWHEEL_GH_APP_PRIVATE_KEY secret before any Flywheel workflow runs." ;;
-      *) echo "  invalid selection — skipping." ;;
+      2)
+        if prompt_existing_app_credentials; then
+          record_outcome "App credentials" configured
+        else
+          record_outcome "App credentials" failed config block "$app_creds_cmd"
+        fi
+        ;;
+      3)
+        echo "  Skipped — set FLYWHEEL_GH_APP_ID variable and FLYWHEEL_GH_APP_PRIVATE_KEY secret before any Flywheel workflow runs."
+        record_outcome "App credentials" deferred config warn "$app_creds_cmd"
+        ;;
+      *)
+        echo "  invalid selection — skipping."
+        record_outcome "App credentials" deferred config warn "$app_creds_cmd"
+        ;;
     esac
   fi
 fi
@@ -946,21 +1240,37 @@ if [[ "$SKIP_RULESETS" -eq 0 && -x "${SCRIPT_DIR:-}/apply-rulesets.sh" ]]; then
     args=("$REPO")
     [[ -n "$REQUIRED_CHECKS" ]] && args+=(--required-checks "$REQUIRED_CHECKS")
     [[ -n "${CREATED_APP_ID:-}" ]] && args+=(--app-id "$CREATED_APP_ID")
-    "$SCRIPT_DIR/apply-rulesets.sh" "${args[@]}"
+    # Record the apply outcome. On a non-zero exit, record `failed`, then render
+    # the completion summary BEFORE exiting — the spec requires a failed step to
+    # appear in the summary with an "incomplete" verdict
+    # (SPEC.md §spec:setup-completion-summary), so the summary must print ahead of
+    # the exit. The genuine apply-rulesets status is preserved via the
+    # FORCED_EXIT_STATUS seam: print_completion_summary now owns the terminal exit
+    # (§spec:setup-exit-contract) and honors the forced status after printing, so
+    # the failure is not silently swallowed.
+    rulesets_status=0
+    "$SCRIPT_DIR/apply-rulesets.sh" "${args[@]}" || rulesets_status=$?
+    if [[ "$rulesets_status" -eq 0 ]]; then
+      record_outcome "Branch + tag protection rulesets" configured
+    else
+      record_outcome "Branch + tag protection rulesets" failed instance block "scripts/apply-rulesets.sh $REPO${CREATED_APP_ID:+ --app-id $CREATED_APP_ID}"
+      FORCED_EXIT_STATUS="$rulesets_status"
+      print_completion_summary
+    fi
   else
-    echo "  skipped ruleset apply. Run later with: scripts/apply-rulesets.sh $REPO${CREATED_APP_ID:+ --app-id $CREATED_APP_ID}"
+    # One string for both the printed hint and the recorded finishing command,
+    # so they can never drift.
+    rulesets_cmd="scripts/apply-rulesets.sh $REPO${CREATED_APP_ID:+ --app-id $CREATED_APP_ID}"
+    echo "  skipped ruleset apply. Run later with: $rulesets_cmd"
+    record_outcome "Branch + tag protection rulesets" deferred instance warn "$rulesets_cmd"
   fi
 elif [[ "$SKIP_RULESETS" -eq 0 ]]; then
   echo "  apply-rulesets.sh not adjacent to init.sh — fetch the repo or run:"
   echo "    curl -fsSL https://raw.githubusercontent.com/point-source/flywheel/main/scripts/apply-rulesets.sh | bash -s -- $REPO"
+  record_outcome "Branch + tag protection rulesets" deferred instance warn "curl -fsSL https://raw.githubusercontent.com/point-source/flywheel/main/scripts/apply-rulesets.sh | bash -s -- $REPO"
+else
+  # --skip-rulesets passed: no apply attempted, deferred to the adopter.
+  record_outcome "Branch + tag protection rulesets" deferred instance warn "scripts/apply-rulesets.sh $REPO${CREATED_APP_ID:+ --app-id $CREATED_APP_ID}"
 fi
 
-cat <<EOF
-
-Flywheel scaffold written to $REPO_ROOT.
-Next steps:
-  1. Review .flywheel.yml and adjust auto_merge lists for your team.
-  2. Commit + push the new files.
-  3. Open a 'chore: smoke test' PR to verify the wiring.
-  4. Run scripts/doctor.sh (or curl|bash equivalent) to validate the setup.
-EOF
+print_completion_summary

@@ -14,6 +14,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { stripAnsi } from "./helpers/ansi.js";
+import { writeDoctorStub } from "./helpers/doctorStub.js";
 
 // End-to-end exercise of scripts/init.sh's gh-capability pre-flight detector
 // (preflight_detect_gh_capability, SPEC.md §spec:preflight-gh-capability). The
@@ -95,6 +96,10 @@ function runInit(
   // via `ghStub` to vary auth state and scopes.
   writeFileSync(gh, opts.ghStub ?? ghStubWithScopes("'repo', 'read:org'"));
   chmodSync(gh, 0o755);
+  // Pin end-of-run validation to a green doctor stub so this PRE-FLIGHT suite
+  // isn't flipped non-zero by spurious doctor blocks under the exit contract
+  // (§spec:setup-exit-contract); see writeDoctorStub for the full rationale.
+  const doctorStub = writeDoctorStub(binDir, { blocks: 0, warns: 0 });
   execFileSync("git", ["init", "-q"], { cwd: work });
   const r = spawnSync("bash", [initSh, ...(opts.args ?? [])], {
     cwd: work,
@@ -104,6 +109,8 @@ function runInit(
     env: {
       ...process.env,
       PATH: `${binDir}:${process.env.PATH}`,
+      FLYWHEEL_TEST_HOOKS: "1",
+      FLYWHEEL_DOCTOR_OVERRIDE: doctorStub,
       ...(opts.env ?? {}),
     },
   });
@@ -277,6 +284,11 @@ describe("init.sh — gh-capability pre-flight detection (§spec:preflight-gh-ca
       `echo "stub gh: unhandled: $*" >&2; exit 1\n`;
     writeFileSync(gh, loggingStub);
     chmodSync(gh, 0o755);
+    // Pin a green doctor stub: this test asserts PRE-FLIGHT makes no write
+    // subcommands, so the real end-of-run doctor.sh must not run against the
+    // logging gh — it would both flip the exit non-zero (§spec:setup-exit-contract)
+    // and pollute the invocation log with doctor's own gh calls.
+    const doctorStub = writeDoctorStub(binDir, { blocks: 0, warns: 0 });
     execFileSync("git", ["init", "-q"], { cwd: work });
     const r = spawnSync("bash", [initSh, ...SCAFFOLD_ARGS], {
       cwd: work,
@@ -286,6 +298,7 @@ describe("init.sh — gh-capability pre-flight detection (§spec:preflight-gh-ca
       env: {
         ...process.env,
         PATH: `${binDir}:${process.env.PATH}`,
+        FLYWHEEL_DOCTOR_OVERRIDE: doctorStub,
         ...INTERACTIVE,
       },
     });

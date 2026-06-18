@@ -3,7 +3,7 @@
 #
 # Read-only. Exits 0 if every check passes, 1 if any FAIL is reported.
 # Usage:
-#   ./scripts/doctor.sh [--skip-credentials] [owner/repo]
+#   ./scripts/doctor.sh [--skip-credentials] [--summary] [owner/repo]
 # If owner/repo is omitted, uses 'gh repo view' on the current directory.
 #
 # --skip-credentials skips the FLYWHEEL_GH_APP_ID / FLYWHEEL_GH_APP_PRIVATE_KEY
@@ -13,20 +13,29 @@
 # doctor expects to be run with a token that can list repo Variables and
 # Secrets — i.e. an admin PAT.
 #
+# --summary suppresses decoration (section headers, green ok lines, and the
+# trailing FAIL/OK summary block) but still emits every block/warn/info
+# finding, then prints a single machine-readable trailer as its last line:
+#   DOCTOR_RESULT blocks=<n> warns=<m>
+# init.sh consumes this to fold doctor's verdict into its completion summary.
+# The exit contract is unchanged (1 iff a block fired, else 0).
+#
 # Dependencies: git, gh, jq, python3 with PyYAML.
 
 set -uo pipefail
 
 skip_credentials=0
+summary_mode=0
 REPO=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --skip-credentials) skip_credentials=1; shift ;;
+    --summary) summary_mode=1; shift ;;
     -h|--help)
       cat <<'EOF'
 doctor.sh — validate that a repo is correctly configured for Flywheel.
 
-Usage: ./scripts/doctor.sh [--skip-credentials] [owner/repo]
+Usage: ./scripts/doctor.sh [--skip-credentials] [--summary] [owner/repo]
 
 If owner/repo is omitted, uses 'gh repo view' on the current directory.
 
@@ -35,6 +44,10 @@ If owner/repo is omitted, uses 'gh repo view' on the current directory.
                       credentials work by minting an App installation token.
                       Without the flag, doctor expects a token that can list
                       repo Variables and Secrets (an admin PAT).
+  --summary           Suppress section headers, ok lines, and the trailing
+                      summary block; still emit every finding, then print a
+                      machine-readable trailer 'DOCTOR_RESULT blocks=<n>
+                      warns=<m>' as the last line. Exit code is unchanged.
 EOF
       exit 0
       ;;
@@ -94,8 +107,11 @@ fi
 
 warns=0
 
-bold()  { printf '\033[1m%s\033[0m\n' "$*"; }
-ok()    { printf '  \033[32m✓\033[0m %s\n' "$*"; }
+# In --summary mode, bold section headers and green ok lines are suppressed so
+# only real findings (and the machine trailer) reach stdout. fail/warn/note
+# always emit — those are the findings init folds into its summary.
+bold()  { [[ $summary_mode -eq 1 ]] && return 0; printf '\033[1m%s\033[0m\n' "$*"; }
+ok()    { [[ $summary_mode -eq 1 ]] && return 0; printf '  \033[32m✓\033[0m %s\n' "$*"; }
 # fail/warn are thin wrappers over the shared `finding` emitter: each takes a
 # bucket as its first arg. fail → block (counted by FINDINGS_BLOCK_COUNT),
 # warn → warn (counted locally for the summary line).
@@ -554,12 +570,19 @@ fi
 
 # Summary. Exit 1 iff any block-severity finding was emitted (tracked by the
 # shared FINDINGS_BLOCK_COUNT), else 0 — warnings/info never fail the run.
-echo
-if [[ "$FINDINGS_BLOCK_COUNT" -gt 0 ]]; then
-  printf '\033[31mFAIL\033[0m — %d blocking finding(s), %d warning(s)\n' "$FINDINGS_BLOCK_COUNT" "$warns"
-elif [[ $warns -gt 0 ]]; then
-  printf '\033[33mOK with warnings\033[0m — %d warning(s)\n' "$warns"
+# In --summary mode, suppress the human FAIL/OK block and instead print a single
+# machine-readable trailer as the last line (mirrors the linter→doctor RESULT
+# convention) for init.sh to parse.
+if [[ $summary_mode -eq 1 ]]; then
+  printf 'DOCTOR_RESULT blocks=%d warns=%d\n' "$FINDINGS_BLOCK_COUNT" "$warns"
 else
-  printf '\033[32mOK\033[0m — all checks pass\n'
+  echo
+  if [[ "$FINDINGS_BLOCK_COUNT" -gt 0 ]]; then
+    printf '\033[31mFAIL\033[0m — %d blocking finding(s), %d warning(s)\n' "$FINDINGS_BLOCK_COUNT" "$warns"
+  elif [[ $warns -gt 0 ]]; then
+    printf '\033[33mOK with warnings\033[0m — %d warning(s)\n' "$warns"
+  else
+    printf '\033[32mOK\033[0m — all checks pass\n'
+  fi
 fi
 exit "$(findings_exit_code)"
