@@ -104,6 +104,15 @@ interface StubOpts {
    * (#239). The tag ruleset detail (id 2) is left readable, so v* protection
    * still verifies cleanly and this path introduces no block-severity finding. */
   rulesetDetailFails?: boolean;
+  /** If true, models a MIXED branch-ruleset permission gap: a READABLE branch
+   * ruleset (id 1) covers main but carries NO pull_request rule, while a SECOND
+   * branch ruleset (id 3) — which could supply the PR requirement — is unreadable
+   * (its detail exits non-zero). With this combination the branch is matched
+   * (pr_required stays 0) AND a detail read failed, so doctor must downgrade the
+   * "no pull_request requirement" finding to a could-not-verify warn rather than
+   * a false `fail instance` block (#239). The tag ruleset (id 2) stays readable,
+   * so this path introduces no block-severity finding and the run exits 0. */
+  branchPrUnreadable?: boolean;
 }
 
 /** Writes a `gh` stub into a temp bin dir and returns the dir + a cleanup.
@@ -127,6 +136,7 @@ function setupGhStub(opts: StubOpts = {}): { binDir: string; cleanup: () => void
     hasConfig = true,
     hasRulesets = true,
     rulesetDetailFails = false,
+    branchPrUnreadable = false,
   } = opts;
 
   const binDir = mkdtempSync(join(tmpdir(), "flywheel-doctor-bin-"));
@@ -147,14 +157,25 @@ function setupGhStub(opts: StubOpts = {}): { binDir: string; cleanup: () => void
   );
 
   // One branch ruleset (id 1) covering refs/heads/main with a pull_request
-  // rule, plus one tag ruleset (id 2) covering refs/tags/v*.
-  const rulesetsList = JSON.stringify([
-    { id: 1, target: "branch" },
-    { id: 2, target: "tag" },
-  ]);
+  // rule, plus one tag ruleset (id 2) covering refs/tags/v*. When
+  // branchPrUnreadable is set, a second branch ruleset (id 3) is added whose
+  // detail is unreadable (see the stub below), and id 1 drops its PR rule so
+  // the only possible PR requirement lives in the unreadable ruleset.
+  const rulesetsList = JSON.stringify(
+    branchPrUnreadable
+      ? [
+          { id: 1, target: "branch" },
+          { id: 3, target: "branch" },
+          { id: 2, target: "tag" },
+        ]
+      : [
+          { id: 1, target: "branch" },
+          { id: 2, target: "tag" },
+        ],
+  );
   const branchRulesetDetail = JSON.stringify({
     conditions: { ref_name: { include: ["refs/heads/main"] } },
-    rules: [{ type: "pull_request" }],
+    rules: branchPrUnreadable ? [] : [{ type: "pull_request" }],
   });
   const tagRulesetDetail = JSON.stringify({
     conditions: { ref_name: { include: ["refs/tags/v*"] } },
@@ -215,6 +236,13 @@ case "$path" in
     ;;
   "repos/${REPO}/rulesets/2")
     printf '%s\\n' '${tagRulesetDetail}'
+    ;;
+  "repos/${REPO}/rulesets/3")
+    # Second branch ruleset, present only when branchPrUnreadable is set. Its
+    # detail is repo-admin-gated and 404s — it is the ruleset that *would* carry
+    # the pull_request requirement, so doctor must report could-not-verify
+    # rather than a false "no pull_request requirement" block (#239).
+    exit 1
     ;;
   *)
     # Unknown path → behave like a 404 so doctor's "if …; then" guards take
@@ -399,6 +427,40 @@ describe.skipIf(!depsAvailable)("doctor.sh — pre-flight classification (end-to
       // The false BLOCK must be gone entirely.
       expect(plain).not.toContain("no ruleset covers branch 'main'");
       // could-not-verify is a warn, not a block — this path does not flip exit.
+      expect(r.exitCode, `stderr:\n${r.stderr}\nstdout:\n${plain}`).toBe(0);
+    } finally {
+      stub.cleanup();
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("matched branch, PR rule only in an unreadable ruleset → could-not-verify, not a false 'no pull_request requirement' block (#239)", () => {
+    // Mixed permission gap: a READABLE branch ruleset covers main but has no PR
+    // rule, while a SECOND branch ruleset that could supply the PR requirement
+    // is unreadable. The branch is matched (so the "no ruleset covers branch"
+    // arm does not apply) yet pr_required stays 0 — doctor must downgrade the
+    // "no pull_request requirement" finding to a could-not-verify warn instead
+    // of a false instance BLOCK, since the unread ruleset may carry the rule.
+    const stub = setupGhStub({ branchPrUnreadable: true });
+    const cwd = mkdtempSync(join(tmpdir(), "flywheel-doctor-cwd-"));
+    try {
+      const r = runDoctor(stub.binDir, cwd);
+      const plain = stripAnsi(r.stdout);
+      const prLine = plain
+        .split("\n")
+        .find((l) =>
+          l.includes(
+            "could not verify branch 'main' pull_request requirement — reading rulesets requires repo-admin",
+          ),
+        );
+      expect(
+        prLine,
+        "expected the downgraded could-not-verify pull_request-requirement finding",
+      ).toBeDefined();
+      expect(prLine).toContain("[local-env]");
+      // The false BLOCK must be gone entirely.
+      expect(plain).not.toContain("no pull_request requirement");
+      // could-not-verify is a warn, not a block — exit stays 0.
       expect(r.exitCode, `stderr:\n${r.stderr}\nstdout:\n${plain}`).toBe(0);
     } finally {
       stub.cleanup();
