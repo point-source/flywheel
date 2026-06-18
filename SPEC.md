@@ -1961,7 +1961,7 @@ investigated, leaving the default green for intentional skips.
 
 ## Brownfield walkthrough completion parity §spec:setup-completion-docs-parity
 
-*Status: not started*
+*Status: complete*
 
 The manual §0 brownfield walkthrough in `docs/adopter/setup.md` ends with a
 **completion check that mirrors the script's verdict and vocabulary**. An

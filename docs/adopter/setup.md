@@ -84,6 +84,26 @@ If you need a release immediately and the recent history isn't conventional, the
 
 Open PRs whose titles aren't conventional commits will be rewritten by Flywheel on their next `synchronize` event. Nothing breaks, but if you have many open PRs expect a wave of title-rewrite activity in the first day. No action required — included so it's not a surprise.
 
+### 0.6 Completion check
+
+You've now audited the existing repo. Before moving on to §1, settle on the same verdict `init.sh` lands on at the end of a scripted run, so a hand retrofit and a scripted one reach **one definition of "done"**. Each item below carries the two labels that `init.sh`'s pre-flight, its completion summary, and `doctor.sh` all use — a **bucket** (`local-env` / `instance` / `config` — whose problem it is and when it's fixed) and a **severity** (`block` / `warn` / `info` — how serious it is):
+
+| §0 step | Outstanding item | Bucket | Severity |
+| --- | --- | --- | --- |
+| [Prerequisites](#prerequisites) | `gh` not installed/authenticated, or you lack repo-admin to write secrets and apply rulesets | `local-env` | `block` |
+| [0.1](#01-audit-existing-version-tags) | Bare or non-semver tags not retagged to `v*` (would collide with `semantic-release`'s versioning) | `instance` | `block` |
+| [0.2](#02-disable-previous-release-automation) | A prior release system (release-please, hand-rolled tagging, goreleaser, changesets, another `semantic-release`) is still wired up | `instance` | `block` |
+| [0.3](#03-confirm-bot-identity-can-push-to-protected-branches) | The Flywheel App is not a bypass actor on the managed-branch rules, or "Require signed commits" is still on | `config` | `block` |
+| [0.4](#04-audit-recent-commit-history) | Recent history isn't conventional and you need a release immediately | `instance` | `info` |
+| [0.5](#05-open-prs-at-cutover) | Non-conventional open PRs will be rewritten at cutover | `instance` | `info` |
+
+Tally it the way `init.sh` does:
+
+- **complete** — every `block` item above is resolved (or genuinely doesn't apply to your repo). `info` items you've read and accepted don't change the verdict: a deliberate choice is never counted as a failure. For any item you're deferring, note the command that finishes it (the §0.1 retag loop, or `scripts/apply-rulesets.sh <repo> --app-id <id>` for §0.3) so you don't reconstruct it later.
+- **incomplete — N item(s) remain** — one or more `block` items are still open. N is the count of unresolved `block` items, exactly as `init.sh` derives the number in its closing verdict. Resolve them before §1; layering Flywheel on top of a `block` item is what surfaces later as a failed or duplicated release.
+
+This is the manual mirror of the outcome summary `init.sh` prints at the end of a scripted run. Once you reach **complete** here and finish §1–§6, [§7 (Verify)](#7-verify) runs `doctor.sh`, which re-reports any remaining findings in these same buckets and severities — so the green/red confirmation you get there speaks the same language as this check.
+
 ## 1. Create a GitHub App
 
 Flywheel uses a GitHub App installation token. Personal Access Tokens are not supported — they don't reliably propagate the cross-workflow trigger semantics Flywheel relies on (in particular, native auto-merge enable and downstream workflow firing on bot-created PRs).
