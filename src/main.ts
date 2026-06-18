@@ -197,10 +197,18 @@ async function runDegradedEmptyKey(event: string): Promise<void> {
     return;
   }
 
+  // The check is posted for every empty-key pull_request run, regardless of
+  // whether pr.baseRef is a managed stream branch — §spec:dependabot-degraded-check
+  // mandates posting on the empty-key pull_request path unconditionally. The
+  // deadlock only bites where the check is required (managed branches, per
+  // apply-rulesets.sh); on any other branch the extra concluded check is a
+  // harmless no-op. (The full conductor, by contrast, returns `unmanaged`
+  // without posting — but it has the config loaded to make that distinction;
+  // the degraded path deliberately stays minimal and config-free.)
   const result = await postDegradedTitleCheck(
     createGitHubClient(githubToken),
     { title: pr.title, headSha: pr.headSha },
-    { info: (m) => core.info(m), warning: (m) => core.warning(m) },
+    { warning: (m) => core.warning(m) },
   );
   skip(
     result.posted

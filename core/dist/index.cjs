@@ -28377,25 +28377,35 @@ function createGitHubClient(token, repoFullName) {
 var FLYWHEEL_AUTO_MERGE_LABEL = "flywheel:auto-merge";
 var FLYWHEEL_NEEDS_REVIEW_LABEL = "flywheel:needs-review";
 var FLYWHEEL_TITLE_CHECK = "flywheel/conventional-commit";
-async function postDegradedTitleCheck(gh, pr, log) {
-  const parsed = parseTitle(pr.title);
-  const conclusion = parsed ? "success" : "failure";
-  const summary2 = parsed ? "Valid conventional commit title." : `Title is not a valid conventional commit. Expected \`<type>[(<scope>)][!]: <description>\` where type is one of ${VALID_TYPES.join(", ")}.`;
-  try {
-    await gh.createCheck({
+var TITLE_CHECK_SUCCESS_SUMMARY = "Valid conventional commit title.";
+function buildTitleCheck(title, headSha) {
+  if (parseTitle(title)) {
+    return {
       name: FLYWHEEL_TITLE_CHECK,
-      conclusion,
-      summary: summary2,
-      ...parsed ? {} : { details: `Got: ${pr.title}` },
-      headSha: pr.headSha
-    });
-    return { conclusion, posted: true };
+      conclusion: "success",
+      summary: TITLE_CHECK_SUCCESS_SUMMARY,
+      headSha
+    };
+  }
+  return {
+    name: FLYWHEEL_TITLE_CHECK,
+    conclusion: "failure",
+    summary: `Title is not a valid conventional commit. Expected \`<type>[(<scope>)][!]: <description>\` where type is one of ${VALID_TYPES.join(", ")}.`,
+    details: `Got: ${title}`,
+    headSha
+  };
+}
+async function postDegradedTitleCheck(gh, pr, log) {
+  const check = buildTitleCheck(pr.title, pr.headSha);
+  try {
+    await gh.createCheck(check);
+    return { posted: true, conclusion: check.conclusion };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     log.warning(
       `Could not post the ${FLYWHEEL_TITLE_CHECK} check with the built-in token (${msg}). This is expected when the token is read-only (fork PRs \u2014 see #162); a Dependabot PR's same-repo token has checks:write.`
     );
-    return { conclusion, posted: false };
+    return { posted: false };
   }
 }
 
@@ -28720,34 +28730,17 @@ async function runPrFlow({ pr, config, gh, log }) {
   }
   const parsed = parseTitle(pr.title);
   if (!parsed) {
-    const summary2 = `Title is not a valid conventional commit. Expected \`<type>[(<scope>)][!]: <description>\` where type is one of ${VALID_TYPES.join(", ")}.`;
-    await gh.createCheck({
-      name: FLYWHEEL_TITLE_CHECK,
-      conclusion: "failure",
-      summary: summary2,
-      details: `Got: ${pr.title}`,
-      headSha: pr.headSha
-    });
+    await gh.createCheck(buildTitleCheck(pr.title, pr.headSha));
     log.warning(`PR #${pr.number}: invalid conventional commit title \u2014 failing check posted.`);
     return { kind: "parse-failed" };
   }
   if (isPromotionPR(config, pr.headRef, pr.baseRef, pr.title)) {
-    await gh.createCheck({
-      name: FLYWHEEL_TITLE_CHECK,
-      conclusion: "success",
-      summary: `Valid conventional commit title.`,
-      headSha: pr.headSha
-    });
+    await gh.createCheck(buildTitleCheck(pr.title, pr.headSha));
     log.info(`PR #${pr.number}: promotion PR \u2014 owned by runPromotion, skipping pr-flow rewrite.`);
     return { kind: "promotion-pr" };
   }
   if (isBackMergePR(config, pr.headRef, pr.baseRef)) {
-    await gh.createCheck({
-      name: FLYWHEEL_TITLE_CHECK,
-      conclusion: "success",
-      summary: `Valid conventional commit title.`,
-      headSha: pr.headSha
-    });
+    await gh.createCheck(buildTitleCheck(pr.title, pr.headSha));
     log.info(
       `PR #${pr.number}: back-merge fallback PR \u2014 needs human resolution + true merge, skipping pr-flow rewrite.`
     );
@@ -28801,12 +28794,7 @@ async function runPrFlow({ pr, config, gh, log }) {
     await gh.removeLabel(pr.number, FLYWHEEL_NEEDS_REVIEW_LABEL);
     const method = "SQUASH";
     const result = await gh.enableAutoMerge(pr.nodeId, method);
-    await gh.createCheck({
-      name: FLYWHEEL_TITLE_CHECK,
-      conclusion: "success",
-      summary: `Valid conventional commit title.`,
-      headSha: pr.headSha
-    });
+    await gh.createCheck(buildTitleCheck(pr.title, pr.headSha));
     if (result.ok) {
       log.info(`PR #${pr.number}: auto-merge enabled (${method.toLowerCase()}).`);
       return {
@@ -28858,12 +28846,7 @@ async function runPrFlow({ pr, config, gh, log }) {
   await gh.addLabels(pr.number, [FLYWHEEL_NEEDS_REVIEW_LABEL]);
   await gh.removeLabel(pr.number, FLYWHEEL_AUTO_MERGE_LABEL);
   await gh.disableAutoMerge(pr.nodeId);
-  await gh.createCheck({
-    name: FLYWHEEL_TITLE_CHECK,
-    conclusion: "success",
-    summary: `Valid conventional commit title.`,
-    headSha: pr.headSha
-  });
+  await gh.createCheck(buildTitleCheck(pr.title, pr.headSha));
   log.info(`PR #${pr.number}: ${matchKey} not in auto_merge list for ${branch.name} \u2192 needs review.`);
   return {
     kind: "labeled",
@@ -29434,7 +29417,7 @@ async function runDegradedEmptyKey(event) {
   const result = await postDegradedTitleCheck(
     createGitHubClient(githubToken),
     { title: pr.title, headSha: pr.headSha },
-    { info: (m) => info(m), warning: (m) => warning(m) }
+    { warning: (m) => warning(m) }
   );
   skip(
     result.posted ? `Flywheel: app-private-key is empty \u2014 this is expected for a Dependabot PR (GitHub sources secrets from the Dependabot store, not the Actions store). Posted the required ${FLYWHEEL_TITLE_CHECK} check with conclusion "${result.conclusion}" using the built-in token, so the PR is no longer deadlocked. App-only actions (title rewrite, auto-merge/needs-review labels, native auto-merge, promotion-PR upserts) were skipped. Register FLYWHEEL_GH_APP_PRIVATE_KEY in the Dependabot secret store to enable the full Flywheel flow for Dependabot PRs.` : `Flywheel: app-private-key is empty and the built-in token is read-only, so the ${FLYWHEEL_TITLE_CHECK} check could not be posted (expected for fork PRs \u2014 see #162). App-only actions were skipped.`

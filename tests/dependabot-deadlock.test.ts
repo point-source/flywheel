@@ -123,7 +123,9 @@ describe("postDegradedTitleCheck — empty-key Dependabot path", () => {
       log,
     );
 
-    expect(result).toEqual({ conclusion: "success", posted: false });
+    // The read-only (fork) arm carries no conclusion — the check was never
+    // written, so there is no verdict to report (see postDegradedTitleCheck).
+    expect(result).toEqual({ posted: false });
     expect(warnings.some((w) => w.includes(FLYWHEEL_TITLE_CHECK))).toBe(true);
   });
 });
