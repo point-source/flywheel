@@ -28376,6 +28376,28 @@ function createGitHubClient(token, repoFullName) {
 }
 var FLYWHEEL_AUTO_MERGE_LABEL = "flywheel:auto-merge";
 var FLYWHEEL_NEEDS_REVIEW_LABEL = "flywheel:needs-review";
+var FLYWHEEL_TITLE_CHECK = "flywheel/conventional-commit";
+async function postDegradedTitleCheck(gh, pr, log) {
+  const parsed = parseTitle(pr.title);
+  const conclusion = parsed ? "success" : "failure";
+  const summary2 = parsed ? "Valid conventional commit title." : `Title is not a valid conventional commit. Expected \`<type>[(<scope>)][!]: <description>\` where type is one of ${VALID_TYPES.join(", ")}.`;
+  try {
+    await gh.createCheck({
+      name: FLYWHEEL_TITLE_CHECK,
+      conclusion,
+      summary: summary2,
+      ...parsed ? {} : { details: `Got: ${pr.title}` },
+      headSha: pr.headSha
+    });
+    return { conclusion, posted: true };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    log.warning(
+      `Could not post the ${FLYWHEEL_TITLE_CHECK} check with the built-in token (${msg}). This is expected when the token is read-only (fork PRs \u2014 see #162); a Dependabot PR's same-repo token has checks:write.`
+    );
+    return { conclusion, posted: false };
+  }
+}
 
 // src/skip-ci.ts
 var SKIP_CI_PATTERNS = [
@@ -28690,7 +28712,6 @@ function locateBranch(config, branchRef) {
 }
 
 // src/pr-flow.ts
-var FLYWHEEL_TITLE_CHECK = "flywheel/conventional-commit";
 async function runPrFlow({ pr, config, gh, log }) {
   const branch = findBranch(config, pr.baseRef);
   if (!branch) {
@@ -29289,12 +29310,41 @@ async function run() {
   const event = getInput("event", { required: true });
   const appId = getInput("app-id", { required: true });
   const privateKey = getInput("app-private-key");
+  const githubToken = getInput("github-token");
   const ctx = context2;
   const owner = ctx.repo.owner;
   const repo = ctx.repo.repo;
   if (!privateKey || privateKey.trim() === "") {
+    if (event === "pull_request") {
+      const pr = readPullRequestFromContext();
+      if (pr) {
+        if (!githubToken || githubToken.trim() === "") {
+          notice(
+            "Flywheel: app-private-key is empty and no built-in GITHUB_TOKEN is available, so the flywheel/conventional-commit check could not be posted. Skipping the conductor \u2014 no App-only action runs without the key."
+          );
+        } else {
+          const gh2 = createGitHubClient(githubToken);
+          const result2 = await postDegradedTitleCheck(
+            gh2,
+            { title: pr.title, headSha: pr.headSha },
+            { info: (m) => info(m), warning: (m) => warning(m) }
+          );
+          if (result2.posted) {
+            notice(
+              `Flywheel: app-private-key is empty \u2014 this is expected for a Dependabot PR (GitHub sources secrets from the Dependabot store, not the Actions store). Posted the required ${FLYWHEEL_TITLE_CHECK} check with conclusion "${result2.conclusion}" using the built-in token, so the PR is no longer deadlocked. App-only actions (title rewrite, auto-merge/needs-review labels, native auto-merge, promotion-PR upserts) were skipped. Register FLYWHEEL_GH_APP_PRIVATE_KEY in the Dependabot secret store to enable the full Flywheel flow for Dependabot PRs.`
+            );
+          } else {
+            notice(
+              `Flywheel: app-private-key is empty and the built-in token is read-only, so the ${FLYWHEEL_TITLE_CHECK} check could not be posted (expected for fork PRs \u2014 see #162). App-only actions were skipped.`
+            );
+          }
+        }
+        setOutput("managed_branch", "false");
+        return;
+      }
+    }
     notice(
-      "Flywheel: app-private-key is empty. This is expected for fork PRs (GitHub does not pass secrets to fork PR workflows). Skipping the conductor \u2014 title rewrite, auto-merge labels, and promotion PR upserts will not run on this PR. The PR can still be merged manually."
+      "Flywheel: app-private-key is empty and no pull_request payload is available, so there is no required check to post. Skipping the conductor \u2014 no App-only action runs without the key."
     );
     setOutput("managed_branch", "false");
     return;
