@@ -624,25 +624,51 @@ print_completion_summary() {
   local rec label outcome bucket severity command
   local incomplete_count=0
 
-  printf '\nFlywheel scaffold written to %s.\n' "$REPO_ROOT"
-  printf 'Flywheel setup summary for %s:\n\n' "$REPO"
+  # One summary, two audiences (SPEC.md §spec:setup-exit-contract). Interactive
+  # runs (a real TTY) get today's human prose; non-interactive runs (curl|bash,
+  # CI, no TTY — INTERACTIVE -eq 0) get a stable, greppable rendering of the SAME
+  # data. The machine path emits one `FLYWHEEL_SETUP_STEP` line per scaffold step
+  # and a final `FLYWHEEL_SETUP_RESULT` trailer; the verdict token is derived from
+  # the very same incomplete_count that drives the exit code below, so the two can
+  # never disagree. This is NOT a divorced second output mode — it is the interactive
+  # summary rendered for the reader at hand.
+  local machine=0
+  [[ "$INTERACTIVE" -eq 0 ]] && machine=1
+
+  if [[ "$machine" -eq 0 ]]; then
+    printf '\nFlywheel scaffold written to %s.\n' "$REPO_ROOT"
+    printf 'Flywheel setup summary for %s:\n\n' "$REPO"
+  fi
 
   # bash 3.2-safe iteration: guard the empty case so `set -u` does not abort on
   # an unset array expansion.
   if [[ "${#SUMMARY_RECORDS[@]}" -gt 0 ]]; then
     for rec in "${SUMMARY_RECORDS[@]}"; do
       IFS=$'\t' read -r label outcome bucket severity command <<< "$rec"
-      case "$outcome" in
-        configured)
-          printf '  \033[32m✓\033[0m %s — configured\n' "$label"
-          ;;
-        *)
-          # deferred / failed / skipped: render in the pre-flight vocabulary, then
-          # surface the finishing command on the next indented line if present.
-          format_finding "$bucket" "$severity" "$label — $outcome"
-          [[ -n "$command" ]] && printf '      finish with: %s\n' "$command"
-          ;;
-      esac
+      if [[ "$machine" -eq 1 ]]; then
+        # Machine rendering: one logical line per step. The free-text fields
+        # (command, label) come LAST and are double-quoted so a value containing
+        # spaces/quotes stays parseable on a single line; embedded double quotes
+        # are backslash-escaped. bucket/severity/command stay present with empty
+        # values for `configured` steps so the column set is stable to grep/awk.
+        local q_command q_label
+        q_command="${command//\"/\\\"}"
+        q_label="${label//\"/\\\"}"
+        printf 'FLYWHEEL_SETUP_STEP outcome=%s bucket=%s severity=%s command="%s" label="%s"\n' \
+          "$outcome" "$bucket" "$severity" "$q_command" "$q_label"
+      else
+        case "$outcome" in
+          configured)
+            printf '  \033[32m✓\033[0m %s — configured\n' "$label"
+            ;;
+          *)
+            # deferred / failed / skipped: render in the pre-flight vocabulary, then
+            # surface the finishing command on the next indented line if present.
+            format_finding "$bucket" "$severity" "$label — $outcome"
+            [[ -n "$command" ]] && printf '      finish with: %s\n' "$command"
+            ;;
+        esac
+      fi
       # N (the count that drives "incomplete") = records whose outcome is `failed`
       # OR whose severity is `block`. A deliberate skip (deferred warn/info) never
       # counts. SPEC.md §spec:setup-completion-summary: "only a step that was meant
@@ -662,7 +688,13 @@ print_completion_summary() {
   run_setup_validation
   incomplete_count=$((incomplete_count + VALIDATION_BLOCKS))
 
-  if [[ "$incomplete_count" -gt 0 ]]; then
+  if [[ "$machine" -eq 1 ]]; then
+    # Machine trailer: the verdict token is derived from the SAME incomplete_count
+    # that selects the exit code below, so verdict=incomplete <=> non-zero exit.
+    local verdict="complete"
+    [[ "$incomplete_count" -gt 0 ]] && verdict="incomplete"
+    printf 'FLYWHEEL_SETUP_RESULT verdict=%s items=%d\n' "$verdict" "$incomplete_count"
+  elif [[ "$incomplete_count" -gt 0 ]]; then
     printf '\n\033[1;31mincomplete — %d item(s) remain\033[0m\n' "$incomplete_count"
   else
     printf '\n\033[1;32mcomplete\033[0m\n'
