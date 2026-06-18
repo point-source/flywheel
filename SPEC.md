@@ -1824,7 +1824,7 @@ summary, nothing more, to a run that previously just printed boilerplate.
 
 ## Setup self-validation at end of run §spec:setup-auto-validation
 
-*Status: not started*
+*Status: complete*
 
 `init.sh` **auto-runs the `doctor.sh` validation at the end of every run** —
 interactive or not — so the adopter sees a green/red confirmation that the
