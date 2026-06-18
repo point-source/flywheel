@@ -237,7 +237,7 @@ detect_owner_type() {
 # $1 = "variables" or "secrets"
 # $2 = resource name
 org_resource_visible_to_repo() {
-  local kind="$1" name="$2" resp visibility priv
+  local kind="$1" name="$2" resp visibility repo_obj
   detect_owner_type
   [[ "$OWNER_TYPE" == "Organization" ]] || return 1
   resp="$(gh api "orgs/$OWNER/actions/$kind/$name" 2>/dev/null)" || return 1
@@ -248,10 +248,15 @@ org_resource_visible_to_repo() {
       return 0
       ;;
     private)
-      priv="$(gh api "repos/$REPO" --jq .private 2>/dev/null || echo "")"
-      if [[ "$priv" == "true" ]]; then
-        echo "private"
-        return 0
+      # Branch on the repo read SUCCEEDING — a failed/permission-gapped call
+      # must not collapse to "" and read back as "repo is not private".
+      # `.private` is always present on a successful repo read, so
+      # classify_repo_field returns true/false here, never "absent".
+      if repo_obj="$(gh api "repos/$REPO" 2>/dev/null)"; then
+        if [[ "$(classify_repo_field "$repo_obj" private)" == "true" ]]; then
+          echo "private"
+          return 0
+        fi
       fi
       return 1
       ;;
@@ -395,9 +400,17 @@ if rulesets_json="$(gh api "repos/$REPO/rulesets" 2>/dev/null)"; then
     # Parallel arrays (bash 3.2 compatible — no associative arrays).
     ruleset_includes=()
     ruleset_has_pr=()
+    # Track whether any ruleset DETAIL read failed (permission gap). A failed
+    # detail call must not collapse into empty includes and surface as a false
+    # "no ruleset covers branch" BLOCK — it is a could-not-verify warn instead.
+    ruleset_detail_unreadable=0
     while read -r rid; do
       [[ -z "$rid" ]] && continue
-      detail="$(gh api "repos/$REPO/rulesets/$rid" 2>/dev/null || true)"
+      if ! detail="$(gh api "repos/$REPO/rulesets/$rid" 2>/dev/null)"; then
+        warn local-env "could not verify ruleset $rid — reading it requires repo-admin"
+        ruleset_detail_unreadable=1
+        continue
+      fi
       includes="$(echo "$detail" | jq -r '.conditions.ref_name.include[]?' 2>/dev/null)"
       has_pr="$(echo "$detail" | jq -r '[.rules[]? | select(.type == "pull_request")] | length' 2>/dev/null)"
       while IFS= read -r inc; do
@@ -421,7 +434,11 @@ if rulesets_json="$(gh api "repos/$REPO/rulesets" 2>/dev/null)"; then
         i=$((i+1))
       done
       if [[ $matched -eq 0 ]]; then
-        fail instance "no ruleset covers branch '$b' — run scripts/apply-rulesets.sh $REPO"
+        if [[ $ruleset_detail_unreadable -eq 1 ]]; then
+          warn local-env "could not verify branch '$b' is covered by a ruleset — reading rulesets requires repo-admin"
+        else
+          fail instance "no ruleset covers branch '$b' — run scripts/apply-rulesets.sh $REPO"
+        fi
       elif [[ $pr_required -eq 0 ]]; then
         fail instance "branch '$b' is in a ruleset but no pull_request requirement — re-run scripts/apply-rulesets.sh"
       else
@@ -438,15 +455,22 @@ bold "Tag namespace ruleset"
 if [[ -n "${rulesets_json:-}" ]]; then
   tag_ruleset_ids="$(echo "$rulesets_json" | jq -r '.[] | select(.target == "tag") | .id')"
   found_v_protect=0
+  tag_ruleset_detail_unreadable=0
   while read -r rid; do
     [[ -z "$rid" ]] && continue
-    detail="$(gh api "repos/$REPO/rulesets/$rid" 2>/dev/null || true)"
+    if ! detail="$(gh api "repos/$REPO/rulesets/$rid" 2>/dev/null)"; then
+      warn local-env "could not verify ruleset $rid — reading it requires repo-admin"
+      tag_ruleset_detail_unreadable=1
+      continue
+    fi
     if echo "$detail" | jq -e '.conditions.ref_name.include[]? | select(. == "refs/tags/v*")' >/dev/null 2>&1; then
       found_v_protect=1
     fi
   done <<< "$tag_ruleset_ids"
   if [[ $found_v_protect -eq 1 ]]; then
     ok "v* tag namespace protected"
+  elif [[ $tag_ruleset_detail_unreadable -eq 1 ]]; then
+    warn local-env "could not verify 'refs/tags/v*' protection — reading rulesets requires repo-admin"
   else
     fail instance "no ruleset protects 'refs/tags/v*' — run scripts/apply-rulesets.sh $REPO"
   fi
