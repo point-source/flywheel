@@ -1719,7 +1719,7 @@ class. §req:apply-rulesets-stdin-criteria
 
 ## Dependabot deadlock: degraded-mode required check §spec:dependabot-degraded-check
 
-*Status: not started*
+*Status: complete*
 
 When the conductor runs on a `pull_request` event and the App private key
 arrives empty, it validates the PR title and posts the
@@ -1881,7 +1881,7 @@ behalf. §req:dependabot-deadlock-constraints
 
 ## Dependabot empty-key regression guard §spec:dependabot-deadlock-test
 
-*Status: not started*
+*Status: complete*
 
 A fast unit/CI test reproduces the empty-key Dependabot path and asserts the
 two halves of the contract: a well-formed Dependabot title posts a `success`
