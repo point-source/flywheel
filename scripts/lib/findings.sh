@@ -44,6 +44,14 @@
 #   findings_exit_code
 #       Print 1 if any block-severity finding has been emitted, else 0.
 #
+#   findings_validation_headline <blocks> <warns>
+#       Print the canonical one-line "Setup validation" headline so init and
+#       doctor cannot drift in wording. With `0 0` it prints a green "all checks
+#       pass" line; otherwise a red/amber line naming the counts (block glyph when
+#       blocks>0, else the warn glyph). Validates both args are non-negative
+#       integers; on invalid input, prints an error to stderr and `return 1`
+#       (never exit). Pure renderer: does NOT mutate FINDINGS_BLOCK_COUNT.
+#
 #   FINDINGS_BLOCK_COUNT
 #       Global counter, initialized to 0 at source time.
 
@@ -103,4 +111,39 @@ findings_exit_code() {
   else
     printf '0\n'
   fi
+}
+
+# findings_validation_headline <blocks> <warns> — render the canonical
+# "Setup validation" headline. Pure renderer; does NOT touch FINDINGS_BLOCK_COUNT.
+findings_validation_headline() {
+  local blocks="$1"
+  local warns="$2"
+
+  case "$blocks" in
+    '' | *[!0-9]*)
+      printf "findings_validation_headline: invalid blocks '%s' (want a non-negative integer)\n" "$blocks" >&2
+      return 1
+      ;;
+  esac
+  case "$warns" in
+    '' | *[!0-9]*)
+      printf "findings_validation_headline: invalid warns '%s' (want a non-negative integer)\n" "$warns" >&2
+      return 1
+      ;;
+  esac
+
+  if [[ "$blocks" -eq 0 && "$warns" -eq 0 ]]; then
+    printf '  \033[32m✓\033[0m Setup validation: all checks pass\n'
+    return 0
+  fi
+
+  # Lead with the block glyph (red ✗) when anything blocks, else the warn glyph
+  # (amber !) when only warnings remain.
+  local glyph
+  if [[ "$blocks" -gt 0 ]]; then
+    glyph='\033[31m✗\033[0m'
+  else
+    glyph='\033[33m!\033[0m'
+  fi
+  printf "  ${glyph} Setup validation: %d blocking finding(s), %d warning(s)\n" "$blocks" "$warns"
 }
