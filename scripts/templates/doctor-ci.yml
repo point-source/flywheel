@@ -86,9 +86,9 @@ jobs:
       # automatically because the runner sets $GITHUB_STEP_SUMMARY (no flag needed).
       - name: Run Flywheel doctor
         env:
-          # Scripts base. FLYWHEEL_TEMPLATES_BASE (…/scripts/templates) is what
-          # doctor.sh reads for its own self-fetches; DOCTOR_URL points at
-          # doctor.sh itself one level up. Both track @main (see note above).
+          # FLYWHEEL_TEMPLATES_BASE (…/scripts/templates) is doctor's self-fetch
+          # base; DOCTOR_URL points at doctor.sh itself, one level up. (Pinning
+          # rationale in the note above.)
           FLYWHEEL_TEMPLATES_BASE: https://raw.githubusercontent.com/point-source/flywheel/main/scripts/templates
           DOCTOR_URL: https://raw.githubusercontent.com/point-source/flywheel/main/scripts/doctor.sh
           ADMIN_PAT: ${{ secrets.FLYWHEEL_ADMIN_PAT }}
@@ -109,8 +109,6 @@ jobs:
             flags=""
             echo "No App creds or admin PAT — falling back to the default GITHUB_TOKEN; credential-listing checks will report could-not-verify."
           fi
-          # No positional owner/repo arg: run against the checked-out repo so the
-          # on-disk checks run alongside the API checks (see Checkout step).
-          # FLYWHEEL_TEMPLATES_BASE is exported above so doctor's own self-fetches
-          # (findings.sh, config linter) resolve to the same ref (@main).
+          # No positional owner/repo arg — validate the checked-out repo (see the
+          # Checkout step for why this widens, rather than narrows, coverage).
           curl -fsSL "$DOCTOR_URL" | bash -s -- $flags

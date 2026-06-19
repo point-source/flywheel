@@ -14,7 +14,7 @@ import yaml from "js-yaml";
 //      write, or otherwise reference it — its workflow-install loop only
 //      handles `flywheel-pr.yml` and `flywheel-push.yml`. Auto-installing
 //      doctor-ci would burn CI minutes on a manual diagnostic and violate the
-//      opt-in constraint, so we lock the absence of any `doctor-ci.yml` mention
+//      opt-in constraint, so we lock the absence of any `doctor-ci` mention
 //      in init.sh.
 //
 //   B. TEMPLATE SHAPE. The shipped template must honor the contract:
@@ -40,56 +40,31 @@ const TEMPLATE_PATH = "scripts/templates/doctor-ci.yml";
 describe("doctor-ci opt-in guard (init.sh)", () => {
   // §spec:doctor-ci-workflow — the workflow is opt-in; init.sh must not
   // auto-install it. The install loop (init.sh ~L847) iterates only
-  // `flywheel-pr.yml flywheel-push.yml`. Any reference to doctor-ci.yml here
-  // would mean init started shipping it automatically.
-  it("init.sh never fetches, writes, or references doctor-ci.yml", () => {
-    const initSh = readRepoFile("scripts/init.sh");
-    expect(initSh).not.toContain("doctor-ci.yml");
-    expect(initSh).not.toContain("doctor-ci");
+  // `flywheel-pr.yml flywheel-push.yml`. Any reference to doctor-ci here would
+  // mean init started shipping it automatically. Grepping for the bare
+  // `doctor-ci` stem (rather than `doctor-ci.yml`) also catches a `.yaml`
+  // rename, and targets the contract — absence of the filename — not init's
+  // internal loop shape, so it won't break on a benign refactor.
+  it("init.sh never fetches, writes, or references doctor-ci", () => {
+    expect(readRepoFile("scripts/init.sh")).not.toContain("doctor-ci");
   });
 });
 
 describe("doctor-ci template shape", () => {
-  it("exists on disk", () => {
-    expect(existsSync(join(repoRoot, TEMPLATE_PATH))).toBe(true);
-  });
+  // Read + parse the template once; every assertion below works off these.
+  const raw = readRepoFile(TEMPLATE_PATH);
+  const doc = yaml.load(raw) as Record<string, unknown>;
 
-  it("parses as valid YAML", () => {
-    const raw = readRepoFile(TEMPLATE_PATH);
-    expect(() => yaml.load(raw)).not.toThrow();
-    expect(yaml.load(raw)).toBeTypeOf("object");
+  it("exists on disk and parses as valid YAML", () => {
+    expect(existsSync(join(repoRoot, TEMPLATE_PATH))).toBe(true);
+    expect(doc).toBeTypeOf("object");
   });
 
   it("triggers on workflow_dispatch ONLY (no push / pull_request / schedule)", () => {
-    const raw = readRepoFile(TEMPLATE_PATH);
-    const doc = yaml.load(raw) as Record<string, unknown>;
-
-    // YAML 1.1 coerces the bare key `on:` to the boolean key `true`. Resolve the
-    // trigger block from either spelling so this assertion is robust to the quirk.
-    const onBlock = (doc["on"] ?? (doc as Record<string, unknown>)[
-      String(true)
-    ] ?? (doc as Record<string, unknown>)["true"]) as
-      | Record<string, unknown>
-      | string
-      | null
-      | undefined;
-
-    // The trigger must contain workflow_dispatch. Depending on how the empty
-    // mapping under `workflow_dispatch:` parses, `onBlock` may be an object
-    // keyed by the event names; assert workflow_dispatch is present.
-    const onKeys =
-      onBlock && typeof onBlock === "object"
-        ? Object.keys(onBlock as Record<string, unknown>)
-        : typeof onBlock === "string"
-          ? [onBlock]
-          : [];
-    expect(onKeys).toContain("workflow_dispatch");
-    expect(onKeys).not.toContain("push");
-    expect(onKeys).not.toContain("pull_request");
-    expect(onKeys).not.toContain("schedule");
-
-    // Belt-and-suspenders on the raw text: forbid the gate triggers appearing as
-    // trigger keys regardless of how YAML coerced the `on:` key.
+    // Asserted on the raw text rather than the parsed object: YAML 1.1 coerces
+    // the bare key `on:` to the boolean key `true`, so a parsed-key lookup is
+    // awkward and quirk-prone. Trigger presence/absence is a line-level fact,
+    // and these anchored regexes lock it directly and durably.
     expect(raw).toMatch(/^\s*workflow_dispatch:/m);
     expect(raw).not.toMatch(/^\s*push:/m);
     expect(raw).not.toMatch(/^\s*pull_request:/m);
@@ -97,32 +72,17 @@ describe("doctor-ci template shape", () => {
   });
 
   it("declares read-only top-level permissions (contents: read)", () => {
-    const doc = yaml.load(readRepoFile(TEMPLATE_PATH)) as {
-      permissions?: Record<string, string>;
-    };
-    expect(doc.permissions).toBeDefined();
-    expect(doc.permissions).toEqual({ contents: "read" });
+    expect((doc as { permissions?: Record<string, string> }).permissions).toEqual({
+      contents: "read",
+    });
   });
 
-  it("invokes doctor by fetching scripts/doctor.sh", () => {
-    const raw = readRepoFile(TEMPLATE_PATH);
-    expect(raw).toContain("doctor.sh");
-    // The curl|bash form is how doctor is fetched-and-run.
+  it("runs doctor by fetching scripts/doctor.sh in curl|bash -s -- form with NO positional owner/repo arg", () => {
+    // doctor is fetched (the adopter repo doesn't vendor scripts/doctor.sh) and
+    // run via the curl|bash form, forwarding only $flags.
     expect(raw).toMatch(/curl[^\n]*doctor\.sh|DOCTOR_URL[^\n]*doctor\.sh/);
-  });
-
-  it("passes --skip-credentials somewhere (the App-token path)", () => {
-    const raw = readRepoFile(TEMPLATE_PATH);
-    expect(raw).toContain("--skip-credentials");
-  });
-
-  it("runs doctor in curl|bash -s -- form with NO positional owner/repo arg", () => {
-    const raw = readRepoFile(TEMPLATE_PATH);
-    // The doctor run uses the fetch-and-pipe form, passing only flags.
     expect(raw).toMatch(/bash -s --/);
-    const runLine = raw
-      .split("\n")
-      .find((l) => l.includes("bash -s --"));
+    const runLine = raw.split("\n").find((l) => l.includes("bash -s --"));
     expect(runLine).toBeDefined();
     // Flags only: the invocation forwards $flags, never a literal owner/repo
     // positional (which would force doctor into remote-only mode and skip the
@@ -131,15 +91,17 @@ describe("doctor-ci template shape", () => {
     expect(runLine).not.toMatch(/point-source\/\S+/);
   });
 
+  it("passes --skip-credentials somewhere (the App-token path)", () => {
+    expect(raw).toContain("--skip-credentials");
+  });
+
   it("references the credential inputs (App ID, App private key, optional admin PAT)", () => {
-    const raw = readRepoFile(TEMPLATE_PATH);
     expect(raw).toContain("FLYWHEEL_GH_APP_ID");
     expect(raw).toContain("FLYWHEEL_GH_APP_PRIVATE_KEY");
     expect(raw).toContain("FLYWHEEL_ADMIN_PAT");
   });
 
   it("uses create-github-app-token (App-token mint) and actions/checkout", () => {
-    const raw = readRepoFile(TEMPLATE_PATH);
     expect(raw).toMatch(/actions\/create-github-app-token/);
     expect(raw).toMatch(/actions\/checkout/);
   });
