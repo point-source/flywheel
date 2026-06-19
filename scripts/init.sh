@@ -495,16 +495,25 @@ brownfield_finding() {
 #   anything else (nightly, latest, feature tags)                 -> IGNORE.
 # One block finding per category, listing the offending tag(s) — one thing to fix
 # per category, mirroring the release-conflict detector's style.
+#
+# PREFLIGHT_REMOTE_TAGS memoizes the paginated remote-tag read so the guided-retag
+# resolver can reuse it instead of re-issuing `gh api repos/$REPO/tags` — nothing
+# mutates remote tags between detection and the resolver (the resolver is what
+# pushes them), so the remote set cannot change within a run. The resolver still
+# re-reads LOCAL `git tag -l` live (cheap, no token) for idempotency. Mirrors the
+# PREFLIGHT_RULESET_* / PREFLIGHT_MANAGED_BRANCHES memoization that conserves the
+# adopter's rate limit.
+PREFLIGHT_REMOTE_TAGS=""
 preflight_detect_version_tag_shape() {
   local tags tag bare_semver="" non_semver=""
   # git tag -l always works in a git repo (no token); never errors the run.
   tags="$(git tag -l 2>/dev/null || true)"
   # Best-effort cross-check of remote tags; merge + dedupe. Swallow all errors so
-  # a missing token / network leaves the local-tag result untouched.
+  # a missing token / network leaves the local-tag result untouched. Stash the
+  # remote set for the retag resolver (see PREFLIGHT_REMOTE_TAGS above).
   if [[ -n "${REPO:-}" ]]; then
-    local remote_tags
-    remote_tags="$(gh api "repos/$REPO/tags" --paginate -q '.[].name' 2>/dev/null || true)"
-    tags="$(printf '%s\n%s\n' "$tags" "$remote_tags" | sort -u)"
+    PREFLIGHT_REMOTE_TAGS="$(gh api "repos/$REPO/tags" --paginate -q '.[].name' 2>/dev/null || true)"
+    tags="$(printf '%s\n%s\n' "$tags" "$PREFLIGHT_REMOTE_TAGS" | sort -u)"
   fi
 
   while IFS= read -r tag; do
@@ -1113,17 +1122,19 @@ brownfield_confirm() {
 # re-derives independently from live state and applies the same filter defensively,
 # so a stale registry message can never make it create a duplicate.
 brownfield_resolver_tag_shape_bare_semver() {
-  local tags tag bare pairs="" had_any=0
-  # Re-derive the tag set EXACTLY as the detector does: local tags, plus remote
-  # tags when REPO is resolved (best-effort, errors swallowed), deduped.
+  local tags tag bare bare_tags="" had_any=0
+  # Re-derive the tag set the way the detector does: re-read LOCAL tags live (cheap,
+  # no token, and another resolver may have mutated tags this run), unioned with the
+  # remote set the detector already gathered (PREFLIGHT_REMOTE_TAGS) — no second
+  # paginated `gh api repos/$REPO/tags`, since remote tags can't change before the
+  # resolver that pushes them.
   tags="$(git tag -l 2>/dev/null || true)"
-  if [[ -n "${REPO:-}" ]]; then
-    local remote_tags
-    remote_tags="$(gh api "repos/$REPO/tags" --paginate -q '.[].name' 2>/dev/null || true)"
-    tags="$(printf '%s\n%s\n' "$tags" "$remote_tags" | sort -u)"
+  if [[ -n "${PREFLIGHT_REMOTE_TAGS:-}" ]]; then
+    tags="$(printf '%s\n%s\n' "$tags" "$PREFLIGHT_REMOTE_TAGS" | sort -u)"
   fi
 
-  # Build the X → vX pair list, skipping any X whose vX already exists (resolved).
+  # Collect the bare-semver tags to retag, skipping any X whose vX already exists
+  # (resolved). Each entry is the bare value X; the v-twin is derived as `v$X`.
   while IFS= read -r tag; do
     [[ -n "$tag" ]] || continue
     [[ "$tag" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?$ ]] || continue
@@ -1131,13 +1142,13 @@ brownfield_resolver_tag_shape_bare_semver() {
     if printf '%s\n' "$tags" | grep -qxF "v$tag"; then
       continue   # vX already exists — already retagged.
     fi
-    pairs+="$tag"$'\n'
+    bare_tags+="$tag"$'\n'
   done <<<"$tags"
 
   # Nothing left to do (all bare tags already have their v-twin) — treat as a
   # resolved no-op so the gate stops counting the block. The detector normally
   # prevents reaching here, but a stale message must not be a false hard-stop.
-  if [[ -z "$pairs" ]]; then
+  if [[ -z "$bare_tags" ]]; then
     if [[ "$had_any" -eq 1 ]]; then
       printf '  Bare-semver tags already retagged with a v-prefix — nothing to do.\n'
     fi
@@ -1151,7 +1162,7 @@ brownfield_resolver_tag_shape_bare_semver() {
   while IFS= read -r bare; do
     [[ -n "$bare" ]] || continue
     printf '    %s -> v%s\n' "$bare" "$bare"
-  done <<<"$pairs"
+  done <<<"$bare_tags"
 
   if ! brownfield_confirm "  Create and push these v-prefixed tags? [y/N] "; then
     return 1   # DECLINED — dispatcher prints the manual pointer; change nothing.
@@ -1174,7 +1185,7 @@ brownfield_resolver_tag_shape_bare_semver() {
       failed=1
       printf '  Created v%s locally but could not push it to origin.\n' "$bare"
     fi
-  done <<<"$pairs"
+  done <<<"$bare_tags"
 
   if [[ "$failed" -eq 1 ]]; then
     printf '  Push the remaining v-prefixed tag(s) yourself (check `origin` and your push access), then re-run.\n'
@@ -1185,26 +1196,17 @@ brownfield_resolver_tag_shape_bare_semver() {
   return 0   # APPLIED.
 }
 
-# _RELEASE_CONFLICT_RESOLVER_STATE — run-scoped guard for the prior release-system
-# removal resolver. The detector emits ONE release_conflict block per flagged file,
-# so brownfield_resolve calls the resolver once per file; this guard makes the
-# adopter prompted ONCE for the whole prior release system. Empty = not yet asked;
-# `applied`/`declined` = the decided outcome replayed on every subsequent call.
-_RELEASE_CONFLICT_RESOLVER_STATE=""
-
 # brownfield_resolver_release_conflict — the PRIOR RELEASE-SYSTEM REMOVAL resolver
 # (SPEC.md §spec:brownfield-resolvers "Prior release-system removal",
 # docs/adopter/setup.md §0.2). Implements the WS0 RESOLVER CONTRACT: show the full
 # change, confirm via brownfield_confirm, return 0=applied / 1=declined / 2=unable.
 #
 # The detector flags one block per conflicting file (a goreleaser/changesets config,
-# a release-please/semantic-release/hand-rolled workflow), so this resolver is
-# invoked once PER file. A run-scoped guard (_RELEASE_CONFLICT_RESOLVER_STATE)
-# collapses those calls into a SINGLE consolidated offer: the FIRST call computes the
-# whole removal set from RELEASE_CONFLICT_PATHS (filtered to paths still on disk —
-# idempotency for a path already removed earlier this run or by a prior run), shows
-# it, and confirms once; EVERY subsequent call replays the guarded outcome WITHOUT
-# re-prompting or re-removing.
+# a release-please/semantic-release/hand-rolled workflow). brownfield_resolve dedups
+# by token and invokes this resolver ONCE per run, so a single consolidated offer
+# covers the whole prior release system: it computes the removal set from
+# RELEASE_CONFLICT_PATHS (filtered to paths still on disk — idempotency for a path
+# already removed earlier this run or by a prior run), shows it, and confirms once.
 #
 # Removal is RECOVERABLE: each path is removed with `git rm` (file) / `git rm -r`
 # (the .changeset dir), so it stays in git history and can be restored with
@@ -1213,13 +1215,7 @@ _RELEASE_CONFLICT_RESOLVER_STATE=""
 # `--override-release-conflict` layer-on-top behavior — two release systems never
 # run at once.
 brownfield_resolver_release_conflict() {
-  # Subsequent calls (guard set): replay the decided outcome, no re-prompt.
-  case "$_RELEASE_CONFLICT_RESOLVER_STATE" in
-    applied)  return 0 ;;
-    declined) return 1 ;;
-  esac
-
-  # FIRST call: compute the removal set = flagged paths that still EXIST on disk.
+  # Compute the removal set = flagged paths that still EXIST on disk.
   local path remove=()
   for path in "${RELEASE_CONFLICT_PATHS[@]}"; do
     [[ -e "$path" ]] && remove+=("$path")
@@ -1227,7 +1223,6 @@ brownfield_resolver_release_conflict() {
 
   # Nothing left to remove (all already gone) — a resolved no-op.
   if [[ "${#remove[@]}" -eq 0 ]]; then
-    _RELEASE_CONFLICT_RESOLVER_STATE="applied"
     return 0
   fi
 
@@ -1240,7 +1235,6 @@ brownfield_resolver_release_conflict() {
   printf '  history and can be restored with `git checkout`/`git revert`.\n'
 
   if ! brownfield_confirm "  Remove these prior release-system files? [y/N] "; then
-    _RELEASE_CONFLICT_RESOLVER_STATE="declined"
     return 1   # DECLINED — dispatcher prints the manual pointer; change nothing.
   fi
 
@@ -1271,15 +1265,8 @@ brownfield_resolver_release_conflict() {
   done
 
   printf '  Removed prior release-system file(s): %s.\n' "$removed"
-  _RELEASE_CONFLICT_RESOLVER_STATE="applied"
   return 0   # APPLIED.
 }
-
-# _BYPASS_RESOLVER_STATE — run-scoped guard for the bypass-actor resolver. The
-# detector emits ONE aggregated branch_protection_bypass block, so the resolver is
-# normally invoked once; this guard keeps a stray re-call (or a future per-branch
-# emit) from re-prompting / re-PUTting. Empty = not yet decided.
-_BYPASS_RESOLVER_STATE=""
 
 # _bypass_blocking_rule_labels <detail-json> — print the human labels for the
 # blocking rule types this ruleset carries (one per line), so the offer can name
@@ -1324,20 +1311,12 @@ _bypass_blocking_rule_labels() {
 # pushes through. Any PUT failure → report the limit, return 2 (no partial-success
 # claim). All targets updated → brief confirmation, return 0.
 brownfield_resolver_branch_protection_bypass() {
-  # Subsequent calls (guard set): replay the decided outcome, no re-prompt/re-PUT.
-  case "$_BYPASS_RESOLVER_STATE" in
-    applied)  return 0 ;;
-    declined) return 1 ;;
-    unable)   return 2 ;;
-  esac
-
   # NO-PRIVILEGE-ESCALATION GATE (first). If we couldn't even read the rulesets,
   # the token lacks repo-admin — report the limit, route to manual, never escalate.
   if [[ "${PREFLIGHT_RULESET_UNREADABLE:-0}" -eq 1 ]]; then
     printf '  Branch-protection bypass: your token cannot read this repo'\''s rulesets\n'
     printf '  (repo-admin required). Add the Flywheel App as a bypass actor yourself, or\n'
     printf '  re-run with an admin token: docs/adopter/setup.md §0.\n'
-    _BYPASS_RESOLVER_STATE="unable"
     return 2
   fi
 
@@ -1347,7 +1326,6 @@ brownfield_resolver_branch_protection_bypass() {
     printf '  Branch-protection bypass: the Flywheel App ID is not known yet, so the\n'
     printf '  bypass entry can'\''t be constructed. Provision the App (it writes\n'
     printf '  FLYWHEEL_GH_APP_ID), then add the App as a bypass actor: docs/adopter/setup.md §0.\n'
-    _BYPASS_RESOLVER_STATE="unable"
     return 2
   fi
 
@@ -1363,7 +1341,6 @@ brownfield_resolver_branch_protection_bypass() {
   # nothing to PUT — route entirely to manual.
   if [[ "${#BYPASS_RULESET_IDS[@]}" -eq 0 ]]; then
     printf '  No editable ruleset covers the affected branch(es) — routing to manual: docs/adopter/setup.md §0.\n'
-    _BYPASS_RESOLVER_STATE="unable"
     return 2
   fi
 
@@ -1392,7 +1369,6 @@ brownfield_resolver_branch_protection_bypass() {
   printf '  bypass actors at any time.\n'
 
   if ! brownfield_confirm "  Add the Flywheel App as a bypass actor on these ruleset(s)? [y/N] "; then
-    _BYPASS_RESOLVER_STATE="declined"
     return 1   # DECLINED — dispatcher prints the manual pointer; change nothing.
   fi
 
@@ -1417,7 +1393,6 @@ brownfield_resolver_branch_protection_bypass() {
       2>/dev/null || true)"
     if [[ -z "$body" ]]; then
       printf '  Could not construct the update for ruleset id %s — routing to manual.\n' "$id"
-      _BYPASS_RESOLVER_STATE="unable"
       return 2
     fi
     if printf '%s' "$body" | gh api -X PUT "repos/$REPO/rulesets/$id" --input - >/dev/null 2>&1; then
@@ -1427,13 +1402,11 @@ brownfield_resolver_branch_protection_bypass() {
       # route to manual. Do not retry with a broader token; do not claim success.
       printf '  Could not update ruleset id %s (this needs repo-admin) — add the App as a\n' "$id"
       printf '  bypass actor yourself, or re-run with an admin token: docs/adopter/setup.md §0.\n'
-      _BYPASS_RESOLVER_STATE="unable"
       return 2
     fi
   done
 
   printf '  Added the Flywheel App (id %s) as a bypass actor on ruleset(s): %s.\n' "$app_id" "$updated"
-  _BYPASS_RESOLVER_STATE="applied"
   return 0   # APPLIED.
 }
 
@@ -1496,6 +1469,15 @@ _bypass_cached_detail() {
 brownfield_resolve() {
   [[ "${#BROWNFIELD_CONDITIONS[@]}" -gt 0 ]] || return 0
   local rec token bucket severity resolvable message printed_header=0
+  # Per-token resolver-result cache. A resolver runs at most ONCE per run even when
+  # the detector emits several block records for one token (release_conflict emits
+  # one block per flagged file). Each record still records its own outcome and
+  # decrements the gate count, so the per-file summary lines and block accounting
+  # are unchanged — only the resolver CALL (its prompt + mutation) is deduplicated.
+  # This keeps the resolvers pure: none needs a run-scoped guard of its own, and a
+  # resolver that returns 2 (unable) is never re-prompted on a sibling record.
+  # bash 3.2-safe: a newline list of "<token>\t<rc>" scanned with a read loop.
+  local dispatched=""
   for rec in "${BROWNFIELD_CONDITIONS[@]}"; do
     IFS=$'\t' read -r token bucket severity resolvable message <<< "$rec"
     # Advisory infos are folded into the completion summary later — not here.
@@ -1505,10 +1487,18 @@ brownfield_resolve() {
     # interactive (no mutation otherwise), and the resolver function exists.
     if [[ "$resolvable" == "yes" && "$INTERACTIVE" -eq 1 ]] \
        && declare -F "brownfield_resolver_${token}" >/dev/null 2>&1; then
-      # `|| rc=$?` keeps a non-zero resolver return (declined/unable) from tripping
-      # `set -e` before we can branch on it.
-      local rc=0
-      "brownfield_resolver_${token}" "$message" || rc=$?
+      # Reuse this token's result if a prior record already dispatched its resolver;
+      # otherwise call it once and cache the code. `|| rc=$?` keeps a non-zero return
+      # (declined/unable) from tripping `set -e` before we can branch on it.
+      local rc="" dt drc
+      while IFS=$'\t' read -r dt drc; do
+        [[ "$dt" == "$token" ]] && { rc="$drc"; break; }
+      done <<< "$dispatched"
+      if [[ -z "$rc" ]]; then
+        rc=0
+        "brownfield_resolver_${token}" "$message" || rc=$?
+        dispatched+="${token}"$'\t'"${rc}"$'\n'
+      fi
       case "$rc" in
         0) # APPLIED — change made; stop the gate counting this block.
           BROWNFIELD_OUTCOMES+=("${token}"$'\t'resolved$'\t'"${bucket}"$'\t'"${severity}"$'\t'"${message}")
