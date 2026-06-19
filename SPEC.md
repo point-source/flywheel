@@ -1130,7 +1130,7 @@ rather than an already-superseded one. §req:setup-node-v5
 
 ## init.sh credentials prompt §spec:init-credentials-prompt
 
-*Status: in progress — naming/vocabulary half landed (#235-1); partial-state detection pending (#235-2)*
+*Status: landed — naming/vocabulary half (#235-1) and partial-state detection half (#235-2) both shipped*
 
 When an adopter runs `scripts/init.sh` interactively on an
 organization-owned repository, the credential prompts name the two things
