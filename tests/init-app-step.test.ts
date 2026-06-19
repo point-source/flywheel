@@ -38,9 +38,7 @@ describe("init.sh GitHub-App step copy", () => {
   });
 
   it("explains why an App and not a personal access token", () => {
-    expect(source).toContain(
-      "Why an App and not a personal access token",
-    );
+    expect(source).toContain("Why an App and not a personal access token");
     expect(source).toContain("Integration-type bypass actor");
   });
 
