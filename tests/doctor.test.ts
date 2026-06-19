@@ -174,18 +174,18 @@ function setupGhStub(opts: StubOpts = {}): { binDir: string; cleanup: () => void
   // list call failed → could-not-verify), "present"/"absent" succeed with a
   // populated/empty list. The success JSON omits GH_PAT so no unrelated warn
   // fires (see credSecretList doc).
-  const varListArm =
-    credVarList === "forbidden"
+  const listArm = (
+    kind: "variables" | "secrets",
+    name: string,
+    state: "present" | "absent" | "forbidden",
+  ): string =>
+    state === "forbidden"
       ? "exit 1"
-      : credVarList === "present"
-        ? `printf '%s\\n' '{"variables":[{"name":"FLYWHEEL_GH_APP_ID"}]}'`
-        : `printf '%s\\n' '{"variables":[]}'`;
-  const secretListArm =
-    credSecretList === "forbidden"
-      ? "exit 1"
-      : credSecretList === "present"
-        ? `printf '%s\\n' '{"secrets":[{"name":"FLYWHEEL_GH_APP_PRIVATE_KEY"}]}'`
-        : `printf '%s\\n' '{"secrets":[]}'`;
+      : state === "present"
+        ? `printf '%s\\n' '{"${kind}":[{"name":"${name}"}]}'`
+        : `printf '%s\\n' '{"${kind}":[]}'`;
+  const varListArm = listArm("variables", "FLYWHEEL_GH_APP_ID", credVarList);
+  const secretListArm = listArm("secrets", "FLYWHEEL_GH_APP_PRIVATE_KEY", credSecretList);
 
   const binDir = mkdtempSync(join(tmpdir(), "flywheel-doctor-bin-"));
 
@@ -331,23 +331,19 @@ interface RunResult {
   stderr: string;
 }
 
-/** Run doctor.sh against REPO with the given stub, from a throwaway cwd. */
-function runDoctor(binDir: string, cwd: string, extraArgs: string[] = []): RunResult {
-  const r = spawnSync("bash", [scriptPath, "--skip-credentials", ...extraArgs, REPO], {
-    cwd,
-    env: { ...process.env, PATH: `${binDir}:${process.env.PATH ?? ""}` },
-    encoding: "utf8",
-  });
-  return { exitCode: r.status ?? -1, stdout: r.stdout ?? "", stderr: r.stderr ?? "" };
-}
-
-/** Like runDoctor but WITHOUT --skip-credentials, so doctor's App-token
- * credential block (§spec:doctor-credential-clarity, #237) actually runs and
- * hits the repos/<REPO>/actions/{variables,secrets} stub arms. Kept separate so
- * every existing call site (which must NOT exercise credentials) stays
- * byte-identical. */
-function runDoctorCreds(binDir: string, cwd: string, extraArgs: string[] = []): RunResult {
-  const r = spawnSync("bash", [scriptPath, ...extraArgs, REPO], {
+/** Run doctor.sh against REPO with the given stub, from a throwaway cwd. By
+ * default passes --skip-credentials so the App-token credential block is not
+ * exercised (the stub stays small); pass { skipCredentials: false } to run that
+ * block — the §spec:doctor-credential-clarity (#237) path that hits the
+ * repos/<REPO>/actions/{variables,secrets} stub arms. */
+function runDoctor(
+  binDir: string,
+  cwd: string,
+  extraArgs: string[] = [],
+  { skipCredentials = true }: { skipCredentials?: boolean } = {},
+): RunResult {
+  const flags = skipCredentials ? ["--skip-credentials"] : [];
+  const r = spawnSync("bash", [scriptPath, ...flags, ...extraArgs, REPO], {
     cwd,
     env: { ...process.env, PATH: `${binDir}:${process.env.PATH ?? ""}` },
     encoding: "utf8",
@@ -920,7 +916,7 @@ describe.skipIf(!depsAvailable)(
 //                        defect in the repo). This is a WARN → exit 0.
 //   - genuinely-missing→ fail config "… missing" (the LIST succeeded but the
 //                        name is absent). This is a BLOCK → exit 1.
-// These tests drive doctor through runDoctorCreds so the block actually runs,
+// These tests drive doctor with { skipCredentials: false } so the block runs,
 // and pin that could-not-verify never collapses into a false "missing" block.
 describe.skipIf(!depsAvailable)("doctor.sh — App-token credential clarity (#237)", () => {
   it("could-not-verify → [local-env] warn, exit 0 (regression guard)", () => {
@@ -931,7 +927,7 @@ describe.skipIf(!depsAvailable)("doctor.sh — App-token credential clarity (#23
     const stub = setupGhStub({ credVarList: "forbidden", credSecretList: "forbidden" });
     const cwd = mkdtempSync(join(tmpdir(), "flywheel-doctor-cwd-"));
     try {
-      const r = runDoctorCreds(stub.binDir, cwd);
+      const r = runDoctor(stub.binDir, cwd, [], { skipCredentials: false });
       const plain = stripAnsi(r.stdout);
 
       // Both could-not-verify lines surface, each on a [local-env] warn line.
@@ -968,7 +964,7 @@ describe.skipIf(!depsAvailable)("doctor.sh — App-token credential clarity (#23
     const stub = setupGhStub({ credVarList: "absent", credSecretList: "absent" });
     const cwd = mkdtempSync(join(tmpdir(), "flywheel-doctor-cwd-"));
     try {
-      const r = runDoctorCreds(stub.binDir, cwd);
+      const r = runDoctor(stub.binDir, cwd, [], { skipCredentials: false });
       const plain = stripAnsi(r.stdout);
 
       // The App-ID variable is reported missing, with the gh-variable-set fix.
@@ -1005,7 +1001,7 @@ describe.skipIf(!depsAvailable)("doctor.sh — App-token credential clarity (#23
     const stub = setupGhStub({ credVarList: "present", credSecretList: "present" });
     const cwd = mkdtempSync(join(tmpdir(), "flywheel-doctor-cwd-"));
     try {
-      const r = runDoctorCreds(stub.binDir, cwd);
+      const r = runDoctor(stub.binDir, cwd, [], { skipCredentials: false });
       const plain = stripAnsi(r.stdout);
 
       expect(plain).toContain("FLYWHEEL_GH_APP_ID variable set (repo)");
