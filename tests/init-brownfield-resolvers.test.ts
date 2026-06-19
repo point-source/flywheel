@@ -989,3 +989,231 @@ describe("App bypass-actor resolver", () => {
     }
   });
 });
+
+// ===========================================================================
+// WS4 (#233-3) — INTEGRATION SURFACE: completion-summary verification +
+// "accept some, decline others" end-to-end (SPEC.md §spec:brownfield-resolvers,
+// §spec:brownfield-resolution "accept some, decline others",
+// §spec:setup-completion-summary, §spec:setup-exit-contract).
+//
+// These drive a resolver to COMPLETION (past the gate, through the scaffold, into
+// the end-of-run completion summary) and assert the resolved/declined block
+// outcomes surface in the shared bucket × severity vocabulary, with the right
+// effect on the complete/incomplete verdict:
+//   * a RESOLVED block folds in as a `configured` outcome and — being a completed
+//     step, not an outstanding blocker — does NOT keep the verdict incomplete, so
+//     the run reaches a `complete` verdict (exit 0).
+//   * a DECLINED block folds in as a `deferred` outcome and, since it is an
+//     UNRESOLVED block-severity finding the adopter deferred, KEEPS the verdict
+//     incomplete (exit != 0) — but the run still reaches the summary (the gate
+//     passed because the block was uncounted), it does not hard-stop at §0.
+// ===========================================================================
+
+/** Make a work dir wired with the resolver gh + green doctor stubs that holds BOTH
+ * pre-existing version `tags` AND arbitrary `files` (committed so a `git rm` removal
+ * stays recoverable), plus a local bare `origin` so a retag push succeeds. Used by
+ * the multi-condition "accept some, decline others" PTY case. */
+function makeMixedWorkdir(opts: {
+  tags?: string[];
+  files?: Record<string, string>;
+}): { work: string; binDir: string; doctorStub: string } {
+  const work = mkdtempSync(join(tmpdir(), "flywheel-mixed-"));
+  const binDir = join(work, "bin");
+  mkdirSync(binDir);
+  const gh = join(binDir, "gh");
+  writeFileSync(gh, GH_STUB);
+  chmodSync(gh, 0o755);
+  const doctorStub = writeDoctorStub(binDir, { blocks: 0, warns: 0 });
+  execFileSync("git", ["init", "-q"], { cwd: work });
+  for (const [rel, contents] of Object.entries(opts.files ?? {})) {
+    const dest = join(work, rel);
+    mkdirSync(dirname(dest), { recursive: true });
+    writeFileSync(dest, contents);
+  }
+  // One commit (with the files) gives the tags something to point at AND tracks
+  // the release-system file so `git rm` keeps it in history (RECOVERABLE).
+  execFileSync("git", ["add", "-A"], { cwd: work, env: gitEnv });
+  execFileSync("git", ["commit", "-q", "--allow-empty", "-m", "init"], {
+    cwd: work,
+    env: gitEnv,
+  });
+  for (const tag of opts.tags ?? []) {
+    execFileSync("git", ["tag", tag], { cwd: work, env: gitEnv });
+  }
+  const bare = join(work, "origin.git");
+  execFileSync("git", ["init", "-q", "--bare", bare], { cwd: work });
+  execFileSync("git", ["remote", "add", "origin", bare], { cwd: work, env: gitEnv });
+  return { work, binDir, doctorStub };
+}
+
+// A pty driver that feeds answers ONE AT A TIME, each after the child's output
+// settles — needed when a single run presents TWO offers and the adopter answers
+// them differently ("accept some, decline others"). The base PTY_DRIVER writes the
+// whole answer string at once, which works for a single prompt but cannot target
+// distinct prompts. Answers arrive as a comma-joined list; each is sent (with a
+// trailing newline) once ~0.4s passes with no new output.
+const PTY_DRIVER_SEQ = String.raw`
+import json, os, pty, re, select, sys, time
+
+cfg = json.loads(sys.argv[1])
+env = dict(os.environ)
+env["PATH"] = cfg["bin"] + ":" + env.get("PATH", "")
+env["FLYWHEEL_TEST_HOOKS"] = "1"
+env["FLYWHEEL_DOCTOR_OVERRIDE"] = cfg["doctor"]
+
+parts = [a + "\n" for a in cfg["answers"].split(",")]
+argv = ["bash", cfg["init"]] + cfg["args"]
+
+pid, fd = pty.fork()
+if pid == 0:
+    os.chdir(cfg["cwd"])
+    os.execvpe("bash", argv, env)
+
+out = b""
+idx = 0
+last = time.time()
+deadline = time.time() + 30
+while time.time() < deadline:
+    r, _, _ = select.select([fd], [], [], 0.3)
+    if r:
+        try:
+            chunk = os.read(fd, 4096)
+        except OSError:
+            break
+        if not chunk:
+            break
+        out += chunk
+        last = time.time()
+    if idx < len(parts) and time.time() - last > 0.4:
+        os.write(fd, parts[idx].encode())
+        idx += 1
+        last = time.time()
+try:
+    os.close(fd)
+except OSError:
+    pass
+_, status = os.waitpid(pid, 0)
+code = os.waitstatus_to_exitcode(status)
+text = re.sub(r"\x1b\[[0-9;]*m", "", out.decode("utf-8", "replace"))
+print(json.dumps({"exit": code, "out": text}))
+`;
+
+/** Drive init under a real pty against a mixed (tags + files) work dir, feeding the
+ * comma-separated `answers` one per prompt. Returns exit + ANSI-stripped output +
+ * work dir (caller asserts mutations, then rmSync's it). */
+function runInitMixedPty(opts: {
+  answers: string;
+  tags?: string[];
+  files?: Record<string, string>;
+}): PtyResult {
+  const { work, binDir, doctorStub } = makeMixedWorkdir(opts);
+  const cfg = JSON.stringify({
+    bin: binDir,
+    doctor: doctorStub,
+    init: initSh,
+    args: SCAFFOLD_ARGS,
+    cwd: work,
+    answers: opts.answers,
+  });
+  const r = spawnSync("python3", ["-c", PTY_DRIVER_SEQ, cfg], {
+    cwd: work,
+    encoding: "utf8",
+    timeout: 45000,
+  });
+  if (r.status !== 0 || !r.stdout) {
+    rmSync(work, { recursive: true, force: true });
+    throw new Error(
+      `pty driver failed (status ${r.status}):\nstdout:\n${r.stdout}\nstderr:\n${r.stderr}`,
+    );
+  }
+  const lines = r.stdout.trim().split("\n");
+  const lastLine = lines[lines.length - 1] ?? "";
+  const parsed = JSON.parse(lastLine) as { exit: number; out: string };
+  return { exit: parsed.exit, out: stripAnsi(parsed.out), work };
+}
+
+describe("brownfield resolution → completion summary", () => {
+  it("resolved (retag y) ⇒ block folds in as configured, verdict complete, exit 0", () => {
+    const r = runInitPty({
+      answers: "y\n",
+      tags: ["3.4.2"],
+      withOrigin: true,
+    });
+    try {
+      // The block reaches the summary in the shared vocab as a configured outcome…
+      expect(r.out).toContain("Flywheel setup summary for");
+      expect(r.out).toMatch(/brownfield: bare-semver tag\(s\) 3\.4\.2 .*— configured/);
+      // …and a resolved block is a completed step, not an outstanding blocker, so
+      // the run lands on a `complete` verdict (exit 0).
+      expect(r.out).toContain("complete");
+      expect(r.out).not.toContain("incomplete");
+      expect(r.exit, `out:\n${r.out}`).toBe(0);
+      // The retag actually happened (the summary reflects a real mutation).
+      expect(localTags(r.work)).toContain("v3.4.2");
+    } finally {
+      rmSync(r.work, { recursive: true, force: true });
+    }
+  });
+
+  it("declined (retag n) ⇒ block folds in as deferred, keeps verdict incomplete, still reaches summary", () => {
+    const r = runInitPty({
+      answers: "n\n",
+      tags: ["3.4.2"],
+      withOrigin: true,
+    });
+    try {
+      // The gate passed (block uncounted) so the run reaches the scaffold + summary
+      // rather than hard-stopping at §0 — the summary section is printed.
+      expect(r.out).toContain("Flywheel setup summary for");
+      // A declined block folds in as a deferred outcome in the shared vocabulary.
+      expect(r.out).toMatch(/brownfield: bare-semver tag\(s\) 3\.4\.2 .*— deferred/);
+      // …but it is an UNRESOLVED block the adopter deferred → verdict stays incomplete.
+      expect(r.out).toContain("incomplete");
+      expect(r.exit, `out:\n${r.out}`).not.toBe(0);
+      // Declined → nothing was retagged.
+      expect(localTags(r.work)).not.toContain("v3.4.2");
+      expect(localTags(r.work)).toContain("3.4.2");
+    } finally {
+      rmSync(r.work, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("brownfield resolution — accept some, decline others (single run)", () => {
+  it("two blocks, accept retag + decline release removal ⇒ accepted applied, declined left, run continues, summary records both", () => {
+    // Detection order: release_conflict is gathered BEFORE version_tag_shape
+    // (preflight_run), so brownfield_resolve offers the release-removal first and
+    // the retag second. Answer: n (decline removal), then y (accept retag).
+    const r = runInitMixedPty({
+      answers: "n,y",
+      tags: ["3.4.2"],
+      files: { ".goreleaser.yml": GORELEASER_CONFIG },
+    });
+    try {
+      // Both offers were presented in the one run.
+      expect(r.out).toContain("Remove these prior release-system files?");
+      expect(r.out).toContain("Create and push these v-prefixed tags?");
+
+      // The ACCEPTED retag was applied; the DECLINED release file was left untouched.
+      expect(localTags(r.work)).toContain("v3.4.2");
+      expect(existsSync(join(r.work, ".goreleaser.yml"))).toBe(true);
+
+      // The run CONTINUED past the gate (both blocks uncounted) into the scaffold +
+      // summary — it did not hard-stop at §0.
+      expect(r.out).toContain("Flywheel setup summary for");
+      expect(existsSync(join(r.work, ".flywheel.yml"))).toBe(true);
+
+      // The summary records BOTH outcomes in the shared vocabulary: the retag as a
+      // configured step, the declined removal as a deferred one.
+      expect(r.out).toMatch(/brownfield: bare-semver tag\(s\) 3\.4\.2 .*— configured/);
+      expect(r.out).toMatch(/brownfield: goreleaser detected in \.goreleaser\.yml.*— deferred/);
+
+      // A deferred (declined) block keeps the verdict incomplete; the run still
+      // completed end-to-end (reached the summary above).
+      expect(r.out).toContain("incomplete");
+      expect(r.exit, `out:\n${r.out}`).not.toBe(0);
+    } finally {
+      rmSync(r.work, { recursive: true, force: true });
+    }
+  });
+});

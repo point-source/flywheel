@@ -3431,7 +3431,7 @@ which catches exactly the cases automation shall not touch.
 
 ## Safe brownfield resolvers §spec:brownfield-resolvers
 
-*Status: not started*
+*Status: complete*
 
 The resolution flow (§spec:brownfield-resolution) offers exactly three inline
 resolvers — one per brownfield condition flywheel can change without risking the

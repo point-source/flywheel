@@ -1745,11 +1745,15 @@ print_completion_summary() {
         esac
       fi
       # N (the count that drives "incomplete") = records whose outcome is `failed`
-      # OR whose severity is `block`. A deliberate skip (deferred warn/info) never
-      # counts. SPEC.md §spec:setup-completion-summary: "only a step that was meant
-      # to run and failed, or an unresolved block-severity finding, makes the
-      # verdict incomplete".
-      if [[ "$outcome" == "failed" || "$severity" == "block" ]]; then
+      # OR an UNRESOLVED block-severity finding. A deliberate skip (deferred
+      # warn/info) never counts; neither does a `configured` step that happens to
+      # carry block severity — a resolved brownfield block (resolution phase ->
+      # `configured`, severity `block`) is a completed step, not an outstanding
+      # blocker (§spec:brownfield-resolution "the run still completes"). SPEC.md
+      # §spec:setup-completion-summary: "only a step that was meant to run and
+      # failed, or an unresolved block-severity finding, makes the verdict
+      # incomplete".
+      if [[ "$outcome" == "failed" || ( "$severity" == "block" && "$outcome" != "configured" ) ]]; then
         incomplete_count=$((incomplete_count + 1))
       fi
       # warn-severity items (deliberate deferrals like skipped App creds /
