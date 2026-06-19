@@ -1,3 +1,10 @@
+# [2.1.0-dev.9](https://github.com/point-source/flywheel/compare/v2.1.0-dev.8...v2.1.0-dev.9) (2026-06-19)
+
+
+### Features
+
+* clarify init.sh App-credential prompts and prompt only for the gap ([#259](https://github.com/point-source/flywheel/issues/259)) ([01206fb](https://github.com/point-source/flywheel/commit/01206fbefbe799115ad56f6aef19b88016d5c122)), closes [#235](https://github.com/point-source/flywheel/issues/235) [#235](https://github.com/point-source/flywheel/issues/235) [#235](https://github.com/point-source/flywheel/issues/235) [#235](https://github.com/point-source/flywheel/issues/235) [#235](https://github.com/point-source/flywheel/issues/235) [#235](https://github.com/point-source/flywheel/issues/235) [#235](https://github.com/point-source/flywheel/issues/235) [#235](https://github.com/point-source/flywheel/issues/235) [#235](https://github.com/point-source/flywheel/issues/235) [#235](https://github.com/point-source/flywheel/issues/235) [#235](https://github.com/point-source/flywheel/issues/235) [#235](https://github.com/point-source/flywheel/issues/235)
+
 # [2.1.0-dev.8](https://github.com/point-source/flywheel/compare/v2.1.0-dev.7...v2.1.0-dev.8) (2026-06-19)
 
 
