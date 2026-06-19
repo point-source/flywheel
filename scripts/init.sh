@@ -1130,7 +1130,23 @@ else
     app_creds_cmd="$(app_creds_finish_cmd "$SCOPE")"
 
     echo
-    echo "  Flywheel needs a GitHub App for installation tokens. Pick a setup path:"
+    echo "  Flywheel needs a GitHub App. The App is how the flywheel workflows act on"
+    echo "  this repo as a bot: push releases and tags, open and merge promotion PRs,"
+    echo "  and apply labels. To do that it needs these permissions: Contents"
+    echo "  (read/write), Pull requests (read/write), Issues (read/write), Checks"
+    echo "  (read/write), and Metadata (read)."
+    echo
+    echo "  The App is a permanent dependency, used on every workflow run for the life"
+    echo "  of the adoption — not one-time install scaffolding to delete later."
+    echo "  Changing it later means rotating its credential or revoking the App."
+    echo
+    echo "  Why an App and not a personal access token? Flywheel registers the App as"
+    echo "  an Integration-type bypass actor in the branch/tag rulesets so the bot can"
+    echo "  push to protected branches, and only a GitHub App can be that bypass actor."
+    echo "  A PAT would also tie the automation to one person's account and rate limit"
+    echo "  and live as a long-lived manual secret."
+    echo
+    echo "  Pick a setup path:"
     echo "    1) Create the App for me  — opens browser, ~30s round-trip"
     echo "    2) I have an App already — paste credentials manually"
     echo "    3) Skip — I'll set the App credentials later"
