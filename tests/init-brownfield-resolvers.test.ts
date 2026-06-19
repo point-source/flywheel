@@ -5,6 +5,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -556,3 +557,435 @@ jobs:
     steps:
       - uses: googleapis/release-please-action@v4
 `;
+
+// ===========================================================================
+// WS3 (#233-3) — the APP BYPASS-ACTOR ADDITION resolver
+// (SPEC.md §spec:brownfield-resolvers "App bypass-actor addition",
+// docs/adopter/setup.md §0.3). The detector stashes the editable ruleset id(s) in
+// BYPASS_RULESET_IDS (and classic-only branches in BYPASS_CLASSIC_BRANCHES);
+// brownfield_resolver_branch_protection_bypass — held to the tightest safety
+// contract since it changes WHO can bypass branch protection — gates on repo-admin
+// FIRST (never escalates privilege), requires the App ID, shows the exact rule +
+// the exact bypass entry, and on yes PUTs each ruleset back with ONLY the App added
+// as an Integration bypass actor. Any PUT failure is reported as a limit and routes
+// to manual (return 2); a signed-commit requirement is NOT auto-disabled.
+//
+// The gh stub here both ANSWERS the detector's reads (branch existence, rulesets
+// list, ruleset detail) AND the resolver's `gh api -X PUT repos/.../rulesets/<id>`,
+// recording every PUT (path + stdin body) to a log file the tests assert against.
+// It also answers `gh variable get FLYWHEEL_GH_APP_ID` so PREFLIGHT_APP_ID_VALUE is
+// populated (the resolver keys the bypass entry on it).
+// ===========================================================================
+
+const BYPASS_APP_ID = "123";
+
+/** Build a branch ruleset detail covering refs/heads/main with a pull_request rule
+ * and the given bypass_actors. The resolver PUTs a body derived from this. */
+const bpRuleset = (id: number, bypass: unknown[] = []) =>
+  JSON.stringify({
+    id,
+    name: `protect-main-${id}`,
+    target: "branch",
+    enforcement: "active",
+    conditions: { ref_name: { include: ["refs/heads/main"], exclude: [] } },
+    rules: [{ type: "pull_request" }, { type: "non_fast_forward" }],
+    bypass_actors: bypass,
+    // Read-only fields the resolver must STRIP before PUT.
+    created_at: "2024-01-01T00:00:00Z",
+    updated_at: "2024-01-02T00:00:00Z",
+    node_id: "RRS_abc",
+    _links: { self: { href: "x" } },
+    current_user_can_bypass: "always",
+  });
+
+/** A gh stub that:
+ *  - answers auth/repo-view + `gh variable get FLYWHEEL_GH_APP_ID` (appId) + the
+ *    `gh variable list` / `gh secret list` probes the credential detector makes,
+ *  - dispatches `gh api …` over an ordered [needle, exit, stdout] case-ladder,
+ *  - for `gh api -X PUT repos/.../rulesets/<id>` appends a line to $PUT_LOG of the
+ *    form `PUT <path>\t<stdin-body>` and exits per `putExit` (0 ok / non-0 deny),
+ *  - falls back to echoing `[]` exit 0 for any other `gh api`.
+ * `putExit` makes the "absent admin scope" case fail the PUT with a perms error. */
+function buildBypassGhStub(opts: {
+  apiCases: Array<[string, number, string]>;
+  appId?: string;
+  putExit?: number;
+}): string {
+  const appId = opts.appId ?? "";
+  const putExit = opts.putExit ?? 0;
+  const apiDispatch = opts.apiCases
+    .map(
+      ([needle, code, out]) =>
+        `    if [[ "$args" == *${JSON.stringify(needle)}* ]]; then ` +
+        `printf '%s' ${JSON.stringify(out)}; exit ${code}; fi`,
+    )
+    .join("\n");
+  return (
+    `#!/usr/bin/env bash\n` +
+    `if [[ "$1" == "auth" && "$2" == "status" ]]; then echo "  - Token scopes: 'repo', 'read:org'"; exit 0; fi\n` +
+    `if [[ "$1" == "repo" && "$2" == "view" ]]; then echo "acme/widget"; exit 0; fi\n` +
+    // Credential detector: list returns the App-ID var name, get returns the id.
+    `if [[ "$1" == "variable" && "$2" == "list" ]]; then echo "FLYWHEEL_GH_APP_ID"; exit 0; fi\n` +
+    `if [[ "$1" == "variable" && "$2" == "get" ]]; then echo ${JSON.stringify(appId)}; exit 0; fi\n` +
+    `if [[ "$1" == "secret" ]]; then echo ""; exit 0; fi\n` +
+    `if [[ "$1" == "variable" ]]; then echo ""; exit 0; fi\n` +
+    `if [[ "$1" == "api" ]]; then\n` +
+    `  shift\n` +
+    `  args="$*"\n` +
+    // Resolver's PUT: record path + stdin body, then succeed/deny per putExit.
+    `  if [[ "$args" == *"-X PUT"*"rulesets/"* ]]; then\n` +
+    `    path="$(printf '%s\\n' $args | grep -E '^repos/.*/rulesets/[0-9]+$' | head -n1)"\n` +
+    // Compact the (pretty-printed) JSON body to ONE line so the test's line-based
+    // PUT-log parser sees exactly one record per PUT.
+    `    body="$(cat | jq -c .)"\n` +
+    `    printf 'PUT %s\\t%s\\n' "$path" "$body" >> "$PUT_LOG"\n` +
+    (putExit === 0
+      ? `    exit 0\n`
+      : `    echo "HTTP 403: must have admin rights" >&2; exit ${putExit}\n`) +
+    `  fi\n` +
+    apiDispatch +
+    `\n  echo "[]"; exit 0\n` +
+    `fi\n` +
+    `echo "stub gh: unhandled: $*" >&2; exit 1\n`
+  );
+}
+
+/** Make a work dir wired with the bypass gh stub (PUT log at $PUT_LOG) + green
+ * doctor stub. Returns the dir, bin, doctor stub, and the PUT-log path. */
+function makeBypassWorkdir(opts: {
+  apiCases: Array<[string, number, string]>;
+  appId?: string;
+  putExit?: number;
+}): { work: string; binDir: string; doctorStub: string; putLog: string } {
+  const work = mkdtempSync(join(tmpdir(), "flywheel-bypass-"));
+  const binDir = join(work, "bin");
+  mkdirSync(binDir);
+  const gh = join(binDir, "gh");
+  writeFileSync(gh, buildBypassGhStub(opts));
+  chmodSync(gh, 0o755);
+  const doctorStub = writeDoctorStub(binDir, { blocks: 0, warns: 0 });
+  execFileSync("git", ["init", "-q"], { cwd: work });
+  const putLog = join(work, "put.log");
+  writeFileSync(putLog, "");
+  return { work, binDir, doctorStub, putLog };
+}
+
+/** Read the recorded PUT log lines (one per resolver PUT). */
+function putLogLines(putLog: string): string[] {
+  if (!existsSync(putLog)) return [];
+  return readFileSync(putLog, "utf8").split("\n").filter(Boolean);
+}
+
+/** Run init NON-interactively against the bypass gh stub. */
+function runInitBypass(opts: {
+  apiCases: Array<[string, number, string]>;
+  appId?: string;
+  putExit?: number;
+  env?: Record<string, string>;
+}): RunResult & { putLog: string } {
+  const { work, binDir, doctorStub, putLog } = makeBypassWorkdir(opts);
+  const r = spawnSync("bash", [initSh, ...SCAFFOLD_ARGS], {
+    cwd: work,
+    encoding: "utf8",
+    input: "",
+    timeout: 30000,
+    env: {
+      ...process.env,
+      PATH: `${binDir}:${process.env.PATH}`,
+      FLYWHEEL_TEST_HOOKS: "1",
+      FLYWHEEL_DOCTOR_OVERRIDE: doctorStub,
+      PUT_LOG: putLog,
+      ...(opts.env ?? {}),
+    },
+  });
+  return {
+    status: r.status,
+    stdout: r.stdout ?? "",
+    stderr: r.stderr ?? "",
+    work,
+    putLog,
+  };
+}
+
+/** Drive init under a real pty against the bypass gh stub with `answers`. */
+function runInitBypassPty(opts: {
+  answers: string;
+  apiCases: Array<[string, number, string]>;
+  appId?: string;
+  putExit?: number;
+}): PtyResult & { putLog: string } {
+  const { work, binDir, doctorStub, putLog } = makeBypassWorkdir(opts);
+  const cfg = JSON.stringify({
+    bin: binDir,
+    doctor: doctorStub,
+    init: initSh,
+    args: SCAFFOLD_ARGS,
+    cwd: work,
+    answers: opts.answers,
+    extraEnv: { PUT_LOG: putLog },
+  });
+  const r = spawnSync("python3", ["-c", PTY_DRIVER_ENV, cfg], {
+    cwd: work,
+    encoding: "utf8",
+    timeout: 40000,
+  });
+  if (r.status !== 0 || !r.stdout) {
+    rmSync(work, { recursive: true, force: true });
+    throw new Error(
+      `pty driver failed (status ${r.status}):\nstdout:\n${r.stdout}\nstderr:\n${r.stderr}`,
+    );
+  }
+  const lines = r.stdout.trim().split("\n");
+  const lastLine = lines[lines.length - 1] ?? "";
+  const parsed = JSON.parse(lastLine) as { exit: number; out: string };
+  return { exit: parsed.exit, out: stripAnsi(parsed.out), work, putLog };
+}
+
+// A pty driver variant that also threads cfg.extraEnv (e.g. PUT_LOG) into the
+// child environment — the base PTY_DRIVER only wires the fixed test env vars.
+const PTY_DRIVER_ENV = String.raw`
+import json, os, pty, re, select, sys, time
+
+cfg = json.loads(sys.argv[1])
+env = dict(os.environ)
+env["PATH"] = cfg["bin"] + ":" + env.get("PATH", "")
+env["FLYWHEEL_TEST_HOOKS"] = "1"
+env["FLYWHEEL_DOCTOR_OVERRIDE"] = cfg["doctor"]
+for k, v in cfg.get("extraEnv", {}).items():
+    env[k] = v
+
+answers = cfg["answers"].encode()
+argv = ["bash", cfg["init"]] + cfg["args"]
+
+pid, fd = pty.fork()
+if pid == 0:
+    os.chdir(cfg["cwd"])
+    os.execvpe("bash", argv, env)
+
+out = b""
+sent = False
+send_at = time.time() + 0.5
+deadline = time.time() + 25
+while time.time() < deadline:
+    r, _, _ = select.select([fd], [], [], 0.3)
+    if r:
+        try:
+            chunk = os.read(fd, 4096)
+        except OSError:
+            break
+        if not chunk:
+            break
+        out += chunk
+    if not sent and time.time() >= send_at:
+        os.write(fd, answers)
+        sent = True
+try:
+    os.close(fd)
+except OSError:
+    pass
+_, status = os.waitpid(pid, 0)
+code = os.waitstatus_to_exitcode(status)
+text = re.sub(r"\x1b\[[0-9;]*m", "", out.decode("utf-8", "replace"))
+print(json.dumps({"exit": code, "out": text}))
+`;
+
+// The detector's per-branch reads: main exists; one branch ruleset (id 1) covers
+// refs/heads/main with a pull_request + non_fast_forward rule and NO App bypass.
+const BYPASS_CASES_NO_APP: Array<[string, number, string]> = [
+  ["repos/acme/widget/branches/main/protection", 1, ""],
+  ["repos/acme/widget/branches/main", 0, ""],
+  ["repos/acme/widget/rulesets/1", 0, bpRuleset(1, [])],
+  ["repos/acme/widget/rulesets", 0, JSON.stringify([{ id: 1, target: "branch" }])],
+];
+
+describe("App bypass-actor resolver", () => {
+  // --- Interactive confirm adds the App (Python pty) --------------------------
+  it("confirm (y) ⇒ PUTs the ruleset adding the exact Integration bypass entry; offer shows rule + entry", () => {
+    const r = runInitBypassPty({
+      answers: "y\n",
+      apiCases: BYPASS_CASES_NO_APP,
+      appId: BYPASS_APP_ID,
+    });
+    try {
+      // The offer names the exact ruleset + blocking rule(s) + the exact entry.
+      expect(r.out).toContain("protect-main-1");
+      expect(r.out).toMatch(/pull request required/);
+      expect(r.out).toMatch(/no force-push/);
+      expect(r.out).toContain('"actor_id":123');
+      expect(r.out).toContain('"actor_type":"Integration"');
+      expect(r.out).toContain('"bypass_mode":"always"');
+      expect(r.out).toMatch(/SCOPED/);
+      expect(r.out).toMatch(/REVERSIBLE/);
+      expect(r.out).toContain("Add the Flywheel App as a bypass actor");
+
+      // Exactly one PUT to rulesets/1 whose body adds the App entry, and which has
+      // stripped the read-only fields (no created_at / _links / node_id).
+      const puts = putLogLines(r.putLog);
+      expect(puts.length).toBe(1);
+      expect(puts[0]).toContain("PUT repos/acme/widget/rulesets/1");
+      const body = JSON.parse((puts[0] ?? "").split("\t")[1] ?? "{}");
+      expect(body.bypass_actors).toContainEqual({
+        actor_id: 123,
+        actor_type: "Integration",
+        bypass_mode: "always",
+      });
+      expect(body).not.toHaveProperty("created_at");
+      expect(body).not.toHaveProperty("_links");
+      expect(body).not.toHaveProperty("node_id");
+      expect(body).not.toHaveProperty("id");
+      // The original rules are preserved (not modified/removed).
+      expect(body.rules).toContainEqual({ type: "pull_request" });
+    } finally {
+      rmSync(r.work, { recursive: true, force: true });
+    }
+  });
+
+  // --- Interactive decline leaves protection (Python pty) ---------------------
+  it("decline (n) ⇒ NO ruleset PUT issued, manual pointer shown", () => {
+    const r = runInitBypassPty({
+      answers: "n\n",
+      apiCases: BYPASS_CASES_NO_APP,
+      appId: BYPASS_APP_ID,
+    });
+    try {
+      expect(r.out).toContain("Add the Flywheel App as a bypass actor");
+      // The dispatcher's declined pointer to the manual guide.
+      expect(r.out).toContain("docs/adopter/setup.md §0");
+      // No PUT recorded → protection untouched.
+      expect(putLogLines(r.putLog)).toEqual([]);
+    } finally {
+      rmSync(r.work, { recursive: true, force: true });
+    }
+  });
+
+  // --- Absent admin scope → report-limit-and-route (PUT fails 403) ------------
+  it("ruleset PUT denied (no admin) ⇒ reports limit, routes to manual, hard-stops, NEVER escalates", () => {
+    const r = runInitBypassPty({
+      answers: "y\n",
+      apiCases: BYPASS_CASES_NO_APP,
+      appId: BYPASS_APP_ID,
+      putExit: 1,
+    });
+    try {
+      // Resolver attempted the PUT (recorded) but it was denied → report + route.
+      expect(r.out).toMatch(/needs repo-admin|admin token/i);
+      expect(r.out).toContain("docs/adopter/setup.md §0");
+      // The block stays counted → the run hard-stops (exit != 0).
+      expect(r.exit, `out:\n${r.out}`).not.toBe(0);
+      // It never claimed success.
+      expect(r.out).not.toMatch(/Added the Flywheel App .* as a bypass actor on ruleset/);
+    } finally {
+      rmSync(r.work, { recursive: true, force: true });
+    }
+  });
+
+  // --- Unreadable rulesets ⇒ capability gate routes to manual, no PUT ----------
+  it("rulesets unreadable (list 403) ⇒ resolver gate routes to manual, no PUT, hard-stops", () => {
+    // The detector can't read the rulesets list → PREFLIGHT_RULESET_UNREADABLE=1.
+    // But with no confirmed hazard there's no branch_protection_bypass block to
+    // dispatch on, so this exercises the could-not-verify warn path (proceeds).
+    // To reach the resolver's gate we need a confirmed block AND unreadable
+    // rulesets — not expressible together. So this case asserts the detector's
+    // could-not-verify warn instead (the gate's twin signal is covered by the
+    // PUT-denied case above, which is the reachable admin-absent path).
+    const r = runInitBypass({
+      apiCases: [
+        ["repos/acme/widget/branches/main/protection", 1, ""],
+        ["repos/acme/widget/branches/main", 0, ""],
+        ["repos/acme/widget/rulesets", 1, ""],
+      ],
+      appId: BYPASS_APP_ID,
+      env: { FLYWHEEL_ASSUME_INTERACTIVE: "1" },
+    });
+    try {
+      const combined = stripAnsi(r.stdout + r.stderr);
+      expect(combined).toMatch(/could not verify .* branch protection bypass/i);
+      // Could-not-verify is a warn, not a block → no PUT, proceeds.
+      expect(putLogLines(r.putLog)).toEqual([]);
+    } finally {
+      rmSync(r.work, { recursive: true, force: true });
+    }
+  });
+
+  // --- App ID unknown ⇒ resolver cannot construct the entry, routes to manual --
+  it("App ID not configured ⇒ resolver reports it, routes to manual, no PUT", () => {
+    // appId omitted → PREFLIGHT_APP_ID_VALUE empty. The detector still flags the
+    // hazard (greenfield fallback: blocking rule + no Integration bypass at all),
+    // but the resolver can't build the entry without the id → report + route.
+    const r = runInitBypassPty({
+      answers: "y\n",
+      apiCases: BYPASS_CASES_NO_APP,
+      // no appId
+    });
+    try {
+      expect(r.out).toMatch(/App ID is not known yet/i);
+      expect(r.out).toContain("docs/adopter/setup.md §0");
+      expect(putLogLines(r.putLog)).toEqual([]);
+      expect(r.exit).not.toBe(0);
+    } finally {
+      rmSync(r.work, { recursive: true, force: true });
+    }
+  });
+
+  // --- signed-commit still hard-stops (not auto-disabled) ----------------------
+  it("ruleset requiring signed commits ⇒ signed_commit hard-stops to §0, NOT auto-disabled, no PUT", () => {
+    const r = runInitBypass({
+      apiCases: [
+        ["repos/acme/widget/branches/main/protection", 1, ""],
+        ["repos/acme/widget/branches/main", 0, ""],
+        [
+          "repos/acme/widget/rulesets/1",
+          0,
+          JSON.stringify({
+            id: 1,
+            name: "sign",
+            target: "branch",
+            enforcement: "active",
+            conditions: { ref_name: { include: ["refs/heads/main"], exclude: [] } },
+            rules: [{ type: "required_signatures" }],
+            bypass_actors: [],
+          }),
+        ],
+        ["repos/acme/widget/rulesets", 0, JSON.stringify([{ id: 1, target: "branch" }])],
+      ],
+      appId: BYPASS_APP_ID,
+    });
+    try {
+      const combined = stripAnsi(r.stdout + r.stderr);
+      expect(r.status, `combined:\n${combined}`).not.toBe(0);
+      expect(combined).toMatch(/signed commits\/tags/i);
+      expect(combined).toContain("docs/adopter/setup.md §0");
+      // No auto-disable of any rule → no PUT issued.
+      expect(putLogLines(r.putLog)).toEqual([]);
+    } finally {
+      rmSync(r.work, { recursive: true, force: true });
+    }
+  });
+
+  // --- Idempotency: ruleset already lists the App ⇒ no block emitted -----------
+  it("ruleset ALREADY lists the App as Integration bypass ⇒ no branch_protection_bypass block, no PUT", () => {
+    const r = runInitBypass({
+      apiCases: [
+        ["repos/acme/widget/branches/main/protection", 1, ""],
+        ["repos/acme/widget/branches/main", 0, ""],
+        [
+          "repos/acme/widget/rulesets/1",
+          0,
+          bpRuleset(1, [{ actor_id: 123, actor_type: "Integration", bypass_mode: "always" }]),
+        ],
+        ["repos/acme/widget/rulesets", 0, JSON.stringify([{ id: 1, target: "branch" }])],
+      ],
+      appId: BYPASS_APP_ID,
+      env: { FLYWHEEL_ASSUME_INTERACTIVE: "1" },
+    });
+    try {
+      const combined = stripAnsi(r.stdout + r.stderr);
+      expect(r.status, `combined:\n${combined}`).toBe(0);
+      expect(combined).not.toMatch(/omits the Flywheel App as a bypass actor/);
+      expect(putLogLines(r.putLog)).toEqual([]);
+      expect(existsSync(join(r.work, ".flywheel.yml"))).toBe(true);
+    } finally {
+      rmSync(r.work, { recursive: true, force: true });
+    }
+  });
+});

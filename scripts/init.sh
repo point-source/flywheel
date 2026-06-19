@@ -600,6 +600,20 @@ PREFLIGHT_RULESET_UNREADABLE=0
 # the top so a fresh run re-reads. Without the guard the two detectors would
 # double-list rulesets every run.
 PREFLIGHT_RULESETS_READ=0
+# BYPASS_RULESET_IDS / BYPASS_CLASSIC_BRANCHES — the EXACT edit targets the
+# branch-protection-bypass resolver (brownfield_resolver_branch_protection_bypass,
+# §spec:brownfield-resolvers) acts on, stashed by the detector below alongside the
+# aggregated finding so the resolver never has to re-derive which ruleset to edit:
+#   BYPASS_RULESET_IDS[]      — ruleset id(s) that cover an affected branch with a
+#                               blocking rule but no App bypass actor (deduped).
+#                               These are the ruleset(s) the resolver PUT-edits.
+#   BYPASS_CLASSIC_BRANCHES[] — affected branches whose hazard comes from CLASSIC
+#                               branch protection (no editable ruleset). Apps can't
+#                               be added as classic-protection bypass actors, so the
+#                               resolver names these and routes them to manual.
+# Reset at the top of the detector each run so a re-run re-derives from live state.
+BYPASS_RULESET_IDS=()
+BYPASS_CLASSIC_BRANCHES=()
 # _preflight_read_ruleset_details <ids-newline-list> <ids-array-name> <details-array-name>
 # Read each ruleset id's detail JSON into the named parallel arrays, mirroring
 # doctor.sh's read_ruleset_detail: a denied detail read (listing allowed but
@@ -658,6 +672,17 @@ preflight_brownfield_ref_covered() {
   fi
 }
 
+# _bypass_add_ruleset_id <id> — append <id> to BYPASS_RULESET_IDS unless already
+# present. Two managed branches can be covered by the SAME ruleset; without this
+# dedup the resolver would PUT-edit that ruleset (and re-add the App entry) twice.
+_bypass_add_ruleset_id() {
+  local id="$1" existing
+  for existing in "${BYPASS_RULESET_IDS[@]}"; do
+    [[ "$existing" == "$id" ]] && return 0
+  done
+  BYPASS_RULESET_IDS+=("$id")
+}
+
 # preflight_detect_branch_protection_bypass — §spec:brownfield-detection.
 # READ-ONLY detector: for each managed branch that exists on the remote, decide
 # whether a protection ruleset that would block flywheel's pushes (PR-required,
@@ -679,16 +704,25 @@ preflight_detect_branch_protection_bypass() {
 
   preflight_brownfield_read_rulesets
 
+  # Reset the resolver's edit-target stash so it reflects THIS run's live state.
+  BYPASS_RULESET_IDS=()
+  BYPASS_CLASSIC_BRANCHES=()
+
   local app_id="${PREFLIGHT_APP_ID_VALUE:-}"
   local affected="" b ref
   while IFS= read -r b; do
     [[ -n "$b" ]] || continue
     ref="refs/heads/$b"
     # Scan readable branch rulesets for one whose conditions include this branch.
+    # hazard_ruleset_ids collects the covering ruleset id(s) that carry a blocking
+    # rule but lack the App bypass — the exact set the resolver must edit for THIS
+    # branch (only stashed if the branch turns out to be affected, below).
     local matched_blocking=0 app_bypass=0 has_integration_bypass=0
-    local i=0 detail blocking app_actors integ_count
+    local matched_via_classic=0 hazard_ruleset_ids=""
+    local i=0 detail blocking app_actors integ_count rid this_app_bypass
     while [[ $i -lt ${#PREFLIGHT_RULESET_IDS[@]} ]]; do
       detail="${PREFLIGHT_RULESET_DETAILS[$i]}"
+      rid="${PREFLIGHT_RULESET_IDS[$i]}"
       i=$((i+1))
       # Skip rulesets that don't cover this branch (shared coverage heuristic).
       [[ "$(preflight_brownfield_ref_covered "$detail" "$ref")" == 1 ]] || continue
@@ -705,11 +739,16 @@ preflight_detect_branch_protection_bypass() {
       integ_count="$(echo "$detail" | jq -r \
         '[.bypass_actors[]? | select(.actor_type == "Integration")] | length' 2>/dev/null || true)"
       [[ "${integ_count:-0}" -gt 0 ]] && has_integration_bypass=1
+      this_app_bypass=0
       if [[ -n "$app_id" ]]; then
         app_actors="$(echo "$detail" | jq -r --arg id "$app_id" \
           '[.bypass_actors[]? | select(.actor_type == "Integration" and (.actor_id | tostring) == $id)] | length' 2>/dev/null || true)"
-        [[ "${app_actors:-0}" -gt 0 ]] && app_bypass=1
+        if [[ "${app_actors:-0}" -gt 0 ]]; then app_bypass=1; this_app_bypass=1; fi
       fi
+      # This covering+blocking ruleset is an EDIT TARGET for the branch unless it
+      # already lists our App (known App ID) — that one needs no change. Stash its
+      # id; it's only promoted into BYPASS_RULESET_IDS if the branch is affected.
+      [[ "$this_app_bypass" -eq 0 ]] && hazard_ruleset_ids+="$rid"$'\n'
     done
 
     # Legacy classic branch-protection fallback: if no ruleset covered the branch
@@ -726,6 +765,7 @@ preflight_detect_branch_protection_bypass() {
         classic_pr="$(echo "$classic" | jq -r '(.required_pull_request_reviews? // null) | if (. != null) then 1 else 0 end' 2>/dev/null || true)"
         if [[ "${classic_pr:-0}" -gt 0 ]]; then
           matched_blocking=1
+          matched_via_classic=1
           # Classic protection exposes no Integration bypass list — apps cannot be
           # added as bypass actors there — so this is unambiguously the hazard.
           has_integration_bypass=0
@@ -740,10 +780,25 @@ preflight_detect_branch_protection_bypass() {
     # Without one (greenfield): hazard iff there is NO Integration bypass actor at
     # all (we can't say which App it would be, but any Integration bypass means
     # the adopter has wired SOME app and we don't block — false-negative bias).
+    local is_affected=0
     if [[ -n "$app_id" ]]; then
-      [[ $app_bypass -eq 0 ]] && affected+="$b, "
+      [[ $app_bypass -eq 0 ]] && is_affected=1
     else
-      [[ $has_integration_bypass -eq 0 ]] && affected+="$b, "
+      [[ $has_integration_bypass -eq 0 ]] && is_affected=1
+    fi
+    [[ $is_affected -eq 1 ]] || continue
+    affected+="$b, "
+
+    # Stash the resolver's edit targets for this affected branch. A classic-only
+    # hazard has no editable ruleset — route the branch to manual. Otherwise record
+    # the covering+blocking ruleset id(s) lacking the App, deduped across branches.
+    if [[ $matched_via_classic -eq 1 ]]; then
+      BYPASS_CLASSIC_BRANCHES+=("$b")
+    else
+      while IFS= read -r rid; do
+        [[ -n "$rid" ]] || continue
+        _bypass_add_ruleset_id "$rid"
+      done <<< "$hazard_ruleset_ids"
     fi
   done <<< "$managed"
 
@@ -1218,6 +1273,182 @@ brownfield_resolver_release_conflict() {
   printf '  Removed prior release-system file(s): %s.\n' "$removed"
   _RELEASE_CONFLICT_RESOLVER_STATE="applied"
   return 0   # APPLIED.
+}
+
+# _BYPASS_RESOLVER_STATE — run-scoped guard for the bypass-actor resolver. The
+# detector emits ONE aggregated branch_protection_bypass block, so the resolver is
+# normally invoked once; this guard keeps a stray re-call (or a future per-branch
+# emit) from re-prompting / re-PUTting. Empty = not yet decided.
+_BYPASS_RESOLVER_STATE=""
+
+# _bypass_blocking_rule_labels <detail-json> — print the human labels for the
+# blocking rule types this ruleset carries (one per line), so the offer can name
+# the EXACT rules flywheel's pushes hit (not a blanket "protection"). Read-only.
+_bypass_blocking_rule_labels() {
+  local detail="$1"
+  echo "$detail" | jq -r '
+    [ .rules[]? | .type
+      | if . == "pull_request" then "pull request required"
+        elif . == "non_fast_forward" then "no force-push"
+        elif . == "update" then "no force-push (update)"
+        elif . == "deletion" then "no branch deletion"
+        else empty end ]
+    | unique | .[]' 2>/dev/null || true
+}
+
+# brownfield_resolver_branch_protection_bypass — the APP BYPASS-ACTOR ADDITION
+# resolver (SPEC.md §spec:brownfield-resolvers "App bypass-actor addition",
+# docs/adopter/setup.md §0.3). Implements the WS0 RESOLVER CONTRACT: show the full
+# change, confirm via brownfield_confirm, return 0=applied / 1=declined / 2=unable.
+#
+# This is the MOST security-sensitive resolver — it changes WHO can bypass branch
+# protection — so it is held to the tightest form of the safety contract:
+#   * NO-PRIVILEGE-ESCALATION GATE FIRST. If the token lacks repo-admin we do NOT
+#     attempt the edit: we report the limit and route to manual (return 2), NEVER
+#     demanding a broader token (§spec:preflight-gh-capability,
+#     §spec:doctor-credential-clarity). Signals: PREFLIGHT_RULESET_UNREADABLE=1
+#     (rulesets weren't readable), and any ruleset PUT that fails with a
+#     permissions error (treated as a limit, routed to manual — never retried).
+#   * APP ID REQUIRED. The bypass entry is keyed on the App's numeric id; absent
+#     PREFLIGHT_APP_ID_VALUE we can't construct it → report + route to manual.
+#   * CLASSIC-protection branches can't be fixed via a ruleset edit (apps can't be
+#     classic-protection bypass actors) → name them, route to manual.
+#   * SHOW THE EXACT CHANGE before applying: per ruleset, the blocking rule type(s)
+#     and the EXACT bypass entry added. The grant is SCOPED to that ruleset's
+#     blocking rules (NOT a blanket exemption) and REVERSIBLE (remove the entry).
+#
+# APPLY adds ONLY `{actor_id:<App>, actor_type:"Integration", bypass_mode:"always"}`
+# to each target ruleset's bypass_actors (deduped) and PUTs the ruleset back built
+# from its cached detail (read-only fields stripped). We never modify/remove a rule
+# and never add ~ALL/teams — the tightest grant that lets the release + back-merge
+# pushes through. Any PUT failure → report the limit, return 2 (no partial-success
+# claim). All targets updated → brief confirmation, return 0.
+brownfield_resolver_branch_protection_bypass() {
+  # Subsequent calls (guard set): replay the decided outcome, no re-prompt/re-PUT.
+  case "$_BYPASS_RESOLVER_STATE" in
+    applied)  return 0 ;;
+    declined) return 1 ;;
+    unable)   return 2 ;;
+  esac
+
+  # NO-PRIVILEGE-ESCALATION GATE (first). If we couldn't even read the rulesets,
+  # the token lacks repo-admin — report the limit, route to manual, never escalate.
+  if [[ "${PREFLIGHT_RULESET_UNREADABLE:-0}" -eq 1 ]]; then
+    printf '  Branch-protection bypass: your token cannot read this repo'\''s rulesets\n'
+    printf '  (repo-admin required). Add the Flywheel App as a bypass actor yourself, or\n'
+    printf '  re-run with an admin token: docs/adopter/setup.md §0.\n'
+    _BYPASS_RESOLVER_STATE="unable"
+    return 2
+  fi
+
+  # APP ID REQUIRED — the bypass entry is keyed on the App's numeric id.
+  local app_id="${PREFLIGHT_APP_ID_VALUE:-}"
+  if [[ -z "$app_id" ]]; then
+    printf '  Branch-protection bypass: the Flywheel App ID is not known yet, so the\n'
+    printf '  bypass entry can'\''t be constructed. Provision the App (it writes\n'
+    printf '  FLYWHEEL_GH_APP_ID), then add the App as a bypass actor: docs/adopter/setup.md §0.\n'
+    _BYPASS_RESOLVER_STATE="unable"
+    return 2
+  fi
+
+  # CLASSIC-protection branches can't be fixed by a ruleset edit — name them.
+  if [[ "${#BYPASS_CLASSIC_BRANCHES[@]}" -gt 0 ]]; then
+    printf '  These branch(es) use CLASSIC branch protection, which has no per-App bypass\n'
+    printf '  list — apps cannot be added as bypass actors there. Resolve them manually\n'
+    printf '  (migrate to a ruleset, or relax the rule): %s\n' \
+      "$(IFS=', '; echo "${BYPASS_CLASSIC_BRANCHES[*]}")"
+  fi
+
+  # If ALL affected branches were classic-only (no editable ruleset), there is
+  # nothing to PUT — route entirely to manual.
+  if [[ "${#BYPASS_RULESET_IDS[@]}" -eq 0 ]]; then
+    printf '  No editable ruleset covers the affected branch(es) — routing to manual: docs/adopter/setup.md §0.\n'
+    _BYPASS_RESOLVER_STATE="unable"
+    return 2
+  fi
+
+  # The EXACT bypass entry we will add (shown, then applied verbatim).
+  local entry
+  entry="$(printf '{"actor_id":%s,"actor_type":"Integration","bypass_mode":"always"}' "$app_id")"
+
+  # SHOW the exact change in full BEFORE applying (shown-before-applied contract).
+  printf '  Branch-protection bypass — these ruleset(s) block Flywheel'\''s release and\n'
+  printf '  back-merge pushes and do not list the Flywheel App as a bypass actor:\n'
+  local id detail name labels label
+  for id in "${BYPASS_RULESET_IDS[@]}"; do
+    detail="$(_bypass_cached_detail "$id")"
+    name="$(echo "$detail" | jq -r '.name // "(unnamed)"' 2>/dev/null || true)"
+    printf '    ruleset "%s" (id %s) — blocking rule(s):\n' "${name:-(unnamed)}" "$id"
+    labels="$(_bypass_blocking_rule_labels "$detail")"
+    while IFS= read -r label; do
+      [[ -n "$label" ]] || continue
+      printf '      - %s\n' "$label"
+    done <<< "$labels"
+  done
+  printf '  It will ADD this bypass actor (the Flywheel App, id %s) to each:\n' "$app_id"
+  printf '    %s\n' "$entry"
+  printf '  This is SCOPED to exactly those ruleset(s)'\'' blocking rules (NOT a blanket\n'
+  printf '  exemption) and is REVERSIBLE — the entry can be removed from the ruleset'\''s\n'
+  printf '  bypass actors at any time.\n'
+
+  if ! brownfield_confirm "  Add the Flywheel App as a bypass actor on these ruleset(s)? [y/N] "; then
+    _BYPASS_RESOLVER_STATE="declined"
+    return 1   # DECLINED — dispatcher prints the manual pointer; change nothing.
+  fi
+
+  # APPLY: for each target ruleset, append the App entry to bypass_actors (dedup),
+  # rebuild a PUT body from the cached detail (read-only fields stripped), and PUT.
+  # A failed PUT is reported as a limit and routes to manual (return 2) — NEVER
+  # retried with a broader token, NEVER claimed as partial success.
+  local updated="" body
+  for id in "${BYPASS_RULESET_IDS[@]}"; do
+    detail="$(_bypass_cached_detail "$id")"
+    # Build the update body: preserve name/target/enforcement/conditions/rules,
+    # add the App to bypass_actors (deduped on actor_id+Integration), and strip the
+    # read-only fields the rulesets PUT endpoint rejects.
+    body="$(echo "$detail" | jq \
+      --argjson entry "$entry" '
+        .bypass_actors = ((.bypass_actors // [])
+          + ( if any(.bypass_actors[]?;
+                       .actor_type == "Integration"
+                       and (.actor_id | tostring) == ($entry.actor_id | tostring))
+              then [] else [$entry] end ))
+        | {name, target, enforcement, conditions, rules, bypass_actors}' \
+      2>/dev/null || true)"
+    if [[ -z "$body" ]]; then
+      printf '  Could not construct the update for ruleset id %s — routing to manual.\n' "$id"
+      _BYPASS_RESOLVER_STATE="unable"
+      return 2
+    fi
+    if printf '%s' "$body" | gh api -X PUT "repos/$REPO/rulesets/$id" --input - >/dev/null 2>&1; then
+      updated+="${updated:+, }$id"
+    else
+      # A permissions error (or any PUT failure) is a capability LIMIT: report and
+      # route to manual. Do not retry with a broader token; do not claim success.
+      printf '  Could not update ruleset id %s (this needs repo-admin) — add the App as a\n' "$id"
+      printf '  bypass actor yourself, or re-run with an admin token: docs/adopter/setup.md §0.\n'
+      _BYPASS_RESOLVER_STATE="unable"
+      return 2
+    fi
+  done
+
+  printf '  Added the Flywheel App (id %s) as a bypass actor on ruleset(s): %s.\n' "$app_id" "$updated"
+  _BYPASS_RESOLVER_STATE="applied"
+  return 0   # APPLIED.
+}
+
+# _bypass_cached_detail <id> — print the cached ruleset detail JSON for <id> by
+# matching the id in the parallel PREFLIGHT_RULESET_IDS / PREFLIGHT_RULESET_DETAILS
+# arrays (no second gh read). Empty if not found (defensive — shouldn't happen).
+_bypass_cached_detail() {
+  local want="$1" i=0
+  while [[ $i -lt ${#PREFLIGHT_RULESET_IDS[@]} ]]; do
+    if [[ "${PREFLIGHT_RULESET_IDS[$i]}" == "$want" ]]; then
+      printf '%s' "${PREFLIGHT_RULESET_DETAILS[$i]}"
+      return 0
+    fi
+    i=$((i+1))
+  done
 }
 
 # brownfield_resolve — the resolution phase (SPEC.md §spec:brownfield-resolution).
