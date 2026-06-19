@@ -416,6 +416,60 @@ preflight_detect_release_conflict() {
   return 0
 }
 
+# preflight_detect_version_tag_shape — read-only scan for pre-existing tags whose
+# shape would mislead semantic-release's `v`-prefixed versioning (SPEC.md
+# §spec:brownfield-detection). `git tag -l` is the authoritative local source: it
+# needs no token (an adopter's clone carries the remote tags), so there is no
+# could-not-verify path here — local tags are always observable. When REPO is
+# resolved we ALSO fold in remote tags (best-effort, errors swallowed) so a tag
+# created on the remote after the local fetch is still seen; the merge is deduped.
+#
+# Classification (biased to FALSE NEGATIVES — never block a clean repo on an
+# exotic tag):
+#   ^v[0-9]+\.[0-9]+\.[0-9]+  flywheel/semantic-release v-prefixed -> IGNORE.
+#   ^[0-9]+\.[0-9]+(\.[0-9]+)? bare-semver (3.4.2, 2.0)            -> instance+block,
+#                             resolvable inline later by re-tagging with a `v`.
+#   ^(release|stable|rel|ver|version)[-_/.] (case-insensitive)    -> instance+block,
+#                             a named release scheme that needs an adopter baseline
+#                             choice and is NOT auto-resolvable.
+#   anything else (nightly, latest, feature tags)                 -> IGNORE.
+# One block finding per category, listing the offending tag(s) — one thing to fix
+# per category, mirroring the release-conflict detector's style.
+preflight_detect_version_tag_shape() {
+  local tags tag bare_semver="" non_semver=""
+  # git tag -l always works in a git repo (no token); never errors the run.
+  tags="$(git tag -l 2>/dev/null || true)"
+  # Best-effort cross-check of remote tags; merge + dedupe. Swallow all errors so
+  # a missing token / network leaves the local-tag result untouched.
+  if [[ -n "${REPO:-}" ]]; then
+    local remote_tags
+    remote_tags="$(gh api "repos/$REPO/tags" --paginate -q '.[].name' 2>/dev/null || true)"
+    tags="$(printf '%s\n%s\n' "$tags" "$remote_tags" | sort -u)"
+  fi
+
+  while IFS= read -r tag; do
+    [[ -n "$tag" ]] || continue
+    # v-prefixed semver is greenfield-compatible — ignore.
+    [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+ ]] && continue
+    if [[ "$tag" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?$ ]]; then
+      bare_semver+="$tag, "
+    elif [[ "$tag" =~ ^([Rr][Ee][Ll][Ee][Aa][Ss][Ee]|[Ss][Tt][Aa][Bb][Ll][Ee]|[Rr][Ee][Ll]|[Vv][Ee][Rr]|[Vv][Ee][Rr][Ss][Ii][Oo][Nn])[-_/.] ]]; then
+      non_semver+="$tag, "
+    fi
+    # Anything else is an exotic tag — ignore (false-negative bias).
+  done <<<"$tags"
+
+  if [[ -n "$bare_semver" ]]; then
+    finding instance block "bare-semver tag(s) ${bare_semver%, } collide with Flywheel's v-prefixed scheme — semantic-release would silently mis-version the first release. Resolvable inline later by re-tagging with a 'v' prefix."
+  fi
+  if [[ -n "$non_semver" ]]; then
+    finding instance block "non-semver release tag(s) ${non_semver%, } collide with Flywheel's v-prefixed scheme. This needs an adopter baseline choice and is NOT auto-resolvable — pick a starting version before layering Flywheel on."
+  fi
+  # See preflight_detect_release_conflict: end deterministically at 0; the gate
+  # reads FINDINGS_BLOCK_COUNT, not this return.
+  return 0
+}
+
 # preflight_detect_gh_capability — §spec:preflight-gh-capability.
 # READ-ONLY probe of gh install + auth state, then the path-specific scope checks
 # (which parse the captured `auth_status`). Grants/requests nothing.
@@ -494,6 +548,7 @@ preflight_run() {
   # >>> detector seam — add new detectors here >>>
   preflight_detect_gh_capability       # §spec:preflight-gh-capability
   preflight_detect_release_conflict    # §spec:preflight-release-conflict
+  preflight_detect_version_tag_shape   # §spec:brownfield-detection
   preflight_detect_credentials_app     # §spec:preflight-credentials-app
   preflight_inject                     # test-only hook (inert unless FLYWHEEL_TEST_HOOKS=1)
   # <<< detector seam <<<
