@@ -1167,7 +1167,19 @@ else
     # Non-interactive: no prompts, ever. Both present → report it as configured;
     # anything missing → defer with the manual finishing command. (Behavior
     # unchanged — existing tests pin these exact strings.)
-    if [[ "$has_app_id" -eq 1 && "$has_app_key" -eq 1 ]]; then
+    if [[ "$PREFLIGHT_APP_INSTALLED" == "no" ]]; then
+      # Org-level App detected but NOT installed on this repo: the credentials are
+      # set, but the App still cannot mint tokens here. Non-interactively we can't
+      # run the guided install (install_app_on_repo reads from a prompt), so print
+      # the manual finish action and defer the outcome rather than reporting it
+      # configured (§spec:init-app-step, "non-interactive and piped runs" — print
+      # the manual finish command instead of blocking). PREFLIGHT_APP_INSTALLED=="no"
+      # only occurs with has_app_id=1 (App ID found at org level).
+      app_install_cmd="$(app_install_finish_cmd)"
+      echo "  non-interactive shell — the org App is not installed on $REPO. Finish manually:"
+      echo "    $app_install_cmd"
+      record_outcome "App credentials" deferred config warn "$app_install_cmd"
+    elif [[ "$has_app_id" -eq 1 && "$has_app_key" -eq 1 ]]; then
       if [[ "$app_id_found_at" == "$app_key_found_at" ]]; then
         echo "  FLYWHEEL_GH_APP_ID variable + FLYWHEEL_GH_APP_PRIVATE_KEY secret already set ($app_id_found_at-level)."
       else
