@@ -23,6 +23,12 @@
 <!--     @v4 major; bump them uniformly to @v5 -->
 <!--     (§req:setup-node-v5, §req:setup-node-v5-criteria, -->
 <!--     §req:setup-node-v5-stories, §req:setup-node-v5-constraints) -->
+<!--   - init.sh credentials prompt — the "where should credentials live?" -->
+<!--     prompt never says what "credentials" are and asks redundantly when -->
+<!--     they already exist (#235) -->
+<!--     (§req:init-credentials-prompt, §req:init-credentials-prompt-criteria, -->
+<!--     §req:init-credentials-prompt-stories, -->
+<!--     §req:init-credentials-prompt-constraints) -->
 <!--   - Pre-flight environment detection — setup probes the environment and -->
 <!--     repo up front, classifies each finding by bucket × severity, and shares -->
 <!--     one vocabulary across init and doctor -->
@@ -889,6 +895,114 @@ done deliberately and verified, not waved through on the edit alone.
   CI-budget, release-safety, or composite-action-path work in this document.
   It is nonetheless cheap and removes a small, growing debt — a stale major
   that advisories will flag and that adopters currently see in copy-paste docs.
+
+## init.sh credentials prompt §req:init-credentials-prompt
+
+When an adopter runs `scripts/init.sh` to onboard a repository and the
+owner is a GitHub organization, the script asks **"Where should the
+credentials live?"** and offers a repo-only vs. org-wide choice. Two
+groups of adopters are tripped up by it:
+
+- **First-time adopters don't know what "credentials" means.** The word
+  is never defined at the prompt. The thing being placed is the GitHub
+  App's identity — the `FLYWHEEL_GH_APP_ID` (a repo/org **Variable**, the
+  public numeric App ID) and the `FLYWHEEL_GH_APP_PRIVATE_KEY` (a
+  **Secret**, the PEM private key). These are App-level credentials shared
+  by the automation, not a personal access token or a per-user secret.
+  Without that framing the adopter is asked to make a placement decision
+  about something they can't name, and can't tell what will actually be
+  written or where to look for it afterward (Settings → Secrets and
+  variables → Actions).
+
+- **Re-runners and second-repo onboarders are asked as if nothing
+  exists.** `init.sh` already looks for the App ID and private key at both
+  repo and org level, but it only skips the prompt when **both** are
+  found. When exactly one is already present — e.g. the private key lives
+  org-wide from onboarding a sibling repo but the App ID is missing here —
+  the script still asks "where should the credentials live?" from a blank
+  slate, giving no sign that half the answer already exists, and inviting
+  a choice that splits the two values across different scopes.
+
+The cost is onboarding friction at the single most consequential step of
+setup: get the App credentials wrong or in the wrong scope and no Flywheel
+workflow can mint a token, so nothing the adopter does afterward works.
+The confusion is hit by every org adopter on their first run (frequent at
+the moment of adoption) and again on every re-run or additional repo
+(`init.sh` is explicitly re-runnable). The remedy is to make the prompt
+**explicit about what the credentials are** and **honest about what
+already exists** — the same clarity should hold across `init.sh`'s other
+credential prompts and the adopter setup doc so the three never disagree.
+
+## init.sh credentials prompt success criteria §req:init-credentials-prompt-criteria
+
+Two independent, surface-observable outcomes:
+
+- **Clarity for newcomers.** A first-time adopter reading the credentials
+  prompt in their terminal can correctly state, without leaving the
+  prompt, that the two things being set are the GitHub App's ID
+  (`FLYWHEEL_GH_APP_ID`, stored as a Variable) and its private key
+  (`FLYWHEEL_GH_APP_PRIVATE_KEY`, stored as a Secret), and where the
+  chosen scope will store them. Verifiable by reading the prompt text on a
+  fresh org-owned repo.
+- **No redundant asks.** When either credential already exists at repo or
+  org level, a re-run of `init.sh` states which credential is already set
+  and where (repo vs. org), and the interactive flow only asks about what
+  is actually missing rather than re-prompting from a blank slate.
+  Verifiable by pre-setting one of the two values and re-running.
+
+## init.sh credentials prompt user stories §req:init-credentials-prompt-stories
+
+- As an adopter onboarding my first org repo, I want the prompt to tell me
+  the two credentials are my GitHub App's ID and private key (and that
+  they go in Actions Variables/Secrets), so I can confidently choose where
+  they live and find them afterward — meets §req:init-credentials-prompt-criteria
+  (clarity for newcomers).
+- As an adopter onboarding a second repo into an org that already has the
+  App private key set org-wide, I want `init.sh` to tell me that key is
+  already present and only ask me for what's missing, so I don't
+  accidentally create a second copy or split the App ID and key across
+  different scopes — meets §req:init-credentials-prompt-criteria (no
+  redundant asks).
+- As an adopter re-running `init.sh` after a partial first attempt, I want
+  the credential prompts and the adopter setup doc to describe the same
+  two values the same way, so the terminal and the documentation never
+  contradict each other about what I'm setting.
+
+## init.sh credentials prompt constraints and quality attributes §req:init-credentials-prompt-constraints
+
+- **Explicit over implicit.** The exact value is whether the adopter
+  *confidently knows what the credentials are*, not whether the literal
+  word "credentials" is used. The prompt must name the two values and what
+  each is for; wording is otherwise free.
+- **Consistent framing across surfaces.** The clarification extends beyond
+  the single "where should they live?" prompt to `init.sh`'s other
+  credential prompts (create / paste-existing / skip and the
+  manual-setup instructions) and to `docs/adopter/setup.md`, so all of
+  them agree on what the credentials are and where they're stored.
+- **No extra CI/API cost.** Improving detection must not add notable
+  GitHub API calls or slow the run; this repo is sensitive to CI/API
+  budget (see §req:sandbox-ci-budget). Detection already probes repo and
+  org level — the improvement reuses what is already known, it does not
+  add new probing rounds.
+- **Existing behavior preserved.** `--scope`, `--skip-secrets`, and
+  non-interactive runs keep working exactly as today; only the interactive
+  wording and the use of already-detected state improve. The change writes
+  the same Variable/Secret names to the same scopes as before.
+
+## init.sh credentials prompt priorities §req:init-credentials-prompt-priorities
+
+Both success criteria are mandatory and were judged equally important —
+the newcomer's confusion and the re-runner's redundant prompt are the two
+halves of the same onboarding-friction problem. Naming the credentials
+(clarity) is the cheaper, higher-confidence half and should land first;
+surfacing partial pre-existing state (no redundant asks) is the
+higher-impact half for org adopters running `init.sh` repeatedly. Doc
+alignment is mandatory for consistency but rides along with the prompt
+wording rather than gating it. This is self-contained onboarding polish:
+nothing is blocked on it and no workflow breaks today, so it sits below
+the release-safety and CI-budget work in this document on severity, but it
+removes friction at adoption — the moment an adopter is most likely to
+abandon setup.
 
 ## Pre-flight environment detection §req:preflight-detection
 

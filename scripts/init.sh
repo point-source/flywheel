@@ -24,8 +24,8 @@
 #                                          in parallel, each cutting its own
 #                                          prereleases with its own version
 #                                          suffix and auto-merge rules
-#   --skip-secrets        do not prompt for App credentials (FLYWHEEL_GH_APP_ID
-#                         variable, FLYWHEEL_GH_APP_PRIVATE_KEY secret)
+#   --skip-secrets        do not prompt for the App's shared credentials
+#                         (FLYWHEEL_GH_APP_ID Variable, FLYWHEEL_GH_APP_PRIVATE_KEY Secret)
 #   --skip-rulesets       do not offer to run apply-rulesets.sh
 #   --strict              treat warn-severity outstanding items (e.g. deferred
 #                         App credentials from --skip-secrets, deferred rulesets
@@ -931,7 +931,8 @@ record_outcome ".gitattributes + merge drivers" configured
 
 # 3. App-token secrets.
 #
-# SCOPE controls where the credentials live:
+# SCOPE controls where the App's shared credentials (FLYWHEEL_GH_APP_ID Variable
+# + FLYWHEEL_GH_APP_PRIVATE_KEY Secret) live:
 #   repo — Variable + Secret on $REPO (default; isolates per repo)
 #   org  — Variable + Secret on $OWNER with visibility=all, so every repo
 #          in the org inherits them (matches an org-installed App). The
@@ -1006,7 +1007,10 @@ create_app_via_manifest() {
     echo "  error: could not set FLYWHEEL_GH_APP_ID variable at scope=$SCOPE." >&2
     return 1
   }
-  printf '%s' "$pem" | write_app_key_secret
+  printf '%s' "$pem" | write_app_key_secret || {
+    echo "  error: could not set FLYWHEEL_GH_APP_PRIVATE_KEY secret at scope=$SCOPE." >&2
+    return 1
+  }
   echo "  set FLYWHEEL_GH_APP_ID variable and FLYWHEEL_GH_APP_PRIVATE_KEY secret (scope=$SCOPE)."
   echo
   echo "  Final manual step: install the App on $REPO."
@@ -1021,13 +1025,17 @@ create_app_via_manifest() {
 
 prompt_existing_app_credentials() {
   cat <<EOF
+  Paste the Flywheel GitHub App's shared credentials (the App's own identity,
+  not a personal access token): its numeric App ID — stored as the
+  FLYWHEEL_GH_APP_ID Variable — and its PEM private key — stored as the
+  FLYWHEEL_GH_APP_PRIVATE_KEY Secret.
   If you haven't created the App yet, follow:
     https://docs.github.com/en/apps/creating-github-apps/about-creating-github-apps/creating-a-github-app
   Required permissions: Contents r/w, Pull requests r/w, Issues r/w,
   Checks r/w, Metadata r. Install on $REPO.
 EOF
   if [[ "$has_app_id" -eq 0 ]]; then
-    read -r -u 3 -p "  GitHub App ID (numeric): " app_id
+    read -r -u 3 -p "  App ID (numeric, stored as the FLYWHEEL_GH_APP_ID Variable): " app_id
     if [[ -z "$app_id" ]]; then
       echo "  empty App ID — skipping FLYWHEEL_GH_APP_ID variable."
     else
@@ -1040,13 +1048,16 @@ EOF
     fi
   fi
   if [[ "$has_app_key" -eq 0 ]]; then
-    read -r -u 3 -p "  Path to private-key PEM file: " pem_path
+    read -r -u 3 -p "  Path to PEM private-key file (stored as the FLYWHEEL_GH_APP_PRIVATE_KEY Secret): " pem_path
     if [[ -z "$pem_path" ]]; then
       echo "  empty path — skipping FLYWHEEL_GH_APP_PRIVATE_KEY secret."
     elif [[ ! -f "$pem_path" ]]; then
       echo "  error: PEM file not found at '$pem_path' — skipping FLYWHEEL_GH_APP_PRIVATE_KEY secret." >&2
     else
-      write_app_key_secret < "$pem_path"
+      write_app_key_secret < "$pem_path" || {
+        echo "  error: could not set FLYWHEEL_GH_APP_PRIVATE_KEY secret at scope=$SCOPE." >&2
+        return 1
+      }
       echo "  set FLYWHEEL_GH_APP_PRIVATE_KEY secret (scope=$SCOPE)."
     fi
   fi
@@ -1066,7 +1077,7 @@ app_creds_finish_cmd() {
 }
 
 if [[ "$SKIP_SECRETS" -eq 1 ]]; then
-  echo "  --skip-secrets set; not touching App credentials."
+  echo "  --skip-secrets set; not touching the App's FLYWHEEL_GH_APP_ID Variable or FLYWHEEL_GH_APP_PRIVATE_KEY Secret."
   # SCOPE is not yet resolved this early; default to the repo form (matches the
   # non-interactive branch's fallback below).
   app_creds_cmd="$(app_creds_finish_cmd repo)"
@@ -1088,24 +1099,49 @@ else
     fi
     record_outcome "App credentials" configured
   elif [[ "$INTERACTIVE" -eq 0 ]]; then
-    # Derive the displayed hint from app_creds_finish_cmd so the command form
-    # lives in exactly one place (it is also what gets recorded below).
+    # Derive the displayed command from app_creds_finish_cmd so the command form
+    # lives in exactly one place (it is also what gets recorded below). The
+    # surrounding wording names the App's two shared values (Variable + Secret)
+    # and where they live, per §spec:init-credentials-prompt.
     app_creds_cmd="$(app_creds_finish_cmd "$SCOPE")"
-    echo "  non-interactive shell — skipping App-credential prompts. Set them manually:"
+    echo "  non-interactive shell — skipping App-credential prompts. Set the Flywheel"
+    echo "  GitHub App's two shared values manually — the FLYWHEEL_GH_APP_ID Variable and"
+    echo "  the FLYWHEEL_GH_APP_PRIVATE_KEY Secret, under Settings → Secrets and variables → Actions:"
     echo "    $app_creds_cmd"
     record_outcome "App credentials" deferred config warn "$app_creds_cmd"
   else
+    # Inside this else exactly one of two cases holds: exactly one value is
+    # already present (partial — both-present was handled above), or neither
+    # is present. Distinguish them so partial state prompts only for the gap.
+    partial=0
+    if [[ "$has_app_id" -eq 1 || "$has_app_key" -eq 1 ]]; then
+      partial=1
+      # Co-location default: with no explicit --scope, write the missing value
+      # at the same scope as the present one so both creds live together. An
+      # explicit --scope still wins (only set SCOPE when empty); never relocate
+      # the already-present value.
+      if [[ -z "$SCOPE" ]]; then
+        if [[ "$has_app_id" -eq 1 ]]; then SCOPE="$app_id_found_at"; else SCOPE="$app_key_found_at"; fi
+      fi
+    fi
+
     # Resolve SCOPE before the App-source prompt so write_app_id_var /
     # write_app_key_secret know where to write. If the owner is a User
     # account, org-level vars/secrets don't exist on GitHub at all, so
     # we silently lock to repo. If --scope was set explicitly, honor it.
+    # In partial state SCOPE is now non-empty, so the scope prompt below is
+    # skipped; the org-owner validation still runs for an explicit/co-located org.
     if [[ -z "$SCOPE" ]]; then
       detect_owner_type
       if [[ "$OWNER_TYPE" == "Organization" ]]; then
         echo
-        echo "  Where should the credentials live?"
-        echo "    1) Repo $REPO only (default)"
-        echo "    2) Org-wide ($OWNER) — visibility=all, shared across every repo in the org"
+        echo "  Where should the Flywheel GitHub App's shared credentials live?"
+        echo "  These are the App's own identity (its numeric App ID + PEM private key),"
+        echo "  not a personal access token or per-user secret. Each option writes both:"
+        echo "  the FLYWHEEL_GH_APP_ID Variable and the FLYWHEEL_GH_APP_PRIVATE_KEY Secret."
+        echo "    1) Repo $REPO only (default) — writes the Variable + Secret on this repo"
+        echo "    2) Org-wide ($OWNER) — writes the Variable + Secret on the org with"
+        echo "       visibility=all, shared across every repo in the org"
         echo "       (requires an admin:org gh token; useful when one App serves many repos)"
         read -r -u 3 -p "  Selection [1/2] (default 1): " scope_choice
         case "${scope_choice:-1}" in
@@ -1129,44 +1165,68 @@ else
     # resolved SCOPE so it's copy-pasteable.
     app_creds_cmd="$(app_creds_finish_cmd "$SCOPE")"
 
-    echo
-    echo "  Flywheel needs a GitHub App for installation tokens. Pick a setup path:"
-    echo "    1) Create the App for me  — opens browser, ~30s round-trip"
-    echo "    2) I have an App already — paste credentials manually"
-    echo "    3) Skip — I'll set the App credentials later"
-    read -r -u 3 -p "  Selection [1/2/3] (default 1): " app_choice
-    case "${app_choice:-1}" in
-      1)
-        if create_app_via_manifest; then
-          record_outcome "App credentials" configured
-        else
-          echo "  Falling back to manual prompts."
-          # Only the credential-WRITE failures inside the helper return non-zero;
-          # the empty-input/skip paths return success, so a non-zero here is a
-          # genuine write failure.
+    if [[ "$partial" -eq 1 ]]; then
+      # Exactly one credential exists. Report what's set + where, name the gap,
+      # and prompt only for the missing value (writing it at the co-located /
+      # resolved $SCOPE). The create/paste/skip menu is suppressed: "Create the
+      # App for me" mints a NEW App and writes BOTH values unconditionally, so
+      # it can't coherently fill a single gap without splitting/overwriting the
+      # existing credential. prompt_existing_app_credentials guards each write on
+      # has_app_id==0 / has_app_key==0, so it touches only the missing value.
+      echo
+      if [[ "$has_app_id" -eq 1 ]]; then
+        echo "  FLYWHEEL_GH_APP_ID variable already set (${app_id_found_at}-level); the FLYWHEEL_GH_APP_PRIVATE_KEY secret is missing — prompting only for the private key, writing it at ${SCOPE}-level to co-locate with the App ID."
+      else
+        echo "  FLYWHEEL_GH_APP_PRIVATE_KEY secret already set (${app_key_found_at}-level); the FLYWHEEL_GH_APP_ID variable is missing — prompting only for the App ID, writing it at ${SCOPE}-level to co-locate with the private key."
+      fi
+      # A genuine write failure inside the helper returns non-zero; empty-input
+      # / skip paths return success. The gap remains, but the present value is
+      # untouched, so the outcome is the same configured/failed split as below.
+      if prompt_existing_app_credentials; then
+        record_outcome "App credentials" configured
+      else
+        record_outcome "App credentials" failed config block "$app_creds_cmd"
+      fi
+    else
+      echo
+      echo "  Flywheel needs a GitHub App for installation tokens. Pick a setup path:"
+      echo "    1) Create the App for me  — opens browser, ~30s round-trip"
+      echo "    2) I have an App already — paste its App ID (Variable) + PEM private key (Secret)"
+      echo "    3) Skip — I'll set the App's Variable + Secret later"
+      read -r -u 3 -p "  Selection [1/2/3] (default 1): " app_choice
+      case "${app_choice:-1}" in
+        1)
+          if create_app_via_manifest; then
+            record_outcome "App credentials" configured
+          else
+            echo "  Falling back to manual prompts."
+            # Only the credential-WRITE failures inside the helper return non-zero;
+            # the empty-input/skip paths return success, so a non-zero here is a
+            # genuine write failure.
+            if prompt_existing_app_credentials; then
+              record_outcome "App credentials" configured
+            else
+              record_outcome "App credentials" failed config block "$app_creds_cmd"
+            fi
+          fi
+          ;;
+        2)
           if prompt_existing_app_credentials; then
             record_outcome "App credentials" configured
           else
             record_outcome "App credentials" failed config block "$app_creds_cmd"
           fi
-        fi
-        ;;
-      2)
-        if prompt_existing_app_credentials; then
-          record_outcome "App credentials" configured
-        else
-          record_outcome "App credentials" failed config block "$app_creds_cmd"
-        fi
-        ;;
-      3)
-        echo "  Skipped — set FLYWHEEL_GH_APP_ID variable and FLYWHEEL_GH_APP_PRIVATE_KEY secret before any Flywheel workflow runs."
-        record_outcome "App credentials" deferred config warn "$app_creds_cmd"
-        ;;
-      *)
-        echo "  invalid selection — skipping."
-        record_outcome "App credentials" deferred config warn "$app_creds_cmd"
-        ;;
-    esac
+          ;;
+        3)
+          echo "  Skipped — set the App's FLYWHEEL_GH_APP_ID Variable and FLYWHEEL_GH_APP_PRIVATE_KEY Secret under Settings → Secrets and variables → Actions before any Flywheel workflow runs."
+          record_outcome "App credentials" deferred config warn "$app_creds_cmd"
+          ;;
+        *)
+          echo "  invalid selection — skipping."
+          record_outcome "App credentials" deferred config warn "$app_creds_cmd"
+          ;;
+      esac
+    fi
   fi
 fi
 
