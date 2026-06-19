@@ -1277,32 +1277,37 @@ describe.skipIf(!depsAvailable)("doctor.sh — step-summary affordance (#240, WS
     }
   });
 
-  it("GITHUB_STEP_SUMMARY unset (local default) → no summary file, stdout unchanged", () => {
-    // Regression lock on "local default unchanged": with no summaryFile, the
-    // default runDoctor scrubs GITHUB_STEP_SUMMARY, so the affordance is a no-op
-    // and no second sink is written. We compare stdout to a baseline run to
-    // prove the local default output is byte-for-byte unaffected by the feature.
+  it("GITHUB_STEP_SUMMARY unset (local default) → stdout byte-for-byte identical to a run with it set", () => {
+    // The step-summary affordance is a SECOND sink only: turning it on (via
+    // GITHUB_STEP_SUMMARY) must not change one byte of stdout. Prove it directly
+    // by diffing stdout across an enabled run and the local-default (scrubbed)
+    // run on the same stub + cwd, then confirm none of the summary-only markdown
+    // leaks into the local-default stdout. (Comparing against a literal empty
+    // temp dir proved nothing — doctor was never told that path.)
     const stub = setupGhStub({ allowAutoMerge: false, hasRulesets: false });
     const cwd = mkdtempSync(join(tmpdir(), "flywheel-doctor-cwd-"));
-    const probeDir = mkdtempSync(join(tmpdir(), "flywheel-doctor-ss-"));
+    const ssDir = mkdtempSync(join(tmpdir(), "flywheel-doctor-ss-"));
+    const summaryFile = join(ssDir, "summary.md");
     try {
-      const r = runDoctor(stub.binDir, cwd);
-      // No file is created anywhere we control; the probe dir stays empty.
-      expect(
-        readdirSync(probeDir),
-        "no summary file should be written when GITHUB_STEP_SUMMARY is unset",
-      ).toEqual([]);
-      // stdout is the normal decorated local report (verdict + findings present).
-      const plain = stripAnsi(r.stdout);
+      const enabled = runDoctor(stub.binDir, cwd, [], { summaryFile });
+      const localDefault = runDoctor(stub.binDir, cwd);
+      // Byte-for-byte: the feature is invisible on stdout whether on or off.
+      expect(localDefault.stdout).toBe(enabled.stdout);
+      // The local default is still the normal decorated report (verdict + findings)...
+      const plain = stripAnsi(localDefault.stdout);
       expect(plain).toContain("[config]");
       expect(plain).toContain("[instance]");
       expect(plain).toMatch(/FAIL/);
-      // Heading markdown is NOT emitted to stdout — that lives only in the file.
+      // ...with no summary-only heading markdown leaking to stdout (it lives only
+      // in the file sink).
       expect(plain).not.toContain("## Flywheel doctor");
+      // Sanity: the enabled run really did write the second sink, so the diff
+      // above compared an active-affordance run against the scrubbed one.
+      expect(readFileSync(summaryFile, "utf8")).toContain(`## Flywheel doctor — ${REPO}`);
     } finally {
       stub.cleanup();
       rmSync(cwd, { recursive: true, force: true });
-      rmSync(probeDir, { recursive: true, force: true });
+      rmSync(ssDir, { recursive: true, force: true });
     }
   });
 });

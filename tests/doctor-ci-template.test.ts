@@ -84,11 +84,12 @@ describe("doctor-ci template shape", () => {
     expect(raw).toMatch(/bash -s --/);
     const runLine = raw.split("\n").find((l) => l.includes("bash -s --"));
     expect(runLine).toBeDefined();
-    // Flags only: the invocation forwards $flags, never a literal owner/repo
-    // positional (which would force doctor into remote-only mode and skip the
-    // on-disk checks). Guard against a hardcoded repo slug as a doctor arg.
-    expect(runLine).toContain("$flags");
-    expect(runLine).not.toMatch(/point-source\/\S+/);
+    // Flags only: `$flags` must be the FINAL token on the invocation, never
+    // followed by a positional owner/repo (which would force doctor into
+    // remote-only mode and skip the on-disk checks). Anchoring on end-of-line
+    // catches a trailing slug, a `${{ github.repository }}`, etc. — which a bare
+    // "contains $flags" check would miss.
+    expect(runLine).toMatch(/bash -s -- \$flags\s*$/);
   });
 
   it("passes --skip-credentials somewhere (the App-token path)", () => {
