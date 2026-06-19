@@ -255,13 +255,16 @@ branches=()
 if [[ -n "$yml" ]]; then
   # Locate the linter sibling. When doctor.sh is invoked via curl|bash
   # there are no on-disk siblings; fall back to fetching the linter from
-  # the same v1 source. ($doctor_dir was resolved near the top.)
+  # the same ref doctor itself came from — flywheel_scripts_base honors
+  # FLYWHEEL_TEMPLATES_BASE (and defaults to main), exactly as the
+  # findings.sh self-fetch above does, so a pinned consumer gets a matching
+  # linter rather than always main. ($doctor_dir was resolved near the top.)
   linter=""
   if [[ -n "$doctor_dir" && -f "$doctor_dir/lint-flywheel-config.py" ]]; then
     linter="$doctor_dir/lint-flywheel-config.py"
   else
     linter="$(mktemp)"
-    if ! curl -fsSL "https://raw.githubusercontent.com/point-source/flywheel/main/scripts/lint-flywheel-config.py" -o "$linter" 2>/dev/null; then
+    if ! curl -fsSL "$(flywheel_scripts_base)/lint-flywheel-config.py" -o "$linter" 2>/dev/null; then
       linter=""
     fi
   fi
