@@ -67,6 +67,13 @@
 <!--     run via `curl … | bash` and no local scripts/ exists (#238) -->
 <!--     (§req:doctor-curl-script-refs, §req:doctor-curl-script-refs-criteria, -->
 <!--     §req:doctor-curl-script-refs-stories, §req:doctor-curl-script-refs-constraints) -->
+<!--   - doctor.sh credential-check clarity — the App-token credential checks -->
+<!--     hard-FAIL (exit 1) when the local gh token cannot list repo Variables/ -->
+<!--     Secrets, reading as if flywheel is broken; downgrade the can't-verify -->
+<!--     case to warn and say plainly that an unverifiable check does not mean -->
+<!--     flywheel won't work (#237) -->
+<!--     (§req:doctor-credential-clarity, §req:doctor-credential-clarity-criteria, -->
+<!--     §req:doctor-credential-clarity-stories, §req:doctor-credential-clarity-constraints) -->
 
 ## Problem statement §req:problem-statement
 
@@ -2206,3 +2213,175 @@ jargon, the polish downstream starts from a deficit.
   reads as jargon; (2) extend the same clarity to the `--preset` help text and
   the adopter docs so every surface agrees; (3) review options 1 and 2 to the
   same plain-language bar.
+
+## doctor.sh credential-check clarity §req:doctor-credential-clarity
+
+`scripts/doctor.sh` is the read-only validator an adopter runs to confirm a
+repository is correctly wired for flywheel. Under "App-token credentials" it
+checks that the two values flywheel runs on are present: `FLYWHEEL_GH_APP_ID`
+(a repository or org **Variable**) and `FLYWHEEL_GH_APP_PRIVATE_KEY` (a
+repository or org **Secret**). To check them, doctor lists the repo's
+Variables and Secrets via `gh api` and looks for those names.
+
+Listing Variables and Secrets requires an **admin PAT**: GitHub App
+installation tokens are categorically forbidden from reading Variables or
+Secrets, regardless of the permissions granted to the App, and a plain
+`gh auth login` token without admin scope cannot list them either. So the
+*common* local case — an adopter who authenticated `gh` with an ordinary
+account, or who is running doctor from a context holding an App token — cannot
+perform this check at all. doctor already detects this: the list call fails and
+doctor knows it could not read, as distinct from reading an empty list. But it
+then reports that could-not-read as a hard **FAIL** ("could not list repo
+variables — listing requires an admin PAT…"). A FAIL drives doctor's exit code
+to 1, and the credentials section is the visually prominent block where an
+adopter looks to confirm flywheel is set up. The combined signal an adopter
+takes away is "flywheel's credentials are broken" — when the truth is "doctor,
+from this machine with this token, simply cannot see them." The credentials may
+be perfectly configured at the org or repo level; doctor just lacks the scope to
+look.
+
+Two things are wrong with that, and they are the two levers #237 names. First,
+the **severity is miscast**: a can't-verify-from-here condition is a limit on
+the adopter's local token, not a defect in the repository's configuration, so it
+should not fail the run or read as a fault. This is exactly the conflation
+§req:doctor-settings-read fixed for the repo-settings block — could-not-verify
+is a third state, distinct from "present" and "missing," and belongs at warn,
+not fail. The credential block already *distinguishes* could-not-list from
+absent (the hard part settings-read had to add); it just files the former at the
+wrong severity. Second, the **messaging is silent on consequence**: nowhere does
+doctor say that a skipped or unverifiable credential check does not mean flywheel
+won't work — it only means doctor could not verify that one area. An adopter is
+left to infer the worst.
+
+The original issue paired this messaging fix with a *behavior* lever — making
+credential checks opt-out-by-default and adding a flag to run them. That lever is
+**deliberately not taken here**: credential checks continue to run by default,
+the existing `--skip-credentials` flag (used by CI flows that already minted an
+App token, where the mint itself is the credential proof) keeps its current
+meaning, and no new opt-in flag is introduced. The friction the issue describes
+is resolved by making the unverifiable case read correctly — a non-fatal "could
+not verify from here, and that's fine" — rather than by hiding the check. Keeping
+it on by default means an adopter who *does* hold an admin token still gets the
+genuine missing-credential FAIL with no extra ceremony.
+
+The genuine failure still exists and still matters: when the token *can* list
+(an admin PAT) and the Variable or Secret is truly absent, that is a real
+misconfiguration flywheel cannot run without, and it stays a FAIL with its
+existing remediation. The point is to fail only when doctor actually established
+the credential is missing — never merely because it could not look.
+
+The users are the adopter validating their setup with whatever token `gh`
+happens to hold, and the flywheel maintainer who owns doctor. The problem is
+frequent (most local runs are not made with an admin PAT), self-inflicted (a
+reporting-severity bug, not a release fault), and corrosive: nothing is broken,
+but a green-on-the-repo setup is reported red and the adopter is told their
+credentials are wrong when they are not. It sits in the setup-onboarding cluster
+(#234–242) and reuses the bucket × severity vocabulary established by
+§req:preflight-detection and applied to doctor by §req:doctor-settings-read.
+
+## doctor.sh credential-check clarity success criteria §req:doctor-credential-clarity-criteria
+
+- An adopter who runs doctor with a token that **cannot list** Variables/Secrets
+  (an ordinary `gh auth login` account, or an App installation token) sees a
+  **could-not-verify** finding for each of `FLYWHEEL_GH_APP_ID` and
+  `FLYWHEEL_GH_APP_PRIVATE_KEY` — never a "missing" claim and never a FAIL. The
+  finding states plainly that verifying these requires an admin PAT and that this
+  is a limit on the local token, not a defect in the repo.
+- That could-not-verify finding **does not drive doctor's exit code to 1**: with
+  no genuine block present, doctor exits 0, so an under-scoped local run no longer
+  reports the repository as broken.
+- doctor makes unmistakable, in the credentials block, that a **skipped or
+  unverifiable credential check does not mean flywheel won't work** — it means
+  only that doctor could not verify that area from here. This reassurance is
+  present wherever the credential check ends in anything other than a confirmed
+  pass (the could-not-verify case and the existing `--skip-credentials` skip
+  note).
+- When the token **can list** and the Variable or Secret is **genuinely absent**,
+  doctor still reports a **FAIL** with the existing remediation guidance (the
+  `gh variable set` / secret-set instructions). The real-misconfiguration case is
+  unchanged — doctor fails only when it has actually established the credential is
+  missing.
+- When the token can list and both values are present (at repo or org level),
+  doctor reports them OK exactly as today, including the source annotation
+  ("repo" / "org (all|private|selected)").
+- Credential checks **continue to run by default**. The `--skip-credentials` flag
+  keeps its current meaning — skip the checks, caller verifies out of band — and
+  its skip note carries the same "does not mean flywheel won't work" framing. No
+  new flag is added to opt into or out of the checks.
+- The distinct credential states an adopter can land in — verified-present,
+  skipped, could-not-verify, genuinely-missing — are each reported in language
+  that tells them apart at a glance, so no two states read the same.
+- A fast local test exercises the could-not-verify path — doctor run against a
+  list call that fails reports "could not verify" at warn and exits 0, not FAIL —
+  so this severity regression cannot silently return. The test needs no live
+  GitHub access and adds no load to the rate-limited sandbox installation
+  (§req:sandbox-ci-budget).
+
+## doctor.sh credential-check clarity user stories §req:doctor-credential-clarity-stories
+
+- As an adopter running `doctor.sh` with an ordinary `gh` login (no admin PAT), I
+  want doctor to tell me it couldn't verify the App credentials from here rather
+  than fail and imply they're missing, so I don't go chasing a setup problem that
+  doesn't exist.
+- As an adopter whose credentials are correctly set at the org level, I want an
+  under-scoped local run to come back clean (exit 0), so a passing repo isn't
+  reported as broken just because my local token can't see org Secrets.
+- As an adopter reading the credentials block, I want it to say outright that a
+  check doctor couldn't run does not mean flywheel won't work, so I understand a
+  could-not-verify line is a visibility limit, not a verdict on my repo.
+- As an adopter who *does* hold an admin PAT and is genuinely missing a Variable
+  or Secret, I want doctor to still FAIL and tell me exactly how to set it, so the
+  real misconfiguration is caught with no loss of guidance.
+- As a CI maintainer whose flow already minted an App token, I want
+  `--skip-credentials` to keep skipping the checks exactly as before, so this
+  change doesn't disturb pipelines that already prove the credentials by using
+  them.
+- As a flywheel maintainer, I want the credential block to file could-not-verify
+  at warn — the same three-state, same-severity treatment §req:doctor-settings-read
+  gave the repo-settings block — so doctor speaks one consistent language about
+  what it can and cannot confirm.
+
+## doctor.sh credential-check clarity quality attributes and constraints §req:doctor-credential-clarity-constraints
+
+- **Could-not-verify is warn, not fail.** A list call that fails for lack of
+  scope is a local-env condition at warn severity, never a block. doctor fails on
+  credentials only when it successfully listed and the value is truly absent.
+- **Three states, kept distinct.** present / missing / could-not-verify are
+  reported as three different outcomes; an inability to look is never collapsed
+  into "missing." This mirrors §req:doctor-settings-read; here the distinction
+  already exists in the code and only the severity and wording change.
+- **One vocabulary.** Findings use the bucket × severity vocabulary from
+  §req:preflight-detection: a genuinely-missing credential is config + fail (a
+  block); a could-not-verify credential is local-env + warn. No new severity or
+  bucket names are introduced.
+- **Reassurance is explicit, not implied.** The "a skipped or unverifiable check
+  does not mean flywheel won't work" message is stated in the output, not left for
+  the adopter to infer from the absence of a FAIL.
+- **Behavior is unchanged except severity and wording.** Checks still run by
+  default; `--skip-credentials` keeps its meaning; no new flag is added; the set
+  of values checked and where they may live (repo or org Variable/Secret) is
+  unchanged. The original issue's opt-in-by-default lever is intentionally not
+  taken — see §req:doctor-credential-clarity for why.
+- **Exit contract preserved.** doctor stays read-only and exits 1 only when a
+  block-severity finding is present, 0 otherwise (§req:preflight-detection-criteria).
+  The change removes a false block; it adds none.
+- **No new privilege.** doctor requests no additional scopes. The whole point is
+  to behave correctly precisely when the local token is under-scoped — not to
+  demand a stronger one.
+- **Low blast radius.** The change is confined to doctor.sh's App-token
+  credentials block — its severity for the can't-list case and the wording of the
+  could-not-verify, skip, and missing findings. It does not touch how flywheel
+  itself reads credentials at run time, init.sh's invocation of doctor
+  (out of scope for #237), or any release behavior.
+- **Cheap coverage only.** The regression test lives in the fast local/CI suite
+  and does not draw on the e2e sandbox's rate-limited installation
+  (§req:sandbox-ci-budget).
+- **Priority.** Low-severity, self-contained onboarding correctness, and a direct
+  sibling of §req:doctor-settings-read — same defect class (a permission gap
+  mis-reported as a fault), same fix shape (reconcile to warn + clearer wording).
+  Nothing breaks and no release is at risk, so it does not outrank the
+  release-safety (§req:release-safety-gate), composite-action
+  (§req:composite-action-path), or stdin (§req:apply-rulesets-stdin) work. It is
+  nonetheless a real trust-eroder — doctor reports correctly-configured repos as
+  broken to the majority of local runs — and cheap: a severity change, four
+  reworded findings, and one local test.
