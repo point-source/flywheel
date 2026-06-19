@@ -1019,6 +1019,26 @@ create_app_via_manifest() {
   return 0
 }
 
+# install_app_on_repo — route the adopter to install an already-existing org-level
+# flywheel App onto THIS repo: the one action that lets its tokens act here
+# (§spec:init-app-step, "exists at the org level but is not installed"). Consumes
+# PREFLIGHT_* globals + OWNER/REPO; issues NO gh probes (the reuse boundary). Uses
+# the same vocabulary (FLYWHEEL_GH_APP_ID, org/repo levels) as pre-flight/doctor.
+install_app_on_repo() {
+  echo
+  echo "  A flywheel App (id ${PREFLIGHT_APP_ID_VALUE}) already exists at the ${PREFLIGHT_APP_ID_AT} level,"
+  echo "  but it is not installed on $REPO — its tokens cannot act on this repo yet."
+  echo "  Install the existing App on this repo:"
+  echo "    Open: https://github.com/organizations/$OWNER/settings/installations"
+  echo "    Find the flywheel App, click Configure, add $REPO under 'Only select repositories', and Save."
+  echo "    This is the one step that lets the App mint tokens for $REPO."
+  echo "  $(app_install_finish_cmd)"
+  if [[ "$INTERACTIVE" -eq 1 ]]; then
+    read -r -u 3 -p "  Press ENTER once the App is installed on $REPO..."
+  fi
+  return 0
+}
+
 prompt_existing_app_credentials() {
   cat <<EOF
   If you haven't created the App yet, follow:
@@ -1065,6 +1085,16 @@ app_creds_finish_cmd() {
   fi
 }
 
+# app_install_finish_cmd — single source of truth for the install-this-App
+# instruction recorded/printed when an org-level flywheel App exists but is not
+# installed on THIS repo (§spec:init-app-step, "exists at the org level but is
+# not installed"). The credentials are already set; the missing action is
+# installing the App on the repo so its tokens can act here. $REPO/$OWNER expand
+# at call time, matching app_creds_finish_cmd.
+app_install_finish_cmd() {
+  printf '%s' "Install the existing flywheel App on $REPO: open https://github.com/organizations/$OWNER/settings/installations , Configure the App, and add $REPO under 'Only select repositories'."
+}
+
 # app_step_render_detected — READ-ONLY summary of what the pre-flight pass already
 # found, for showing the adopter at the App step (§spec:init-app-step: "the step
 # reflects what pre-flight already found rather than starting cold"). Consumes the
@@ -1085,6 +1115,36 @@ app_step_render_detected() {
     echo "  FLYWHEEL_GH_APP_PRIVATE_KEY secret: found (${PREFLIGHT_APP_KEY_AT}-level)"
   else
     echo "  FLYWHEEL_GH_APP_PRIVATE_KEY secret: missing"
+  fi
+}
+
+# app_keep_detected — keep the credentials pre-flight already found and record
+# the outcome. SCOPE is the level the present piece lives at (we already know
+# where the creds are, so we skip the cold owner-type scope prompt); any missing
+# piece is filled via prompt_existing_app_credentials. Shared by the confirm
+# ("use the detected credentials") path and the install-on-repo path so the
+# record_outcome logic lives in exactly one place. Sets app_step_resolved=1.
+app_keep_detected() {
+  if [[ "$has_app_id" -eq 1 ]]; then
+    SCOPE="$app_id_found_at"
+  else
+    SCOPE="$app_key_found_at"
+  fi
+  app_step_resolved=1
+  if [[ "$has_app_id" -eq 1 && "$has_app_key" -eq 1 ]]; then
+    echo "  Keeping the detected credentials."
+    record_outcome "App credentials" configured
+  else
+    # Partial: prompt only for the missing piece. prompt_existing_app_credentials
+    # already guards each prompt on has_app_id / has_app_key, so the present
+    # piece is never re-pasted.
+    local app_creds_cmd
+    app_creds_cmd="$(app_creds_finish_cmd "$SCOPE")"
+    if prompt_existing_app_credentials; then
+      record_outcome "App credentials" configured
+    else
+      record_outcome "App credentials" failed config block "$app_creds_cmd"
+    fi
   fi
 }
 
@@ -1132,40 +1192,51 @@ else
     echo "  Pre-flight already found App credentials:"
     app_step_render_detected
     echo
-    read -r -u 3 -p "  Use the detected credentials? [Y/n] (default Y; N to override): " app_detected_choice
-    case "${app_detected_choice:-Y}" in
-      [Nn]*)
-        # Override: adopter wants to supply credentials from scratch. Clear the
-        # locals so the cold paste path prompts for BOTH pieces, then fall
-        # through to the cold menu below (its copy is pinned by tests).
-        has_app_id=0; has_app_key=0
-        ;;
-      *)
-        # Confirm: keep what pre-flight found. SCOPE is the level the present
-        # piece lives at — we already know where the creds are, so skip the
-        # cold owner-type scope prompt.
-        if [[ "$has_app_id" -eq 1 ]]; then
-          SCOPE="$app_id_found_at"
-        else
-          SCOPE="$app_key_found_at"
-        fi
-        app_step_resolved=1
-        if [[ "$has_app_id" -eq 1 && "$has_app_key" -eq 1 ]]; then
-          echo "  Keeping the detected credentials."
-          record_outcome "App credentials" configured
-        else
-          # Partial: prompt only for the missing piece. prompt_existing_app_credentials
-          # already guards each prompt on has_app_id / has_app_key, so the
-          # present piece is never re-pasted.
-          app_creds_cmd="$(app_creds_finish_cmd "$SCOPE")"
-          if prompt_existing_app_credentials; then
-            record_outcome "App credentials" configured
-          else
-            record_outcome "App credentials" failed config block "$app_creds_cmd"
-          fi
-        fi
-        ;;
-    esac
+    if [[ "$PREFLIGHT_APP_INSTALLED" == "no" ]]; then
+      # Org-level App detected but NOT installed on this repo (§spec:init-app-step,
+      # "exists at the org level but is not installed"): the creds exist yet the
+      # App cannot mint tokens for $REPO. Surface the install action as the primary
+      # recommended fix instead of the plain confirm; "use anyway" and "override"
+      # remain available. PREFLIGHT_APP_INSTALLED=="no" only occurs with
+      # has_app_id=1, so the detected-creds vocabulary above still applies.
+      echo "  This App is not installed on $REPO, so its tokens cannot act here yet."
+      echo "  Pick how to proceed:"
+      echo "    1) Install the existing App on this repo (recommended)"
+      echo "    2) Use the detected credentials anyway"
+      echo "    3) Override — create or paste different credentials"
+      read -r -u 3 -p "  Selection [1/2/3] (default 1): " app_installed_choice
+      case "${app_installed_choice:-1}" in
+        2)
+          # Use anyway: same effect as confirming the detection below.
+          app_keep_detected
+          ;;
+        3)
+          # Override: clear the locals so the cold paste path prompts for BOTH
+          # pieces, then fall through to the cold create/paste/skip menu below.
+          has_app_id=0; has_app_key=0
+          ;;
+        *)
+          # Install (recommended): route the adopter to install the existing App
+          # on this repo, then keep the already-detected credentials.
+          install_app_on_repo
+          app_keep_detected
+          ;;
+      esac
+    else
+      read -r -u 3 -p "  Use the detected credentials? [Y/n] (default Y; N to override): " app_detected_choice
+      case "${app_detected_choice:-Y}" in
+        [Nn]*)
+          # Override: adopter wants to supply credentials from scratch. Clear the
+          # locals so the cold paste path prompts for BOTH pieces, then fall
+          # through to the cold menu below (its copy is pinned by tests).
+          has_app_id=0; has_app_key=0
+          ;;
+        *)
+          # Confirm: keep what pre-flight found (shared with the install path).
+          app_keep_detected
+          ;;
+      esac
+    fi
   fi
 
   if [[ "$INTERACTIVE" -eq 1 && -z "${app_step_resolved:-}" ]]; then
