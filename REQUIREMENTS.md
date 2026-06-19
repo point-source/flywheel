@@ -74,6 +74,15 @@
 <!--     flywheel won't work (#237) -->
 <!--     (§req:doctor-credential-clarity, §req:doctor-credential-clarity-criteria, -->
 <!--     §req:doctor-credential-clarity-stories, §req:doctor-credential-clarity-constraints) -->
+<!--   - doctor.sh CI validation workflow — teams whose members can't or won't -->
+<!--     run gh auth locally have no way to validate their Flywheel config, since -->
+<!--     setup tells them to run doctor on a local checkout; an optional, -->
+<!--     manually-triggered workflow runs doctor in CI, checks out the repo for -->
+<!--     full coverage, best-effort mints an App token (optional admin PAT), -->
+<!--     reports what it can't verify, and surfaces findings in the Actions step -->
+<!--     summary, failing only on a block (#240) -->
+<!--     (§req:doctor-ci-workflow, §req:doctor-ci-workflow-criteria, -->
+<!--     §req:doctor-ci-workflow-stories, §req:doctor-ci-workflow-constraints) -->
 
 ## Problem statement §req:problem-statement
 
@@ -2568,3 +2577,169 @@ credentials are wrong when they are not. It sits in the setup-onboarding cluster
   nonetheless a real trust-eroder — doctor reports correctly-configured repos as
   broken to the majority of local runs — and cheap: a severity change, four
   reworded findings, and one local test.
+
+## doctor.sh CI validation workflow §req:doctor-ci-workflow
+
+`scripts/doctor.sh` is the read-only validator that tells an adopter whether
+their repository is correctly wired for Flywheel. Today the only documented way
+to run it is locally: `docs/adopter/setup.md` tells adopters to clone the repo
+and run `scripts/doctor.sh` with a `gh auth login` token that can read repo
+Variables and Secrets — i.e. an admin PAT. That barrier excludes a whole class
+of adopters. On some teams, members **can't or won't run `gh auth` locally** —
+they don't have a local admin token, aren't allowed to mint one, or simply have
+no checkout on the machine where they work — so for them the credentials
+Flywheel depends on (the `FLYWHEEL_GH_APP_ID` variable and
+`FLYWHEEL_GH_APP_PRIVATE_KEY` secret) live **only in CI**. The repository is the
+one place those credentials are reachable, and an adopter in this position has
+no way to validate their setup at all. One such adopter asked for a way to run
+doctor inside their own CI, on demand.
+
+Running doctor in CI is already proven feasible inside Flywheel's own
+repository: `release-gate.yml` and `e2e.yml` both invoke
+`./scripts/doctor.sh --skip-credentials point-source/flywheel-sandbox` as a
+pre-flight against the sandbox. What's missing is an **adopter-facing** path —
+an artifact an adopter can drop into their own repository and trigger themselves.
+
+The issue (#240) frames a scope question: *which checks are meaningful in a CI
+context, and which require local `gh auth`?* doctor already has the vocabulary to
+answer that. Its bucket × severity model (§req:preflight-detection) and its
+three-state reads — present / missing / could-not-verify, enabled / disabled /
+could-not-verify (§req:doctor-settings-read, §req:doctor-credential-clarity) —
+mean a check that the available token can't perform is reported as
+**could-not-verify** (local-env, warn), never as a false failure. So the CI
+variant does not need a curated subset of "CI-safe" checks; it runs every check
+and lets each one report honestly against whatever token the run holds. The
+adopter wants the run to **verify as much as it can** — including proving the
+credentials work by minting an App installation token from them, the single
+strongest credential check — and to **report plainly what it could not check**,
+rather than failing or staying silent.
+
+A clarification on "without a local checkout" (the issue's wording): the barrier
+being removed is the adopter having to clone and authenticate on *their own
+machine*. The CI job itself checking out the repo is not only acceptable but
+desirable — it widens coverage to the on-disk checks (`.gitattributes` / merge
+drivers, the committed `.flywheel.yml`) on top of the GitHub-side checks. "No
+local checkout" means "nobody runs anything on a laptop," not "the workflow may
+not use `actions/checkout`."
+
+The users are the adopter who wants to validate their setup from CI and the
+Flywheel maintainer who owns doctor and the adopter templates. The problem is
+frequent for teams with this credential constraint, currently **blocking** for
+them (no validation path exists), and trust-relevant: without it, an adopter
+configures Flywheel and simply hopes it is right. It sits inside the
+setup-onboarding cluster and reuses the established two-axis vocabulary rather
+than introducing anything new.
+
+## doctor.sh CI validation workflow success criteria §req:doctor-ci-workflow-criteria
+
+- An adopter can add an **optional** workflow to their repository — a template
+  documented in `docs/adopter/setup.md` — and trigger it **manually from the
+  Actions tab** (`workflow_dispatch`), with no local checkout and no local
+  `gh auth login`.
+- The run checks out the adopter's repository, so the **on-disk checks**
+  (`.gitattributes` / merge drivers, the committed `.flywheel.yml`) run in the
+  same pass as the **GitHub-API-side checks** (managed branches, rulesets,
+  Variables/Secrets, repo settings) — the widest coverage doctor offers, in one
+  run.
+- The run obtains the best token available without manual setup: it **mints an
+  App installation token** from the repo's configured `FLYWHEEL_GH_APP_ID` /
+  `FLYWHEEL_GH_APP_PRIVATE_KEY`. A successful mint is itself reported as a
+  passing credential check — it proves the App is installed and the private key
+  valid, which a mere "the variable exists" check cannot.
+- An adopter may **optionally** provide an admin PAT (as a secret); when present,
+  doctor uses it for the admin-gated reads (Variables, Secrets, repo settings),
+  raising coverage. The PAT is never required for the workflow to run.
+- When the available token cannot read something (e.g. Variables/Secrets/settings
+  under an installation token with no PAT), the run reports **could-not-verify** —
+  never a false "missing" or "disabled" — consistent with the three-state
+  behavior of §req:doctor-settings-read and §req:doctor-credential-clarity.
+- The auth path **degrades gracefully**: if neither App credentials nor a PAT are
+  available, the run still completes, performs the checks it can (including the
+  on-disk and unauthenticated-API checks), and reports the rest as
+  could-not-verify rather than erroring out.
+- Findings are written to the **GitHub Actions step summary**
+  (`$GITHUB_STEP_SUMMARY`), readable at a glance without scrolling the raw log,
+  in addition to appearing in the log.
+- The **job fails (red) only when a block-severity finding is present**; warn and
+  could-not-verify findings leave the job green. This is doctor's existing exit
+  contract (§req:preflight-detection-criteria), surfaced as the CI job's status.
+- A green job (possibly carrying could-not-verify notes) means *nothing is
+  provably misconfigured*; a red job means the adopter's config is *genuinely
+  broken*. The signal is trustworthy in both directions.
+- Any automated coverage of the workflow stays within the existing CI budget
+  discipline (§req:sandbox-ci-budget) — it does not add recurring load to the
+  rate-limited sandbox installation.
+
+## doctor.sh CI validation workflow user stories §req:doctor-ci-workflow-stories
+
+- As an adopter whose team can't or won't run `gh auth` locally, I want to
+  trigger doctor from my repository's Actions tab, so I can validate my Flywheel
+  config using the credentials already stored in the repo — without anyone
+  cloning it or authenticating on a laptop.
+- As an adopter, I want the CI run to check out my repo and validate both my
+  committed config files and my GitHub-side settings in one run, so I see the
+  full picture rather than a partial one.
+- As an adopter, I want the run to try to mint an App token from my configured
+  credentials, so a green credential check tells me the App is actually installed
+  and the key works — not merely that a variable is set.
+- As an adopter without an admin PAT, I want checks the run can't perform reported
+  as "could not verify" rather than as failures, so I'm not misdirected into
+  fixing a non-problem.
+- As an adopter with stricter assurance needs, I want to optionally add an admin
+  PAT secret to unlock fuller verification, without that PAT being required for
+  the workflow to run at all.
+- As an adopter, I want a red job to mean my config is genuinely broken and a
+  green job to mean nothing is provably wrong, so I can trust the result either
+  way.
+- As an adopter who doesn't need this, I want it to be an optional template I
+  choose to add (documented in setup), not something forced into every install.
+- As a Flywheel maintainer, I want the CI variant to reuse doctor.sh's existing
+  finding machinery and vocabulary, so the report reads the same in CI as locally
+  and there is no second validator to keep in sync.
+
+## doctor.sh CI validation workflow quality attributes and constraints §req:doctor-ci-workflow-constraints
+
+- **Optional, not default.** It is an add-on template documented in
+  `docs/adopter/setup.md`; init / template install does not add it automatically.
+  Adopters who don't need a CI validation path are not given one they must
+  maintain.
+- **Manual trigger.** `workflow_dispatch` only — run on demand, not on every push
+  or PR. Adopters who want it to fire on `.flywheel.yml` changes or on a schedule
+  can extend the template themselves; the shipped default is on-demand.
+- **Best-effort auth, honest reporting.** The run verifies as much as the
+  available token allows and reports could-not-verify for the rest. It attempts an
+  App-installation-token mint first (the strongest credential signal); an optional
+  admin PAT raises coverage. No secret beyond what Flywheel already requires is
+  mandatory.
+- **One vocabulary.** Findings use the bucket × severity model of
+  §req:preflight-detection and the three-state reads of §req:doctor-settings-read
+  and §req:doctor-credential-clarity. No new severity or bucket names are
+  introduced; the CI run reads the same as a local run.
+- **Exit contract unchanged.** doctor stays read-only and the job fails (exit 1)
+  only when a block-severity finding is present, 0 otherwise
+  (§req:preflight-detection-criteria). warn and could-not-verify findings never
+  turn the job red.
+- **No new privilege demanded.** The run requests no scopes beyond what Flywheel
+  needs; the PAT is opt-in. The whole point is to behave correctly when only an
+  under-scoped token (or just the configured App credentials) is available.
+- **Reuse, don't fork.** The variant should lean on doctor.sh's existing modes
+  and flags (`remote_only`, `--skip-credentials`, `--summary`) and its finding
+  machinery rather than reimplementing validation logic. Exactly how the workflow
+  mints the token, wires the PAT, and renders the summary is a SPEC design
+  decision; this requirement fixes the adopter-visible behavior.
+- **Surfaced in Actions.** Findings go to the Actions step summary as well as the
+  log, so the result is legible to an adopter who opened the run from the Actions
+  tab.
+- **Coverage within budget.** Any automated test of the workflow respects the
+  sandbox CI budget (§req:sandbox-ci-budget) and adds no recurring load to the
+  rate-limited installation.
+- **Low blast radius.** The change adds an adopter template and, at most, minor
+  doctor affordances; it does not alter local doctor's default behavior, init.sh,
+  or any release behavior.
+- **Priority.** An adopter-requested onboarding/operability improvement that
+  unblocks a class of adopters who otherwise cannot validate their setup at all.
+  Nothing is broken for existing adopters, so it does not outrank release-safety
+  (§req:release-safety-gate) or the other in-flight correctness work; it sits with
+  the setup-onboarding cluster (§req:doctor-settings-read,
+  §req:doctor-credential-clarity, §req:doctor-curl-script-refs) as the path that
+  lets credential-constrained teams reach the validator at all.
