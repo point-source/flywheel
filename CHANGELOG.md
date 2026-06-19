@@ -1,3 +1,10 @@
+# [2.1.0-dev.11](https://github.com/point-source/flywheel/compare/v2.1.0-dev.10...v2.1.0-dev.11) (2026-06-19)
+
+
+### Features
+
+* clarify and auto-detect the GitHub App step in init.sh ([#261](https://github.com/point-source/flywheel/issues/261)) ([ce2b2f4](https://github.com/point-source/flywheel/commit/ce2b2f405c719d714fae5f58505c665aa7b56aae)), closes [#236](https://github.com/point-source/flywheel/issues/236) [#236](https://github.com/point-source/flywheel/issues/236) [#236](https://github.com/point-source/flywheel/issues/236) [#236](https://github.com/point-source/flywheel/issues/236) [#236](https://github.com/point-source/flywheel/issues/236) [#236](https://github.com/point-source/flywheel/issues/236) [#236](https://github.com/point-source/flywheel/issues/236) [#236](https://github.com/point-source/flywheel/issues/236) [#236](https://github.com/point-source/flywheel/issues/236) [#236](https://github.com/point-source/flywheel/issues/236) [#236](https://github.com/point-source/flywheel/issues/236) [#236](https://github.com/point-source/flywheel/issues/236) [#236](https://github.com/point-source/flywheel/issues/236) [#236](https://github.com/point-source/flywheel/issues/236) [#236](https://github.com/point-source/flywheel/issues/236) [#236](https://github.com/point-source/flywheel/issues/236) [#236](https://github.com/point-source/flywheel/issues/236) [#236](https://github.com/point-source/flywheel/issues/236)
+
 # [2.1.0-dev.10](https://github.com/point-source/flywheel/compare/v2.1.0-dev.9...v2.1.0-dev.10) (2026-06-19)
 
 
