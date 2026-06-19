@@ -1065,6 +1065,48 @@ app_creds_finish_cmd() {
   fi
 }
 
+# app_step_render_detected — READ-ONLY summary of what the pre-flight pass already
+# found, for showing the adopter at the App step (§spec:init-app-step: "the step
+# reflects what pre-flight already found rather than starting cold"). Consumes the
+# PREFLIGHT_* globals directly — it is the reuse boundary, so it issues NO gh
+# calls and never re-probes. Uses the same vocabulary as pre-flight/doctor
+# (FLYWHEEL_GH_APP_ID variable, FLYWHEEL_GH_APP_PRIVATE_KEY secret, repo/org
+# levels). Output is indented two spaces to match the surrounding echo style.
+app_step_render_detected() {
+  if [[ -n "$PREFLIGHT_APP_ID_VALUE" ]]; then
+    echo "  Detected App ID ${PREFLIGHT_APP_ID_VALUE} (${PREFLIGHT_APP_ID_AT}-level)."
+  fi
+  if [[ "$PREFLIGHT_HAS_APP_ID" -eq 1 ]]; then
+    echo "  FLYWHEEL_GH_APP_ID variable: found (${PREFLIGHT_APP_ID_AT}-level)"
+  else
+    echo "  FLYWHEEL_GH_APP_ID variable: missing"
+  fi
+  if [[ "$PREFLIGHT_HAS_APP_KEY" -eq 1 ]]; then
+    echo "  FLYWHEEL_GH_APP_PRIVATE_KEY secret: found (${PREFLIGHT_APP_KEY_AT}-level)"
+  else
+    echo "  FLYWHEEL_GH_APP_PRIVATE_KEY secret: missing"
+  fi
+}
+
+# app_step_missing_pieces — READ-ONLY classifier echoing exactly one token for the
+# App step's "I have an App already" path to branch on (§spec:init-app-step: that
+# path "reuses detection instead of demanding a fresh paste"). Consumes the
+# PREFLIGHT_* globals directly — reuse boundary, NO gh calls, no re-probe.
+# Token contract: none (both present) | key (id present, key missing) |
+# id (key present, id missing) | both (neither present). Always returns 0.
+app_step_missing_pieces() {
+  if [[ "$PREFLIGHT_HAS_APP_ID" -eq 1 && "$PREFLIGHT_HAS_APP_KEY" -eq 1 ]]; then
+    echo "none"
+  elif [[ "$PREFLIGHT_HAS_APP_ID" -eq 1 ]]; then
+    echo "key"
+  elif [[ "$PREFLIGHT_HAS_APP_KEY" -eq 1 ]]; then
+    echo "id"
+  else
+    echo "both"
+  fi
+  return 0
+}
+
 if [[ "$SKIP_SECRETS" -eq 1 ]]; then
   echo "  --skip-secrets set; not touching App credentials."
   # SCOPE is not yet resolved this early; default to the repo form (matches the
