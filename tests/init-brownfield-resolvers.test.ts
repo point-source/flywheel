@@ -326,3 +326,233 @@ describe("guided retag resolver — idempotency (detector skips resolved tags)",
     }
   });
 });
+
+// ===========================================================================
+// WS2 (#233-3) — the PRIOR RELEASE-SYSTEM REMOVAL resolver
+// (SPEC.md §spec:brownfield-resolvers "Prior release-system removal",
+// docs/adopter/setup.md §0.2). The detector now recognizes the full set —
+// release-please, a separate semantic-release, goreleaser, changesets, and a
+// hand-rolled tagging workflow — and stashes each flagged path in
+// RELEASE_CONFLICT_PATHS. brownfield_resolver_release_conflict makes ONE
+// consolidated offer (a run-scoped guard collapses the per-file calls), lists the
+// exact paths, and on yes removes them with `git rm` (recoverable from history).
+// ===========================================================================
+
+const GORELEASER_CONFIG = `project_name: widget
+builds:
+  - main: ./cmd/widget
+`;
+
+const CHANGESET_CONFIG = `{
+  "changelog": "@changesets/cli/changelog",
+  "commit": false,
+  "access": "restricted"
+}
+`;
+
+/** Make a git-init'd work dir, write each (path → contents) file, optionally commit
+ * them so they are tracked (recoverable-from-history assertions), and return the
+ * dir + stubs. Mirrors makeWorkdir's stub setup but for arbitrary files/dirs. */
+function makeFileWorkdir(opts: {
+  files: Record<string, string>;
+  commit?: boolean;
+}): { work: string; binDir: string; doctorStub: string } {
+  const work = mkdtempSync(join(tmpdir(), "flywheel-relrm-"));
+  const binDir = join(work, "bin");
+  mkdirSync(binDir);
+  const gh = join(binDir, "gh");
+  writeFileSync(gh, GH_STUB);
+  chmodSync(gh, 0o755);
+  const doctorStub = writeDoctorStub(binDir, { blocks: 0, warns: 0 });
+  execFileSync("git", ["init", "-q"], { cwd: work });
+  for (const [rel, contents] of Object.entries(opts.files)) {
+    const dest = join(work, rel);
+    mkdirSync(dirname(dest), { recursive: true });
+    writeFileSync(dest, contents);
+  }
+  if (opts.commit) {
+    execFileSync("git", ["add", "-A"], { cwd: work, env: gitEnv });
+    execFileSync("git", ["commit", "-q", "-m", "prior release system"], {
+      cwd: work,
+      env: gitEnv,
+    });
+  }
+  return { work, binDir, doctorStub };
+}
+
+/** Run init.sh NON-interactively against a pre-built file work dir. */
+function runInitFiles(opts: {
+  files: Record<string, string>;
+  commit?: boolean;
+  env?: Record<string, string>;
+}): RunResult {
+  const { work, binDir, doctorStub } = makeFileWorkdir(opts);
+  const r = spawnSync("bash", [initSh, ...SCAFFOLD_ARGS], {
+    cwd: work,
+    encoding: "utf8",
+    input: "",
+    timeout: 30000,
+    env: {
+      ...process.env,
+      PATH: `${binDir}:${process.env.PATH}`,
+      FLYWHEEL_TEST_HOOKS: "1",
+      FLYWHEEL_DOCTOR_OVERRIDE: doctorStub,
+      ...(opts.env ?? {}),
+    },
+  });
+  return { status: r.status, stdout: r.stdout ?? "", stderr: r.stderr ?? "", work };
+}
+
+/** Drive init.sh under a real pty against a pre-built file work dir (tracked
+ * files committed) with the given keystroke `answers`. Returns exit + output + dir. */
+function runInitFilesPty(opts: {
+  answers: string;
+  files: Record<string, string>;
+  commit?: boolean;
+}): PtyResult {
+  const { work, binDir, doctorStub } = makeFileWorkdir(opts);
+  const cfg = JSON.stringify({
+    bin: binDir,
+    doctor: doctorStub,
+    init: initSh,
+    args: SCAFFOLD_ARGS,
+    cwd: work,
+    answers: opts.answers,
+  });
+  const r = spawnSync("python3", ["-c", PTY_DRIVER, cfg], {
+    cwd: work,
+    encoding: "utf8",
+    timeout: 40000,
+  });
+  if (r.status !== 0 || !r.stdout) {
+    rmSync(work, { recursive: true, force: true });
+    throw new Error(
+      `pty driver failed (status ${r.status}):\nstdout:\n${r.stdout}\nstderr:\n${r.stderr}`,
+    );
+  }
+  const lines = r.stdout.trim().split("\n");
+  const lastLine = lines[lines.length - 1] ?? "";
+  const parsed = JSON.parse(lastLine) as { exit: number; out: string };
+  return { exit: parsed.exit, out: stripAnsi(parsed.out), work };
+}
+
+describe("release-system removal resolver", () => {
+  // --- Detection extension: goreleaser / changesets are now recognized --------
+  describe("non-interactive (no dispatch, zero mutation)", () => {
+    it("goreleaser config ⇒ release conflict, hard-stop, file NOT removed", () => {
+      const r = runInitFiles({ files: { ".goreleaser.yml": GORELEASER_CONFIG } });
+      try {
+        const combined = stripAnsi(r.stdout + r.stderr);
+        expect(r.status, `combined:\n${combined}`).not.toBe(0);
+        expect(combined).toContain("goreleaser");
+        expect(combined).toContain(".goreleaser.yml");
+        expect(combined).toContain("docs/adopter/setup.md §0");
+        // Non-interactive never dispatches → zero mutation, no scaffold.
+        expect(existsSync(join(r.work, ".goreleaser.yml"))).toBe(true);
+        expect(existsSync(join(r.work, ".flywheel.yml"))).toBe(false);
+      } finally {
+        rmSync(r.work, { recursive: true, force: true });
+      }
+    });
+
+    it("changesets dir (.changeset/config.json) ⇒ release conflict, hard-stop, dir NOT removed", () => {
+      const r = runInitFiles({ files: { ".changeset/config.json": CHANGESET_CONFIG } });
+      try {
+        const combined = stripAnsi(r.stdout + r.stderr);
+        expect(r.status, `combined:\n${combined}`).not.toBe(0);
+        expect(combined).toContain("changesets");
+        expect(combined).toContain(".changeset");
+        expect(combined).toContain("docs/adopter/setup.md §0");
+        expect(existsSync(join(r.work, ".changeset/config.json"))).toBe(true);
+        expect(existsSync(join(r.work, ".flywheel.yml"))).toBe(false);
+      } finally {
+        rmSync(r.work, { recursive: true, force: true });
+      }
+    });
+  });
+
+  // --- Interactive confirm removes (Python pty) -------------------------------
+  describe("interactive (Python pty)", () => {
+    it("confirm (y) ⇒ removes the flagged files via git rm, lists exact paths, recoverable", () => {
+      const r = runInitFilesPty({
+        answers: "y\n",
+        commit: true,
+        files: {
+          ".github/workflows/release.yml": RELEASE_PLEASE_PTY_WF,
+          ".goreleaser.yml": GORELEASER_CONFIG,
+        },
+      });
+      try {
+        // ONE consolidated offer listing the exact paths.
+        expect(r.out).toContain("Prior release-system removal");
+        expect(r.out).toContain(".github/workflows/release.yml");
+        expect(r.out).toContain(".goreleaser.yml");
+        expect(r.out).toContain("Remove these prior release-system files?");
+        expect(r.out).toMatch(/RECOVERABLE/);
+
+        // Working tree: both flagged files removed.
+        expect(existsSync(join(r.work, ".github/workflows/release.yml"))).toBe(false);
+        expect(existsSync(join(r.work, ".goreleaser.yml"))).toBe(false);
+
+        // Recoverable from history: still present at HEAD (git rm keeps history).
+        const show = execFileSync(
+          "git",
+          ["show", "HEAD:.goreleaser.yml"],
+          { cwd: r.work, encoding: "utf8" },
+        );
+        expect(show).toContain("project_name");
+      } finally {
+        rmSync(r.work, { recursive: true, force: true });
+      }
+    });
+
+    it("decline (n) ⇒ files left intact, manual pointer shown", () => {
+      const r = runInitFilesPty({
+        answers: "n\n",
+        commit: true,
+        files: { ".goreleaser.yml": GORELEASER_CONFIG },
+      });
+      try {
+        expect(r.out).toContain("Remove these prior release-system files?");
+        expect(r.out).toContain("docs/adopter/setup.md §0");
+        // Declined → file still present.
+        expect(existsSync(join(r.work, ".goreleaser.yml"))).toBe(true);
+      } finally {
+        rmSync(r.work, { recursive: true, force: true });
+      }
+    });
+  });
+
+  // --- Idempotency: after removal + commit, a re-run flags nothing ------------
+  describe("idempotency (detector flags nothing once files are gone)", () => {
+    it("repo with NO prior release-system file ⇒ no release conflict, proceeds", () => {
+      // Simulate the state AFTER a successful removal + commit: the file is gone, so
+      // the detector flags nothing and a clean run reaches completion (exit 0).
+      const r = runInitFiles({
+        files: { ".github/workflows/ci.yml": "name: ci\non:\n  pull_request:\njobs:\n  t:\n    runs-on: ubuntu-latest\n    steps:\n      - run: true\n" },
+        commit: true,
+        env: { FLYWHEEL_ASSUME_INTERACTIVE: "1" },
+      });
+      try {
+        const combined = stripAnsi(r.stdout + r.stderr);
+        expect(r.status, `combined:\n${combined}`).toBe(0);
+        expect(combined).not.toMatch(/races Flywheel's tag\/release creation/);
+        expect(combined).not.toContain("Brownfield conditions need your hand");
+        expect(existsSync(join(r.work, ".flywheel.yml"))).toBe(true);
+      } finally {
+        rmSync(r.work, { recursive: true, force: true });
+      }
+    });
+  });
+});
+
+const RELEASE_PLEASE_PTY_WF = `name: release
+on:
+  push:
+    branches: [main]
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: googleapis/release-please-action@v4
+`;

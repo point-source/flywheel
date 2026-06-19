@@ -273,32 +273,28 @@ describe("init.sh — existing release-system detection (end-to-end)", () => {
     }
   });
 
-  // The block stands in BOTH TTY modes — only the wording differs
-  // (non-interactive "failed" vs interactive "halted"). There is no override to
-  // demote it: brownfield_resolve hard-stops it to the manual §0 guide and the
-  // gate exits non-zero. The "overridden via …" guard proves the demotion path is
-  // truly gone.
-  it.each([
-    ["non-interactive", {}, /pre-flight failed/i],
-    ["interactive", { FLYWHEEL_ASSUME_INTERACTIVE: "1" }, /Pre-flight halted/],
-  ] as const)(
-    "release-please conflict blocks and is never demoted (%s)",
-    (_label, env, haltText) => {
-      const r = runInit({
-        args: SCAFFOLD_ARGS,
-        env,
-        files: { ".github/workflows/release.yml": RELEASE_PLEASE_WF },
-      });
-      try {
-        const combined = stripAnsi(r.stdout + r.stderr);
-        expect(r.status, `combined:\n${combined}`).not.toBe(0);
-        expect(combined).toMatch(haltText);
-        expect(combined).not.toContain("overridden via --override-release-conflict");
-        expect(combined).toContain("docs/adopter/setup.md §0");
-        expect(existsSync(join(r.work, ".flywheel.yml"))).toBe(false);
-      } finally {
-        rmSync(r.work, { recursive: true, force: true });
-      }
-    },
-  );
+  // Non-interactively the block stands and is never demoted: there is no override
+  // flag, brownfield_resolve does NOT dispatch a resolver (mutation is
+  // interactive-only), so the conflict hard-stops to the manual §0 guide and the
+  // gate exits non-zero with NO scaffold written. The "overridden via …" guard
+  // proves the removed --override-release-conflict demotion path is truly gone.
+  // (The INTERACTIVE path is now the prior release-system removal resolver — a real
+  // shown-before-applied offer — covered by tests/init-brownfield-resolvers.test.ts,
+  // not the fake-TTY FLYWHEEL_ASSUME_INTERACTIVE seam, which never opens fd 3.)
+  it("release-please conflict blocks non-interactively and is never demoted", () => {
+    const r = runInit({
+      args: SCAFFOLD_ARGS,
+      files: { ".github/workflows/release.yml": RELEASE_PLEASE_WF },
+    });
+    try {
+      const combined = stripAnsi(r.stdout + r.stderr);
+      expect(r.status, `combined:\n${combined}`).not.toBe(0);
+      expect(combined).toMatch(/pre-flight failed/i);
+      expect(combined).not.toContain("overridden via --override-release-conflict");
+      expect(combined).toContain("docs/adopter/setup.md §0");
+      expect(existsSync(join(r.work, ".flywheel.yml"))).toBe(false);
+    } finally {
+      rmSync(r.work, { recursive: true, force: true });
+    }
+  });
 });

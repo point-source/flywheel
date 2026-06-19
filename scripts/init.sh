@@ -359,10 +359,14 @@ preflight_detect_credentials_app() {
 #
 # _release_conflict_block <producers> <path> — emit the one standard instance +
 # block for a file's detected producer(s); all matches in a file share one block,
-# since a single conflicting file is one thing for the adopter to fix.
+# since a single conflicting file is one thing for the adopter to fix. ALSO stash
+# <path> in RELEASE_CONFLICT_PATHS so the resolver (brownfield_resolver_release_conflict)
+# can offer to remove exactly the flagged files/dirs — detection runs immediately
+# before resolution, so the array is fresh.
 _release_conflict_block() {
   brownfield_finding release_conflict yes instance block \
     "$1 detected in $2 — it races Flywheel's tag/release creation. Remove or disable the conflicting workflow (see docs/adopter/setup.md §0.2), then re-run."
+  RELEASE_CONFLICT_PATHS+=("$2")
 }
 preflight_detect_release_conflict() {
   local path base producers
@@ -384,6 +388,10 @@ preflight_detect_release_conflict() {
     # A separate semantic-release (cycjimmy/semantic-release-action or
     # npx semantic-release). flywheel's own files are already excluded above.
     grep -qi 'semantic-release' "$path" && producers+="semantic-release, "
+    # goreleaser — goreleaser/goreleaser-action or a bare `goreleaser` invocation.
+    grep -qi 'goreleaser' "$path" && producers+="goreleaser, "
+    # changesets — the changesets/action release step.
+    grep -qi 'changesets/action' "$path" && producers+="changesets, "
     # Hand-rolled producers only count when the workflow runs on push or
     # workflow_dispatch — the triggers that publish releases on merge/manual run.
     if grep -qE '^[[:space:]]*push:' "$path" || grep -qE '^[[:space:]]*workflow_dispatch:' "$path"; then
@@ -400,6 +408,17 @@ preflight_detect_release_conflict() {
 
     [[ -n "$producers" ]] && _release_conflict_block "${producers%, }" "$path"
   done
+
+  # Config-file producers at repo root — a goreleaser config or a changesets dir
+  # is a positively-attributable prior release system even with no workflow yet.
+  for path in .goreleaser.yml .goreleaser.yaml; do
+    [[ -f "$path" ]] && _release_conflict_block "goreleaser" "$path"
+  done
+  # changesets keeps its state in .changeset/config.json; flag the directory as the
+  # removable unit (the resolver `git rm -r`s it).
+  if [[ -f .changeset/config.json ]]; then
+    _release_conflict_block "changesets" ".changeset"
+  fi
   # A trailing unmatched `grep ... &&` would leave a non-zero status; the gate
   # reads FINDINGS_BLOCK_COUNT, not this return, so end deterministically at 0.
   return 0
@@ -438,6 +457,14 @@ BROWNFIELD_CONDITIONS=()
 # so the resolution phase may not call record_outcome directly — it stashes the
 # verdict here and the summary bridge translates it once record_outcome exists.
 BROWNFIELD_OUTCOMES=()
+
+# RELEASE_CONFLICT_PATHS — the config files / workflow files / dirs the
+# release-conflict detector flagged, in flag order. This is the exact removable
+# set brownfield_resolver_release_conflict offers to delete (one consolidated
+# offer for the whole prior release system). Populated by _release_conflict_block;
+# read once by the resolver. Detection runs immediately before resolution, so the
+# array is always fresh for the resolver.
+RELEASE_CONFLICT_PATHS=()
 
 # brownfield_finding <token> <resolvable> <bucket> <severity> <message>
 # Emit a brownfield finding through the shared `finding` vocabulary AND record it
@@ -1100,6 +1127,96 @@ brownfield_resolver_tag_shape_bare_semver() {
   fi
 
   printf '  Created and pushed v-prefixed tag(s): %s. Originals kept.\n' "$created"
+  return 0   # APPLIED.
+}
+
+# _RELEASE_CONFLICT_RESOLVER_STATE — run-scoped guard for the prior release-system
+# removal resolver. The detector emits ONE release_conflict block per flagged file,
+# so brownfield_resolve calls the resolver once per file; this guard makes the
+# adopter prompted ONCE for the whole prior release system. Empty = not yet asked;
+# `applied`/`declined` = the decided outcome replayed on every subsequent call.
+_RELEASE_CONFLICT_RESOLVER_STATE=""
+
+# brownfield_resolver_release_conflict — the PRIOR RELEASE-SYSTEM REMOVAL resolver
+# (SPEC.md §spec:brownfield-resolvers "Prior release-system removal",
+# docs/adopter/setup.md §0.2). Implements the WS0 RESOLVER CONTRACT: show the full
+# change, confirm via brownfield_confirm, return 0=applied / 1=declined / 2=unable.
+#
+# The detector flags one block per conflicting file (a goreleaser/changesets config,
+# a release-please/semantic-release/hand-rolled workflow), so this resolver is
+# invoked once PER file. A run-scoped guard (_RELEASE_CONFLICT_RESOLVER_STATE)
+# collapses those calls into a SINGLE consolidated offer: the FIRST call computes the
+# whole removal set from RELEASE_CONFLICT_PATHS (filtered to paths still on disk —
+# idempotency for a path already removed earlier this run or by a prior run), shows
+# it, and confirms once; EVERY subsequent call replays the guarded outcome WITHOUT
+# re-prompting or re-removing.
+#
+# Removal is RECOVERABLE: each path is removed with `git rm` (file) / `git rm -r`
+# (the .changeset dir), so it stays in git history and can be restored with
+# `git checkout`/`git revert`. An UNTRACKED path falls back to `rm`/`rm -r` and is
+# NOTEd as not recoverable from history. This removal is what replaces the deleted
+# `--override-release-conflict` layer-on-top behavior — two release systems never
+# run at once.
+brownfield_resolver_release_conflict() {
+  # Subsequent calls (guard set): replay the decided outcome, no re-prompt.
+  case "$_RELEASE_CONFLICT_RESOLVER_STATE" in
+    applied)  return 0 ;;
+    declined) return 1 ;;
+  esac
+
+  # FIRST call: compute the removal set = flagged paths that still EXIST on disk.
+  local path remove=()
+  for path in "${RELEASE_CONFLICT_PATHS[@]}"; do
+    [[ -e "$path" ]] && remove+=("$path")
+  done
+
+  # Nothing left to remove (all already gone) — a resolved no-op.
+  if [[ "${#remove[@]}" -eq 0 ]]; then
+    _RELEASE_CONFLICT_RESOLVER_STATE="applied"
+    return 0
+  fi
+
+  # SHOW the exact list BEFORE removing (shown-before-applied contract).
+  printf '  Prior release-system removal — these files race Flywheel and will be removed:\n'
+  for path in "${remove[@]}"; do
+    printf '    %s\n' "$path"
+  done
+  printf '  This is RECOVERABLE: removal uses `git rm`, so the files stay in git\n'
+  printf '  history and can be restored with `git checkout`/`git revert`.\n'
+
+  if ! brownfield_confirm "  Remove these prior release-system files? [y/N] "; then
+    _RELEASE_CONFLICT_RESOLVER_STATE="declined"
+    return 1   # DECLINED — dispatcher prints the manual pointer; change nothing.
+  fi
+
+  # APPLY: prefer `git rm` (keeps the file in history); fall back to plain `rm` for
+  # an untracked path, NOTEing that it is NOT recoverable. A genuine failure routes
+  # to manual (return 2) without claiming success.
+  local removed="" rm_flag
+  for path in "${remove[@]}"; do
+    # `-r` for the .changeset directory; plain for files.
+    if [[ -d "$path" ]]; then rm_flag="-r"; else rm_flag=""; fi
+    if git ls-files --error-unmatch -- "$path" >/dev/null 2>&1; then
+      if git rm $rm_flag -- "$path" >/dev/null 2>&1; then
+        removed+="${removed:+, }$path"
+      else
+        printf '  Could not remove %s with `git rm`.\n' "$path"
+        return 2
+      fi
+    else
+      # Untracked: not in git history, so removal is NOT recoverable. Say so.
+      if rm $rm_flag -f -- "$path" 2>/dev/null; then
+        printf '  Removed untracked %s (NOT recoverable from git history).\n' "$path"
+        removed+="${removed:+, }$path"
+      else
+        printf '  Could not remove %s.\n' "$path"
+        return 2
+      fi
+    fi
+  done
+
+  printf '  Removed prior release-system file(s): %s.\n' "$removed"
+  _RELEASE_CONFLICT_RESOLVER_STATE="applied"
   return 0   # APPLIED.
 }
 
