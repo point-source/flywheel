@@ -165,6 +165,10 @@ ss_enabled() { [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; }
 ss_strip_ansi() { sed $'s/\x1b\\[[0-9;]*m//g'; }
 # Capture one plain (already ANSI-stripped) line into the step-summary buffer.
 ss_capture() { ss_enabled && SS_BODY+=("$1"); }
+# Capture a finding line, rendering it (the format_finding|sed work) ONLY when
+# the step summary is enabled — so the local default path (variable unset) does
+# zero extra work per finding rather than forking a subshell+sed it discards.
+ss_capture_finding() { ss_enabled && SS_BODY+=("$(format_finding "$@" | ss_strip_ansi)"); }
 
 # In --summary mode, bold section headers and green ok lines are suppressed so
 # only real findings (and the machine trailer) reach stdout. fail/warn/note
@@ -178,10 +182,10 @@ ok()    { ss_capture "  ✓ $*"; [[ $summary_mode -eq 1 ]] && return 0; printf '
 # warn → warn (counted locally for the summary line). The matching ANSI-free
 # finding line is captured for the step summary via format_finding (same
 # glyph+[bucket] text, without printing it twice or touching the block counter).
-fail()  { finding "$1" block "$2"; ss_capture "$(format_finding "$1" block "$2" | ss_strip_ansi)"; }
-warn()  { finding "$1" warn "$2"; warns=$((warns+1)); ss_capture "$(format_finding "$1" warn "$2" | ss_strip_ansi)"; }
+fail()  { finding "$1" block "$2"; ss_capture_finding "$1" block "$2"; }
+warn()  { finding "$1" warn "$2"; warns=$((warns+1)); ss_capture_finding "$1" warn "$2"; }
 # note → info; same wrapper shape so NOTE sites read like the others.
-note()  { finding "$1" info "$2"; ss_capture "$(format_finding "$1" info "$2" | ss_strip_ansi)"; }
+note()  { finding "$1" info "$2"; ss_capture_finding "$1" info "$2"; }
 
 # Classify a boolean field on an already-successful gh api response as one of
 # `true` / `false` / `absent`. GitHub omits admin-gated fields (e.g. the merge
