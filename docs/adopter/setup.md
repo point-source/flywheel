@@ -680,6 +680,34 @@ Merge the PR. On the resulting push, confirm:
 - A GitHub Release is published.
 - Your `build.yml` fires.
 
+### 7.1 Run doctor from CI (no local checkout)
+
+The `curl … | bash` invocation above assumes someone has a laptop checkout and a local token with admin reach. Some teams don't: their Flywheel credentials live **only** in CI — the `FLYWHEEL_GH_APP_ID` Variable and `FLYWHEEL_GH_APP_PRIVATE_KEY` Secret you registered in [§1](#1-create-a-github-app) — and nobody holds a local admin token or a working tree. For them, Flywheel ships an opt-in workflow that runs doctor from the Actions tab, so they can validate their config from the browser instead of configuring it and hoping it's right.
+
+**It is opt-in — `init.sh` does not install it.** Copy [`scripts/templates/doctor-ci.yml`](../../scripts/templates/doctor-ci.yml) from the Flywheel repo into your own `.github/workflows/` (e.g. as `flywheel-doctor.yml`):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/point-source/flywheel/main/scripts/templates/doctor-ci.yml \
+  -o .github/workflows/flywheel-doctor.yml
+```
+
+Neither `init.sh` nor the template install adds this file — adopters who don't need a CI validation path don't inherit one to maintain.
+
+**Trigger it from the Actions tab.** The workflow is `workflow_dispatch`-only — manual, on demand, not on push / PR / schedule (doctor is a point-in-time diagnostic, not a merge gate; the real gates live in `flywheel-pr.yml` / `flywheel-push.yml`). In the repo's **Actions** tab, select the **Flywheel doctor** workflow → **Run workflow**. No local checkout and no `gh auth login` are required by anyone.
+
+**Why this is the widest coverage in one run.** The job checks out your repo and runs doctor against *that* checkout with no `owner/repo` argument, so doctor resolves the repo from the git remote and runs its on-disk checks (`.gitattributes` / merge drivers, the committed `.flywheel.yml`) **alongside** the GitHub-API checks (managed branches, rulesets, Variables / Secrets, repo settings) in a single pass — the same breadth as a local run plus the API half. Before running doctor, the job mints a short-lived App installation token from the configured credentials; a successful mint is itself the passing credential check — it proves the App is installed and the private key is valid, which is stronger than confirming the Variable merely exists.
+
+**Optional admin PAT for stricter assurance.** App installation tokens categorically cannot list Variables or Secrets, so by default those admin-gated reads (Variables / Secrets / repo settings) report could-not-verify. If you want them to report verified-present or genuinely-missing instead, add an optional Secret named `FLYWHEEL_ADMIN_PAT` (an admin PAT); doctor then uses it for those reads and **raises** coverage. The PAT is never required: without it — and even with no App credentials configured at all — the workflow still runs, performs every check it can, and reports the rest as could-not-verify.
+
+**The trust contract.** Findings appear in the run's **Actions step summary** (readable at a glance) as well as the job log, in the same buckets and severities as [§0.6](#06-completion-check) and §7. doctor stays read-only, and the job's pass/fail mirrors doctor's verdict in that vocabulary:
+
+- A **green** job — possibly carrying could-not-verify notes — means *nothing is provably misconfigured*.
+- A **red** job means the config is *genuinely broken*: a `block`-severity finding fired.
+
+`warn` and could-not-verify findings never turn the job red.
+
+The shipped default fetches doctor from `@main` (the latest diagnostic, matching every other doctor invocation in this doc). If you'd rather doctor also fire on `.flywheel.yml` changes or on a schedule, extend the template's `on:` block yourself — the opt-in default keeps it manual.
+
 ## 8. Upgrading Flywheel
 
 Flywheel ships as a single composite action (`point-source/flywheel`). Your `.github/workflows/flywheel-{pr,push}.yml` callers pin it at `@v<major>` (e.g. `@v2`); that one ref governs every flywheel file that runs — the JS dispatcher, the bundled `scripts/` (back-merge loop, `@`-mention sanitizer, merge drivers), and the semantic-release plugin set wired into `action.yml`. Bug fixes and non-breaking features ride the floating major tag and are picked up on the next workflow run with no action from you.

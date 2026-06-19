@@ -3029,3 +3029,170 @@ and offer to install it, closing the one gap today's create/paste menu cannot.
 - *Renaming the credentials to clearer identifiers* is rejected: the names are a
   contract the action and workflows read; the change is to copy and detection
   handling, not to the strings.
+
+## doctor.sh runs in adopter CI on demand §spec:doctor-ci-workflow
+
+*Status: complete*
+
+An adopter whose team **cannot or chooses not to run `gh auth login` locally** has a
+path to validate their flywheel setup: an optional, manually-triggered workflow,
+shipped as a documented template, that runs `scripts/doctor.sh` inside their own
+repository's Actions. For these teams the credentials flywheel depends on (the
+`FLYWHEEL_GH_APP_ID` Variable and `FLYWHEEL_GH_APP_PRIVATE_KEY` Secret) live
+**only in CI** — nobody holds a local admin token or a checkout on a laptop — so
+the repository's own CI is the one place those credentials are reachable. Before
+this section the only documented way to run doctor was locally from a checkout
+with a `gh auth login` token (§spec:doctor-curl-remediation,
+`docs/adopter/setup.md`), which excluded this class of adopters entirely: they
+could configure flywheel and only hope it was right. §req:doctor-ci-workflow
+§req:doctor-ci-workflow-stories
+
+Running doctor in CI is already proven inside flywheel's own repository —
+`release-gate.yml` and `e2e.yml` both invoke
+`./scripts/doctor.sh --skip-credentials point-source/flywheel-sandbox` as a
+pre-flight after minting an App installation token. What was missing is an
+**adopter-facing** artifact: a workflow an adopter drops into *their* repository
+and triggers from the Actions tab. This section adds that artifact and fixes its
+adopter-visible behavior; it does not change what doctor detects.
+§req:doctor-ci-workflow
+
+**Every check runs; each reports honestly — no curated "CI-safe" subset.** The
+issue (#240) framed a scope question: which checks are meaningful in CI and which
+need local `gh auth`? doctor already answers it without a curated list. Its
+three-state reads — present / missing / could-not-verify
+(§spec:doctor-credential-clarity), enabled / disabled / could-not-verify
+(§spec:doctor-settings-read) — mean any check the run's token cannot perform is
+reported **could-not-verify** (`local-env` + `warn`), never a false failure. So
+the CI variant runs the **same** doctor, the full check set, and lets each check
+report against whatever token the run holds. There is no second validator and no
+CI-only subset to keep in sync. This is the deliberate reuse the constraints
+demand (§req:doctor-ci-workflow-constraints): one tool, one bucket × severity
+vocabulary (§spec:preflight-classification, §req:preflight-detection).
+
+**"No local checkout" means no laptop — the CI job's `actions/checkout` is
+wanted.** The barrier being removed is the *adopter* having to clone and
+authenticate on their own machine, not the workflow using `actions/checkout`. The
+job checking out the repo is desirable: it lets doctor's on-disk checks
+(`.gitattributes` / merge drivers, the committed `.flywheel.yml`) run in the same
+pass as the GitHub-API-side checks (managed branches, rulesets, Variables /
+Secrets, repo settings) — the widest coverage doctor offers, in one run. doctor
+already runs its on-disk checks only when its target repository equals the
+checked-out repository (the `remote_only == 0` path: `REPO == cwd_repo`,
+scripts/doctor.sh); the workflow therefore invokes doctor so the validated repo
+*is* the checked-out repo, rather than passing a foreign `owner/repo` that would
+force the remote-only path and skip the on-disk checks.
+§req:doctor-ci-workflow-criteria §req:doctor-ci-workflow-stories
+
+**The credential mint is the strongest credential proof.** The run obtains the
+best token available without manual setup by **minting an App installation
+token** from the repo's configured `FLYWHEEL_GH_APP_ID` /
+`FLYWHEEL_GH_APP_PRIVATE_KEY` (the `actions/create-github-app-token` step
+`e2e.yml` and `release-gate.yml` already use). A successful mint proves the App
+is installed and the private key valid — a stronger fact than "the variable
+exists," which is all a listing check could establish. Under that installation
+token doctor cannot list Variables or Secrets (App installation tokens are
+categorically forbidden from reading either, per §spec:doctor-credential-clarity),
+so the run passes `--skip-credentials`: the mint is the credential check, exactly
+as the existing CI pre-flights treat it. The skip is reported as the already-shipped
+non-fatal skip note, not as a failure. §req:doctor-ci-workflow-criteria
+§req:doctor-ci-workflow-stories
+
+**An admin PAT is optional and only raises coverage.** An adopter with stricter
+assurance needs may supply an admin PAT as a secret; when present, the run uses
+it for the admin-gated reads (Variables, Secrets, repo settings), so those report
+verified-present / genuinely-missing instead of could-not-verify. The PAT is
+never required for the workflow to run, and the workflow requests no scope beyond
+what flywheel already needs — the whole point is to behave correctly when only
+the configured App credentials are available. §req:doctor-ci-workflow-criteria
+§req:doctor-ci-workflow-constraints §req:doctor-ci-workflow-stories
+
+**Findings are legible from the Actions tab.** doctor's findings reach the
+**Actions step summary** as well as the run log, so an adopter who opened the run
+from the Actions tab reads the result without scrolling raw logs. Whether the
+step summary is produced by teeing doctor's output, by a doctor affordance that
+emits step-summary markdown, or another means is an implementation choice left to
+ROADMAP — the spec fixes that the result is surfaced in the step summary, not the
+mechanism. The change is "an adopter template and, at most, minor doctor
+affordances"; it does not alter local doctor's default behavior, init.sh, or any
+release behavior. §req:doctor-ci-workflow-criteria
+§req:doctor-ci-workflow-constraints
+
+**Optional and manual by default.** The template is an add-on documented in
+`docs/adopter/setup.md`; init / template install does **not** add it
+automatically, so adopters who do not need a CI validation path are not handed
+one to maintain. It is `workflow_dispatch`-only — on demand, not on every push or
+PR. An adopter who wants it to fire on `.flywheel.yml` changes or on a schedule
+extends the template themselves; the shipped default is manual. This keeps the
+blast radius small and respects the CI-budget discipline
+(§spec:sandbox-test-budget, §req:sandbox-ci-budget): the shipped workflow adds no
+recurring load, and any automated test of it stays within that budget.
+§req:doctor-ci-workflow-constraints
+
+**The signal is trustworthy in both directions.** doctor stays read-only and
+keeps its exit contract: the job fails (exit 1) **only** when a `block`-severity
+finding is present, 0 otherwise (§spec:preflight-classification,
+§req:preflight-detection-criteria). warn and could-not-verify findings never turn
+the job red. So a green job — possibly carrying could-not-verify notes — means
+*nothing is provably misconfigured*, and a red job means the config is *genuinely
+broken*. §req:doctor-ci-workflow-criteria §req:doctor-ci-workflow-constraints
+
+**Criteria.**
+
+- An adopter can add an optional workflow template (documented in
+  `docs/adopter/setup.md`) to their repository and trigger it manually from the
+  Actions tab (`workflow_dispatch`), with no local checkout and no local
+  `gh auth login`.
+- init / template install shall not add the workflow automatically; it is an
+  opt-in add-on.
+- The run shall check out the adopter's repository and validate the target it
+  checked out, so doctor's on-disk checks (`.gitattributes` / merge drivers, the
+  committed `.flywheel.yml`) run in the same pass as the GitHub-API-side checks
+  (managed branches, rulesets, Variables / Secrets, repo settings).
+- The run shall mint an App installation token from the repo's configured
+  `FLYWHEEL_GH_APP_ID` / `FLYWHEEL_GH_APP_PRIVATE_KEY`; a successful mint is
+  itself the passing credential check, and the run shall not also require listing
+  Variables / Secrets under that token.
+- When the available token cannot read something (Variables / Secrets / settings
+  under an installation token with no PAT), the run shall report
+  could-not-verify — never a false "missing" or "disabled" — consistent with
+  §spec:doctor-settings-read and §spec:doctor-credential-clarity.
+- An adopter may optionally supply an admin PAT secret; when present the run shall
+  use it for the admin-gated reads, raising coverage. The PAT shall never be
+  required for the workflow to run, and the workflow shall request no scope beyond
+  what flywheel already needs.
+- doctor's findings shall be surfaced in the Actions step summary as well as the
+  run log.
+- The run shall reuse `scripts/doctor.sh` and its existing modes / flags
+  (the on-disk vs remote-only path, `--skip-credentials`, `--summary`) and its
+  finding machinery; no second validator and no CI-only check subset is
+  introduced, and the report reads the same in CI as locally.
+- doctor shall remain read-only and the job shall exit 1 only when a
+  `block`-severity finding is present, 0 otherwise; warn and could-not-verify
+  findings shall not fail the job. A green job means nothing is provably
+  misconfigured; a red job means the config is genuinely broken.
+- Any automated coverage of the workflow shall stay within the sandbox CI budget
+  (§spec:sandbox-test-budget, §req:sandbox-ci-budget) and add no recurring load
+  to the rate-limited sandbox installation.
+- The change shall not alter local doctor's default behavior, init.sh, or any
+  release behavior.
+
+**Scope and alternatives.**
+
+- *A curated subset of "CI-safe" checks* was rejected: doctor's three-state reads
+  already report could-not-verify for anything the run's token cannot perform, so
+  the full check set runs honestly in CI with no subset to curate or keep in sync.
+- *Requiring an admin PAT* was rejected: it asks for privilege precisely where the
+  design's value is behaving correctly without it. The PAT is opt-in and only
+  raises coverage; the App credentials alone suffice to run.
+- *Auto-installing the template during init / template install* was rejected:
+  adopters who do not need a CI validation path should not inherit a workflow to
+  maintain. It is an opt-in template.
+- *Triggering on push / PR / schedule by default* was rejected: it adds recurring
+  CI load against the budget discipline; the shipped default is `workflow_dispatch`
+  and the adopter extends it if they want more.
+- *Reimplementing validation logic in workflow YAML or a second CI-only validator*
+  was rejected: it would drift from `scripts/doctor.sh` and split the finding
+  vocabulary. The workflow leans on the existing script and its flags.
+- *Passing a foreign `owner/repo` to doctor in the CI run* was rejected for the
+  default path: it forces doctor's remote-only mode and skips the on-disk checks,
+  narrowing coverage the checkout exists to widen.
