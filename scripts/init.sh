@@ -1328,6 +1328,16 @@ brownfield_resolver_branch_protection_bypass() {
     printf '  FLYWHEEL_GH_APP_ID), then add the App as a bypass actor: docs/adopter/setup.md §0.\n'
     return 2
   fi
+  # The App ID is the adopter-set FLYWHEEL_GH_APP_ID variable; assert it is numeric
+  # before it reaches the bypass-entry JSON below. jq's --argjson already fails
+  # closed on a malformed value, but this resolver GRANTS branch-protection bypass,
+  # so a non-numeric id is rejected up front rather than smuggled into the PUT body.
+  if [[ ! "$app_id" =~ ^[0-9]+$ ]]; then
+    printf '  Branch-protection bypass: the configured Flywheel App ID (%s) is not numeric,\n' "$app_id"
+    printf '  so the bypass entry can'\''t be constructed safely. Fix FLYWHEEL_GH_APP_ID, then\n'
+    printf '  add the App as a bypass actor: docs/adopter/setup.md §0.\n'
+    return 2
+  fi
 
   # CLASSIC-protection branches can't be fixed by a ruleset edit — name them.
   if [[ "${#BYPASS_CLASSIC_BRANCHES[@]}" -gt 0 ]]; then
