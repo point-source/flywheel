@@ -351,7 +351,10 @@ create_app_via_manifest() {
     echo "  error: could not set FLYWHEEL_GH_APP_ID variable at scope=$SCOPE." >&2
     return 1
   }
-  printf '%s' "$pem" | write_app_key_secret
+  printf '%s' "$pem" | write_app_key_secret || {
+    echo "  error: could not set FLYWHEEL_GH_APP_PRIVATE_KEY secret at scope=$SCOPE." >&2
+    return 1
+  }
   echo "  set FLYWHEEL_GH_APP_ID variable and FLYWHEEL_GH_APP_PRIVATE_KEY secret (scope=$SCOPE)."
   echo
   echo "  Final manual step: install the App on $REPO."
@@ -395,7 +398,10 @@ EOF
     elif [[ ! -f "$pem_path" ]]; then
       echo "  error: PEM file not found at '$pem_path' — skipping FLYWHEEL_GH_APP_PRIVATE_KEY secret." >&2
     else
-      write_app_key_secret < "$pem_path"
+      write_app_key_secret < "$pem_path" || {
+        echo "  error: could not set FLYWHEEL_GH_APP_PRIVATE_KEY secret at scope=$SCOPE." >&2
+        return 1
+      }
       echo "  set FLYWHEEL_GH_APP_PRIVATE_KEY secret (scope=$SCOPE)."
     fi
   fi
