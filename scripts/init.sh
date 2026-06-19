@@ -470,6 +470,181 @@ preflight_detect_version_tag_shape() {
   return 0
 }
 
+# ---------------------------------------------------------------------------
+# Brownfield branch-protection helpers (§spec:brownfield-detection).
+#
+# These two helpers are SHARED reuse boundaries: the branch-protection-bypass
+# detector below uses them, and the sibling signed-commit/tag workstream reuses
+# the same managed-branch enumeration + parsed ruleset details rather than
+# re-probing gh. Keep them standalone, read-only, and error-swallowing.
+# ---------------------------------------------------------------------------
+
+# preflight_brownfield_managed_branches — echo (newline-separated) the candidate
+# managed branches that EXIST on the remote. The candidate set is flywheel's
+# standard topology (develop main staging) because at pre-flight the preset /
+# .flywheel.yml is not yet known — we probe the superset and let the caller act
+# only on what exists. Existence is tested with the doctor.sh idiom
+# (`gh api repos/$REPO/branches/$b`). REPO may be empty (gh unresolved); in that
+# case we can't probe the remote, so echo nothing. Read-only; errors swallowed.
+preflight_brownfield_managed_branches() {
+  [[ -n "${REPO:-}" ]] || return 0
+  local b
+  for b in develop main staging; do
+    if gh api "repos/$REPO/branches/$b" >/dev/null 2>&1; then
+      echo "$b"
+    fi
+  done
+}
+
+# preflight_brownfield_read_rulesets — list the repo's branch-target rulesets and
+# read each one's detail, mirroring doctor.sh's read_ruleset_detail pattern.
+# Populates parallel arrays (bash 3.2 compatible — no associative arrays):
+#   PREFLIGHT_RULESET_IDS[]     — ruleset id
+#   PREFLIGHT_RULESET_DETAILS[] — the ruleset detail JSON (same index as the id)
+# and the flag PREFLIGHT_RULESET_UNREADABLE (0|1): set when listing rulesets
+# fails (token lacks repo-admin) OR any single ruleset's DETAIL read fails. As in
+# doctor.sh, an unreadable ruleset must NEVER collapse into a false "absent"
+# verdict — the caller routes the unreadable flag to a could-not-verify warn. The
+# parsed details are exposed as globals so the signed-commit workstream can reuse
+# them. Read-only; all gh errors swallowed.
+PREFLIGHT_RULESET_IDS=()
+PREFLIGHT_RULESET_DETAILS=()
+PREFLIGHT_RULESET_UNREADABLE=0
+preflight_brownfield_read_rulesets() {
+  PREFLIGHT_RULESET_IDS=()
+  PREFLIGHT_RULESET_DETAILS=()
+  PREFLIGHT_RULESET_UNREADABLE=0
+  [[ -n "${REPO:-}" ]] || return 0
+  local rulesets_json branch_ids rid detail
+  if ! rulesets_json="$(gh api "repos/$REPO/rulesets" 2>/dev/null)"; then
+    # Listing failed entirely — token can't read rulesets. Mark indeterminate so
+    # the caller emits could-not-verify rather than asserting "no protection".
+    PREFLIGHT_RULESET_UNREADABLE=1
+    return 0
+  fi
+  branch_ids="$(echo "$rulesets_json" | jq -r '.[]? | select(.target == "branch") | .id' 2>/dev/null || true)"
+  while read -r rid; do
+    [[ -z "$rid" ]] && continue
+    if ! detail="$(gh api "repos/$REPO/rulesets/$rid" 2>/dev/null)"; then
+      # Listing allowed but detail read denied — a permission gap. Track it so an
+      # unread ruleset never collapses into a false block (doctor.sh #239 logic).
+      PREFLIGHT_RULESET_UNREADABLE=1
+      continue
+    fi
+    PREFLIGHT_RULESET_IDS+=("$rid")
+    PREFLIGHT_RULESET_DETAILS+=("$detail")
+  done <<< "$branch_ids"
+}
+
+# preflight_detect_branch_protection_bypass — §spec:brownfield-detection.
+# READ-ONLY detector: for each managed branch that exists on the remote, decide
+# whether a protection ruleset that would block flywheel's pushes (PR-required,
+# no-force-push, or no-deletion) OMITS the flywheel App as a bypass actor. That
+# omission is the hazard: the release push and back-merge push the bot performs
+# would fail "changes must be made through a pull request". When the App ID is
+# configured (PREFLIGHT_APP_ID_VALUE) we look for that exact Integration actor in
+# the ruleset's bypass_actors; when the App ID is unknown (greenfield) we fall
+# back to "a blocking rule exists and there is NO Integration bypass actor at
+# all". Biased to FALSE NEGATIVES: a branch with no protection, or protection
+# that already lists the App, emits nothing. When protection can't be read we
+# emit a could-not-verify warn (never a false block), mirroring doctor.sh.
+preflight_detect_branch_protection_bypass() {
+  [[ -n "${REPO:-}" ]] || return 0
+
+  local managed
+  managed="$(preflight_brownfield_managed_branches)"
+  [[ -n "$managed" ]] || return 0
+
+  preflight_brownfield_read_rulesets
+
+  local app_id="${PREFLIGHT_APP_ID_VALUE:-}"
+  local affected="" b ref
+  while IFS= read -r b; do
+    [[ -n "$b" ]] || continue
+    ref="refs/heads/$b"
+    # Scan readable branch rulesets for one whose conditions include this branch.
+    local matched_blocking=0 app_bypass=0 has_integration_bypass=0
+    local i=0 detail includes inc blocking app_actors integ_count
+    while [[ $i -lt ${#PREFLIGHT_RULESET_IDS[@]} ]]; do
+      detail="${PREFLIGHT_RULESET_DETAILS[$i]}"
+      i=$((i+1))
+      # `?` after each step + `|| true` keep a malformed/non-object detail from
+      # aborting the run under `set -e` (jq exits non-zero on a type error).
+      includes="$(echo "$detail" | jq -r '.conditions?.ref_name?.include[]?' 2>/dev/null || true)"
+      local covers=0
+      while IFS= read -r inc; do
+        [[ -z "$inc" ]] && continue
+        if [[ "$inc" == "$ref" || "$inc" == "~ALL" || "$inc" == "~DEFAULT_BRANCH" ]]; then
+          covers=1
+        fi
+      done <<< "$includes"
+      [[ $covers -eq 1 ]] || continue
+
+      # A "blocking" ruleset carries any rule that stops the bot's direct push:
+      # pull_request (changes must go through a PR), non_fast_forward / update
+      # (no force-push), or deletion (no branch delete).
+      blocking="$(echo "$detail" | jq -r \
+        '[.rules[]? | select(.type == "pull_request" or .type == "non_fast_forward" or .type == "update" or .type == "deletion")] | length' 2>/dev/null || true)"
+      [[ "${blocking:-0}" -gt 0 ]] || continue
+      matched_blocking=1
+
+      # Count Integration-type bypass actors, and whether OUR App is among them.
+      integ_count="$(echo "$detail" | jq -r \
+        '[.bypass_actors[]? | select(.actor_type == "Integration")] | length' 2>/dev/null || true)"
+      [[ "${integ_count:-0}" -gt 0 ]] && has_integration_bypass=1
+      if [[ -n "$app_id" ]]; then
+        app_actors="$(echo "$detail" | jq -r --arg id "$app_id" \
+          '[.bypass_actors[]? | select(.actor_type == "Integration" and (.actor_id | tostring) == $id)] | length' 2>/dev/null || true)"
+        [[ "${app_actors:-0}" -gt 0 ]] && app_bypass=1
+      fi
+    done
+
+    # Legacy classic branch-protection fallback: if no ruleset covered the branch
+    # but a classic protection rule requires PRs, that also blocks the bot. Classic
+    # protection has no per-App bypass we can read here, so treat a readable
+    # PR-requiring classic rule as the hazard (rulesets remain the primary surface).
+    if [[ $matched_blocking -eq 0 ]]; then
+      local classic
+      if classic="$(gh api "repos/$REPO/branches/$b/protection" 2>/dev/null)"; then
+        local classic_pr
+        # `?` suppresses the jq error if the response isn't an object (e.g. the
+        # default `[]` stub / a non-protection payload); `|| true` keeps a non-zero
+        # jq exit from aborting the run under `set -e`.
+        classic_pr="$(echo "$classic" | jq -r '(.required_pull_request_reviews? // null) | if (. != null) then 1 else 0 end' 2>/dev/null || true)"
+        if [[ "${classic_pr:-0}" -gt 0 ]]; then
+          matched_blocking=1
+          # Classic protection exposes no Integration bypass list — apps cannot be
+          # added as bypass actors there — so this is unambiguously the hazard.
+          has_integration_bypass=0
+          app_bypass=0
+        fi
+      fi
+    fi
+
+    [[ $matched_blocking -eq 1 ]] || continue
+
+    # Decide hazard. With a known App ID: hazard iff our App is NOT a bypass actor.
+    # Without one (greenfield): hazard iff there is NO Integration bypass actor at
+    # all (we can't say which App it would be, but any Integration bypass means
+    # the adopter has wired SOME app and we don't block — false-negative bias).
+    if [[ -n "$app_id" ]]; then
+      [[ $app_bypass -eq 0 ]] && affected+="$b, "
+    else
+      [[ $has_integration_bypass -eq 0 ]] && affected+="$b, "
+    fi
+  done <<< "$managed"
+
+  if [[ -n "$affected" ]]; then
+    finding instance block "branch protection on ${affected%, } omits the Flywheel App as a bypass actor — the release push and back-merge push will fail \"changes must be made through a pull request\". Add the App (id ${app_id:-<your-app-id>}) as an Integration bypass actor on those branches' ruleset(s)."
+  elif [[ $PREFLIGHT_RULESET_UNREADABLE -eq 1 ]]; then
+    # Rulesets exist but at least one couldn't be read — never assert absent.
+    finding local-env warn "could not verify ${managed//$'\n'/, } branch protection bypass — reading protection requires repo-admin"
+  fi
+  # See preflight_detect_release_conflict: end deterministically at 0; the gate
+  # reads FINDINGS_BLOCK_COUNT, not this return.
+  return 0
+}
+
 # preflight_detect_gh_capability — §spec:preflight-gh-capability.
 # READ-ONLY probe of gh install + auth state, then the path-specific scope checks
 # (which parse the captured `auth_status`). Grants/requests nothing.
@@ -550,6 +725,7 @@ preflight_run() {
   preflight_detect_release_conflict    # §spec:preflight-release-conflict
   preflight_detect_version_tag_shape   # §spec:brownfield-detection
   preflight_detect_credentials_app     # §spec:preflight-credentials-app
+  preflight_detect_branch_protection_bypass # §spec:brownfield-detection
   preflight_inject                     # test-only hook (inert unless FLYWHEEL_TEST_HOOKS=1)
   # <<< detector seam <<<
   if [[ "$FINDINGS_BLOCK_COUNT" -gt 0 ]]; then
