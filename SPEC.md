@@ -2605,7 +2605,7 @@ plain-language bar. §req:init-preset-wording-constraints
 
 ## init.sh GitHub-App step §spec:init-app-step
 
-*Status: not started*
+*Status: in progress — priority tier (1) done (need-before-mechanism copy: what the App does, its permissions, that it is a permanent dependency, and why an App not a PAT — in scripts/init.sh and mirrored in docs/adopter/setup.md + README.md). Tiers (2) consume-detected-App and (3) org-App-not-installed-here remain.*
 
 The GitHub-App step — the prompt `scripts/init.sh` shows immediately after the
 preset choice — explains the credential it is asking for in terms of **what
