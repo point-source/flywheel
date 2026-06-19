@@ -450,10 +450,27 @@ else
       echo "    gh secret set FLYWHEEL_GH_APP_PRIVATE_KEY < /path/to/private-key.pem --repo $REPO"
     fi
   else
+    # Inside this else exactly one of two cases holds: exactly one value is
+    # already present (partial — both-present was handled above), or neither
+    # is present. Distinguish them so partial state prompts only for the gap.
+    partial=0
+    if [[ "$has_app_id" -eq 1 || "$has_app_key" -eq 1 ]]; then
+      partial=1
+      # Co-location default: with no explicit --scope, write the missing value
+      # at the same scope as the present one so both creds live together. An
+      # explicit --scope still wins (only set SCOPE when empty); never relocate
+      # the already-present value.
+      if [[ -z "$SCOPE" ]]; then
+        if [[ "$has_app_id" -eq 1 ]]; then SCOPE="$app_id_found_at"; else SCOPE="$app_key_found_at"; fi
+      fi
+    fi
+
     # Resolve SCOPE before the App-source prompt so write_app_id_var /
     # write_app_key_secret know where to write. If the owner is a User
     # account, org-level vars/secrets don't exist on GitHub at all, so
     # we silently lock to repo. If --scope was set explicitly, honor it.
+    # In partial state SCOPE is now non-empty, so the scope prompt below is
+    # skipped; the org-owner validation still runs for an explicit/co-located org.
     if [[ -z "$SCOPE" ]]; then
       detect_owner_type
       if [[ "$OWNER_TYPE" == "Organization" ]]; then
@@ -483,23 +500,40 @@ else
       fi
     fi
 
-    echo
-    echo "  Flywheel needs a GitHub App for installation tokens. Pick a setup path:"
-    echo "    1) Create the App for me  — opens browser, ~30s round-trip"
-    echo "    2) I have an App already — paste its App ID (Variable) + PEM private key (Secret)"
-    echo "    3) Skip — I'll set the App's Variable + Secret later"
-    read -r -u 3 -p "  Selection [1/2/3] (default 1): " app_choice
-    case "${app_choice:-1}" in
-      1)
-        if ! create_app_via_manifest; then
-          echo "  Falling back to manual prompts."
-          prompt_existing_app_credentials
-        fi
-        ;;
-      2) prompt_existing_app_credentials ;;
-      3) echo "  Skipped — set the App's FLYWHEEL_GH_APP_ID Variable and FLYWHEEL_GH_APP_PRIVATE_KEY Secret under Settings → Secrets and variables → Actions before any Flywheel workflow runs." ;;
-      *) echo "  invalid selection — skipping." ;;
-    esac
+    if [[ "$partial" -eq 1 ]]; then
+      # Exactly one credential exists. Report what's set + where, name the gap,
+      # and prompt only for the missing value (writing it at the co-located /
+      # resolved $SCOPE). The create/paste/skip menu is suppressed: "Create the
+      # App for me" mints a NEW App and writes BOTH values unconditionally, so
+      # it can't coherently fill a single gap without splitting/overwriting the
+      # existing credential. prompt_existing_app_credentials guards each write on
+      # has_app_id==0 / has_app_key==0, so it touches only the missing value.
+      echo
+      if [[ "$has_app_id" -eq 1 ]]; then
+        echo "  FLYWHEEL_GH_APP_ID variable already set (${app_id_found_at}-level); the FLYWHEEL_GH_APP_PRIVATE_KEY secret is missing — prompting only for the private key, writing it at ${SCOPE}-level to co-locate with the App ID."
+      else
+        echo "  FLYWHEEL_GH_APP_PRIVATE_KEY secret already set (${app_key_found_at}-level); the FLYWHEEL_GH_APP_ID variable is missing — prompting only for the App ID, writing it at ${SCOPE}-level to co-locate with the private key."
+      fi
+      prompt_existing_app_credentials
+    else
+      echo
+      echo "  Flywheel needs a GitHub App for installation tokens. Pick a setup path:"
+      echo "    1) Create the App for me  — opens browser, ~30s round-trip"
+      echo "    2) I have an App already — paste its App ID (Variable) + PEM private key (Secret)"
+      echo "    3) Skip — I'll set the App's Variable + Secret later"
+      read -r -u 3 -p "  Selection [1/2/3] (default 1): " app_choice
+      case "${app_choice:-1}" in
+        1)
+          if ! create_app_via_manifest; then
+            echo "  Falling back to manual prompts."
+            prompt_existing_app_credentials
+          fi
+          ;;
+        2) prompt_existing_app_credentials ;;
+        3) echo "  Skipped — set the App's FLYWHEEL_GH_APP_ID Variable and FLYWHEEL_GH_APP_PRIVATE_KEY Secret under Settings → Secrets and variables → Actions before any Flywheel workflow runs." ;;
+        *) echo "  invalid selection — skipping." ;;
+      esac
+    fi
   fi
 fi
 
