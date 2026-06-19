@@ -1122,21 +1122,73 @@ else
   has_app_id="$PREFLIGHT_HAS_APP_ID"; has_app_key="$PREFLIGHT_HAS_APP_KEY"
   app_id_found_at="$PREFLIGHT_APP_ID_AT"; app_key_found_at="$PREFLIGHT_APP_KEY_AT"
 
-  if [[ "$has_app_id" -eq 1 && "$has_app_key" -eq 1 ]]; then
-    if [[ "$app_id_found_at" == "$app_key_found_at" ]]; then
-      echo "  FLYWHEEL_GH_APP_ID variable + FLYWHEEL_GH_APP_PRIVATE_KEY secret already set ($app_id_found_at-level)."
+  if [[ "$INTERACTIVE" -eq 0 ]]; then
+    # Non-interactive: no prompts, ever. Both present → report it as configured;
+    # anything missing → defer with the manual finishing command. (Behavior
+    # unchanged — existing tests pin these exact strings.)
+    if [[ "$has_app_id" -eq 1 && "$has_app_key" -eq 1 ]]; then
+      if [[ "$app_id_found_at" == "$app_key_found_at" ]]; then
+        echo "  FLYWHEEL_GH_APP_ID variable + FLYWHEEL_GH_APP_PRIVATE_KEY secret already set ($app_id_found_at-level)."
+      else
+        echo "  FLYWHEEL_GH_APP_ID set at ${app_id_found_at}-level, FLYWHEEL_GH_APP_PRIVATE_KEY at ${app_key_found_at}-level — workflows will prefer the repo-level value when both exist."
+      fi
+      record_outcome "App credentials" configured
     else
-      echo "  FLYWHEEL_GH_APP_ID set at ${app_id_found_at}-level, FLYWHEEL_GH_APP_PRIVATE_KEY at ${app_key_found_at}-level — workflows will prefer the repo-level value when both exist."
+      # Derive the displayed hint from app_creds_finish_cmd so the command form
+      # lives in exactly one place (it is also what gets recorded below).
+      app_creds_cmd="$(app_creds_finish_cmd "$SCOPE")"
+      echo "  non-interactive shell — skipping App-credential prompts. Set them manually:"
+      echo "    $app_creds_cmd"
+      record_outcome "App credentials" deferred config warn "$app_creds_cmd"
     fi
-    record_outcome "App credentials" configured
-  elif [[ "$INTERACTIVE" -eq 0 ]]; then
-    # Derive the displayed hint from app_creds_finish_cmd so the command form
-    # lives in exactly one place (it is also what gets recorded below).
-    app_creds_cmd="$(app_creds_finish_cmd "$SCOPE")"
-    echo "  non-interactive shell — skipping App-credential prompts. Set them manually:"
-    echo "    $app_creds_cmd"
-    record_outcome "App credentials" deferred config warn "$app_creds_cmd"
-  else
+  elif [[ "$has_app_id" -eq 1 || "$has_app_key" -eq 1 ]]; then
+    # Interactive AND pre-flight detected at least one credential: present the
+    # detection as a confirm-or-override default rather than silently deciding
+    # for the adopter (§spec:init-app-step). Confirm reuses what was found and
+    # fills only the missing piece; override wipes the locals and falls through
+    # to the cold create/paste/skip menu.
+    echo
+    echo "  Pre-flight already found App credentials for this repo:"
+    app_step_render_detected
+    echo
+    read -r -u 3 -p "  Use the detected credentials? [Y/n] (default Y; N to override): " app_detected_choice
+    case "${app_detected_choice:-Y}" in
+      [Nn]*)
+        # Override: adopter wants to supply credentials from scratch. Clear the
+        # locals so the cold paste path prompts for BOTH pieces, then fall
+        # through to the cold menu below (its copy is pinned by tests).
+        has_app_id=0; has_app_key=0
+        ;;
+      *)
+        # Confirm: keep what pre-flight found. SCOPE is the level the present
+        # piece lives at — we already know where the creds are, so skip the
+        # cold owner-type scope prompt.
+        if [[ "$has_app_id" -eq 1 ]]; then
+          SCOPE="$app_id_found_at"
+        else
+          SCOPE="$app_key_found_at"
+        fi
+        app_step_resolved=1
+        missing="$(app_step_missing_pieces)"
+        if [[ "$missing" == "none" ]]; then
+          echo "  Keeping the detected credentials."
+          record_outcome "App credentials" configured
+        else
+          # Partial: prompt only for the missing piece. prompt_existing_app_credentials
+          # already guards each prompt on has_app_id / has_app_key, so the
+          # present piece is never re-pasted.
+          app_creds_cmd="$(app_creds_finish_cmd "$SCOPE")"
+          if prompt_existing_app_credentials; then
+            record_outcome "App credentials" configured
+          else
+            record_outcome "App credentials" failed config block "$app_creds_cmd"
+          fi
+        fi
+        ;;
+    esac
+  fi
+
+  if [[ "$INTERACTIVE" -eq 1 && -z "${app_step_resolved:-}" ]]; then
     # Resolve SCOPE before the App-source prompt so write_app_id_var /
     # write_app_key_secret know where to write. If the owner is a User
     # account, org-level vars/secrets don't exist on GitHub at all, so
