@@ -17,17 +17,19 @@ If you have `gh`, `jq`, and `python3` installed and you're in your repo with `gh
 curl -fsSL https://raw.githubusercontent.com/point-source/flywheel/main/scripts/init.sh | bash
 ```
 
-`init.sh` picks a `.flywheel.yml` preset, writes both adopter workflow files, prompts for your GitHub App credentials, and optionally applies the branch + tag rulesets. Then validate with:
+`init.sh` picks a `.flywheel.yml` preset, writes both adopter workflow files, prompts for your GitHub App credentials, and optionally applies the branch + tag rulesets. It is safe to run on **any** repository, greenfield or populated — before it writes anything, every run checks for the brownfield conditions in [§0](#0-adopting-flywheel-into-an-existing-project) and either resolves the safe ones inline (showing you the exact change and asking first) or stops with a non-zero exit and points you to §0 when a condition needs a judgment call. Then validate with:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/point-source/flywheel/main/scripts/doctor.sh | bash
 ```
 
-The rest of this document is the manual walkthrough — useful if you want to understand what `init.sh` writes, or if you're retrofitting an existing setup.
+The rest of this document is the manual walkthrough — useful if you want to understand what `init.sh` writes, or to follow the brownfield audit (§0) by hand rather than letting the script's inline resolvers offer it.
 
 ## 0. Adopting Flywheel into an existing project
 
-Skip this section for greenfield repos. If your repo has any of: prior version tags, an existing release pipeline (release-please, manual `gh release create`, `npm publish` in CI, goreleaser, changesets), pre-existing branch protection rules, or many open PRs — work through the audit below before §1. Use the manual walkthrough for the rest of the doc rather than `init.sh`; the script doesn't audit existing state and will happily layer Flywheel on top of conflicts that surface later as failed releases.
+Greenfield repos hit none of this — `init.sh` finds no brownfield conditions and proceeds straight through, so you can skip this section. If your repo has any of: prior version tags, an existing release pipeline (release-please, manual `gh release create`, `npm publish` in CI, goreleaser, changesets), pre-existing branch protection rules, or many open PRs — `init.sh` now detects those on **every** run, before it writes anything, and either resolves the safe ones inline or stops and routes you here when a condition needs a judgment call. It does **not** silently layer Flywheel on top of a conflicting setup.
+
+This section is both the reference for what those inline resolvers do and the destination the script's hard stop routes you to. The quick-start command handles a populated repo safely on its own; you work through the audit below by hand only when you want to understand or pre-empt what the script offers, or when the script hard-stops on a condition it won't auto-resolve. Three conditions `init.sh` offers to resolve inline (showing the exact change and asking first): colliding bare-semver tags (a guided, non-destructive retag to `v*` — [§0.1](#01-audit-existing-version-tags)), a recognized prior release system (removing its specific config/workflows, recoverable from git history — [§0.2](#02-disable-previous-release-automation)), and a managed-branch ruleset that omits the App as a bypass actor (a scoped, reversible edit — [§0.3](#03-confirm-bot-identity-can-push-to-protected-branches)). It hard-stops to manual for the judgment calls: a non-semver tag baseline, an unrecognized or ambiguous release system, a signed-commit/tag rule, history rewrites ([§0.4](#04-audit-recent-commit-history)), and others' open PRs ([§0.5](#05-open-prs-at-cutover)). Work through whatever applies, then settle the [§0.6 completion check](#06-completion-check) — the same verdict `init.sh` lands on.
 
 ### 0.1 Audit existing version tags
 
