@@ -351,3 +351,143 @@ describe("init.sh — brownfield branch-protection bypass detection", () => {
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// preflight_detect_signed_commit_requirement (§spec:brownfield-detection).
+// A "require signed commits/tags" rule on a managed branch (or refs/tags/v*)
+// that flywheel's App identity can't satisfy ⇒ instance + block, NOT
+// auto-resolvable. Reuses the configurable runInitBP gh stub. To isolate the
+// signing dimension from the branch-protection-bypass detector, the hazard
+// rulesets here carry ONLY a required_signatures rule (no pull_request rule),
+// so the bypass detector finds no blocking rule and stays quiet.
+// ---------------------------------------------------------------------------
+
+// Branch ruleset on refs/heads/<branch> with the given `rules` array.
+const branchRuleset = (rules: object[], branch = "main") =>
+  JSON.stringify({
+    id: 1,
+    target: "branch",
+    conditions: { ref_name: { include: [`refs/heads/${branch}`], exclude: [] } },
+    rules,
+    bypass_actors: [],
+  });
+
+describe("init.sh — brownfield signed-commit requirement detection", () => {
+  it("main ruleset has required_signatures ⇒ [instance] block; exits non-zero; NOT auto-resolvable; no .flywheel.yml", () => {
+    const r = runInitBP([
+      ["repos/acme/widget/branches/main", 0, ""],
+      ["repos/acme/widget/rulesets/1", 0, branchRuleset([{ type: "required_signatures" }])],
+      ["repos/acme/widget/rulesets", 0, JSON.stringify([{ id: 1, target: "branch" }])],
+    ]);
+    try {
+      const combined = stripAnsi(r.stdout + r.stderr);
+      expect(r.status, `combined:\n${combined}`).not.toBe(0);
+      expect(combined).toMatch(/pre-flight (failed|halted)/i);
+      expect(combined).toContain("[instance]");
+      expect(combined).toContain("main");
+      expect(combined).toMatch(/signed commits\/tags/i);
+      expect(combined).toMatch(/NOT auto-resolvable/i);
+      // The bypass detector must NOT also fire (no pull_request rule present).
+      expect(combined).not.toMatch(/omits the Flywheel App as a bypass actor/);
+      expect(existsSync(join(r.work, ".flywheel.yml")), "expected .flywheel.yml NOT written").toBe(
+        false,
+      );
+    } finally {
+      rmSync(r.work, { recursive: true, force: true });
+    }
+  });
+
+  it("ruleset with NO required_signatures rule ⇒ NO block from this detector; proceeds; writes .flywheel.yml", () => {
+    const r = runInitBP([
+      ["repos/acme/widget/branches/main", 0, ""],
+      // pull_request rule WITH an Integration bypass actor: the bypass detector
+      // stays quiet, and there is no required_signatures rule for THIS detector.
+      [
+        "repos/acme/widget/rulesets/1",
+        0,
+        JSON.stringify({
+          id: 1,
+          target: "branch",
+          conditions: { ref_name: { include: ["refs/heads/main"], exclude: [] } },
+          rules: [{ type: "pull_request" }],
+          bypass_actors: [{ actor_type: "Integration", actor_id: 123 }],
+        }),
+      ],
+      ["repos/acme/widget/rulesets", 0, JSON.stringify([{ id: 1, target: "branch" }])],
+    ]);
+    try {
+      const out = stripAnsi(r.stdout);
+      const combined = stripAnsi(r.stdout + r.stderr);
+      expect(r.status, `combined:\n${combined}`).toBe(0);
+      expect(out).toContain("pre-flight: no blockers.");
+      expect(combined).not.toMatch(/signed commits\/tags/i);
+      expect(existsSync(join(r.work, ".flywheel.yml"))).toBe(true);
+    } finally {
+      rmSync(r.work, { recursive: true, force: true });
+    }
+  });
+
+  it("ruleset DETAIL read fails ⇒ could-not-verify warn (local-env), NOT a block; proceeds", () => {
+    const r = runInitBP([
+      ["repos/acme/widget/branches/main/protection", 1, ""],
+      ["repos/acme/widget/branches/main", 0, ""],
+      // Detail read fails ⇒ PREFLIGHT_RULESET_UNREADABLE; must not collapse to a block.
+      ["repos/acme/widget/rulesets/1", 1, ""],
+      ["repos/acme/widget/rulesets", 0, JSON.stringify([{ id: 1, target: "branch" }])],
+    ]);
+    try {
+      const out = stripAnsi(r.stdout);
+      const combined = stripAnsi(r.stdout + r.stderr);
+      expect(r.status, `combined:\n${combined}`).toBe(0);
+      expect(out).toContain("pre-flight: no blockers.");
+      expect(combined).toContain("[local-env]");
+      expect(combined).toMatch(/could not verify .* signed-commit requirement/i);
+      expect(combined).not.toMatch(/^\s*✗.*signed commits\/tags/im);
+      expect(existsSync(join(r.work, ".flywheel.yml"))).toBe(true);
+    } finally {
+      rmSync(r.work, { recursive: true, force: true });
+    }
+  });
+
+  it("tag-target ruleset on refs/tags/v* with required_signatures ⇒ [instance] block; no .flywheel.yml", () => {
+    const r = runInitBP([
+      ["repos/acme/widget/branches/main/protection", 1, ""],
+      ["repos/acme/widget/branches/main", 0, ""],
+      // Branch ruleset detail: no signing rule on the branch itself.
+      ["repos/acme/widget/rulesets/1", 0, branchRuleset([])],
+      // Tag ruleset detail: required_signatures on refs/tags/v*.
+      [
+        "repos/acme/widget/rulesets/2",
+        0,
+        JSON.stringify({
+          id: 2,
+          target: "tag",
+          conditions: { ref_name: { include: ["refs/tags/v*"], exclude: [] } },
+          rules: [{ type: "required_signatures" }],
+          bypass_actors: [],
+        }),
+      ],
+      [
+        "repos/acme/widget/rulesets",
+        0,
+        JSON.stringify([
+          { id: 1, target: "branch" },
+          { id: 2, target: "tag" },
+        ]),
+      ],
+    ]);
+    try {
+      const combined = stripAnsi(r.stdout + r.stderr);
+      expect(r.status, `combined:\n${combined}`).not.toBe(0);
+      expect(combined).toMatch(/pre-flight (failed|halted)/i);
+      expect(combined).toContain("[instance]");
+      expect(combined).toContain("refs/tags/v*");
+      expect(combined).toMatch(/signed commits\/tags/i);
+      expect(existsSync(join(r.work, ".flywheel.yml")), "expected .flywheel.yml NOT written").toBe(
+        false,
+      );
+    } finally {
+      rmSync(r.work, { recursive: true, force: true });
+    }
+  });
+});

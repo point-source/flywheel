@@ -510,10 +510,19 @@ preflight_brownfield_managed_branches() {
 PREFLIGHT_RULESET_IDS=()
 PREFLIGHT_RULESET_DETAILS=()
 PREFLIGHT_RULESET_UNREADABLE=0
+# Idempotence guard: the branch-protection-bypass and signed-commit detectors
+# each call this reader within one preflight_run, but the ruleset list/detail
+# reads are identical between them. Once populated this run, skip the (paged) gh
+# API calls and reuse the parallel arrays. preflight_run resets the flag to 0 at
+# the top so a fresh run re-reads. Without the guard the two detectors would
+# double-list rulesets every run.
+PREFLIGHT_RULESETS_READ=0
 preflight_brownfield_read_rulesets() {
+  [[ $PREFLIGHT_RULESETS_READ -eq 1 ]] && return 0
   PREFLIGHT_RULESET_IDS=()
   PREFLIGHT_RULESET_DETAILS=()
   PREFLIGHT_RULESET_UNREADABLE=0
+  PREFLIGHT_RULESETS_READ=1
   [[ -n "${REPO:-}" ]] || return 0
   local rulesets_json branch_ids rid detail
   if ! rulesets_json="$(gh api "repos/$REPO/rulesets" 2>/dev/null)"; then
@@ -645,6 +654,109 @@ preflight_detect_branch_protection_bypass() {
   return 0
 }
 
+# preflight_detect_signed_commit_requirement — §spec:brownfield-detection.
+# READ-ONLY detector: for each managed branch that exists on the remote, decide
+# whether a "require signed commits/tags" rule applies that flywheel's App
+# identity (semantic-release-bot / github-actions[bot] commits) cannot satisfy —
+# in which case the release and back-merge commits the bot pushes are rejected.
+# GitHub rulesets express this as a rule with `type == "required_signatures"`;
+# the classic branch-protection surface exposes `required_signatures.enabled`.
+# We ALSO read tag-target rulesets (which the shared branch-only reader does not
+# collect) because semantic-release pushes `v*` tags it cannot sign — a
+# required_signatures rule on `refs/tags/v*` is the same hazard. This condition
+# is NOT auto-resolvable: disabling a signing requirement is an adopter judgment
+# call (a security rule), so it hard-stops to the manual guide in a later batch.
+# Biased to FALSE NEGATIVES: no signing rule observed (and reads succeeded)
+# emits nothing. When protection can't be read we emit a could-not-verify warn
+# (never a false block), mirroring doctor.sh / the bypass detector.
+preflight_detect_signed_commit_requirement() {
+  [[ -n "${REPO:-}" ]] || return 0
+
+  local managed
+  managed="$(preflight_brownfield_managed_branches)"
+  [[ -n "$managed" ]] || return 0
+
+  # Shared reader is idempotent per run (PREFLIGHT_RULESETS_READ guard), so this
+  # is cheap whether or not the bypass detector already populated the globals.
+  preflight_brownfield_read_rulesets
+
+  local affected="" classic_unreadable=0 b ref
+  while IFS= read -r b; do
+    [[ -n "$b" ]] || continue
+    ref="refs/heads/$b"
+    local requires_signing=0
+    local i=0 detail includes inc covers sig_count
+    # Scan readable branch rulesets for one that covers this branch AND carries a
+    # required_signatures rule.
+    while [[ $i -lt ${#PREFLIGHT_RULESET_IDS[@]} ]]; do
+      detail="${PREFLIGHT_RULESET_DETAILS[$i]}"
+      i=$((i+1))
+      includes="$(echo "$detail" | jq -r '.conditions?.ref_name?.include[]?' 2>/dev/null || true)"
+      covers=0
+      while IFS= read -r inc; do
+        [[ -z "$inc" ]] && continue
+        if [[ "$inc" == "$ref" || "$inc" == "~ALL" || "$inc" == "~DEFAULT_BRANCH" ]]; then
+          covers=1
+        fi
+      done <<< "$includes"
+      [[ $covers -eq 1 ]] || continue
+      # `?` + `|| true` keep a malformed/non-object detail from aborting under set -e.
+      sig_count="$(echo "$detail" | jq -r \
+        '[.rules[]? | select(.type == "required_signatures")] | length' 2>/dev/null || true)"
+      [[ "${sig_count:-0}" -gt 0 ]] && requires_signing=1
+    done
+
+    # Classic branch-protection fallback: required_signatures.enabled == true.
+    if [[ $requires_signing -eq 0 ]]; then
+      local classic classic_sig
+      if classic="$(gh api "repos/$REPO/branches/$b/protection" 2>/dev/null)"; then
+        classic_sig="$(echo "$classic" | jq -r '(.required_signatures?.enabled? // false) | if . == true then 1 else 0 end' 2>/dev/null || true)"
+        [[ "${classic_sig:-0}" -gt 0 ]] && requires_signing=1
+      else
+        # A managed branch whose classic protection we couldn't read (and no
+        # ruleset covered it) is indeterminate — never assert absent.
+        if [[ $requires_signing -eq 0 ]]; then
+          classic_unreadable=1
+        fi
+      fi
+    fi
+
+    [[ $requires_signing -eq 1 ]] && affected+="$b, "
+  done <<< "$managed"
+
+  # Tag-target rulesets: semantic-release pushes unsigned `v*` tags, so a
+  # required_signatures rule on refs/tags/v* blocks tag creation. The shared
+  # reader only collects branch-target rulesets, so read tag rulesets here
+  # (mirrors doctor.sh's tag-namespace ruleset read). Bounded: one list + one
+  # detail read per tag ruleset.
+  local tag_signing=0 tag_unreadable=0
+  local rulesets_json tag_ids tid tdetail tsig tcovers
+  if rulesets_json="$(gh api "repos/$REPO/rulesets" 2>/dev/null)"; then
+    tag_ids="$(echo "$rulesets_json" | jq -r '.[]? | select(.target == "tag") | .id' 2>/dev/null || true)"
+    while read -r tid; do
+      [[ -z "$tid" ]] && continue
+      if ! tdetail="$(gh api "repos/$REPO/rulesets/$tid" 2>/dev/null)"; then
+        tag_unreadable=1
+        continue
+      fi
+      tcovers="$(echo "$tdetail" | jq -r '[.conditions?.ref_name?.include[]? | select(. == "refs/tags/v*" or . == "~ALL")] | length' 2>/dev/null || true)"
+      [[ "${tcovers:-0}" -gt 0 ]] || continue
+      tsig="$(echo "$tdetail" | jq -r '[.rules[]? | select(.type == "required_signatures")] | length' 2>/dev/null || true)"
+      [[ "${tsig:-0}" -gt 0 ]] && tag_signing=1
+    done <<< "$tag_ids"
+  fi
+
+  if [[ -n "$affected" || $tag_signing -eq 1 ]]; then
+    local what="${affected%, }"
+    [[ $tag_signing -eq 1 ]] && what="${affected:+${affected%, }, }refs/tags/v*"
+    finding instance block "$what requires signed commits/tags, which flywheel's App identity (semantic-release-bot / github-actions[bot] commits) cannot satisfy — the release and back-merge commits (and v* tags) it pushes will be rejected. This is NOT auto-resolvable: disabling a signing requirement is an adopter judgment call, so setup will hard-stop to the manual guide in a later batch."
+  elif [[ $PREFLIGHT_RULESET_UNREADABLE -eq 1 || $classic_unreadable -eq 1 || $tag_unreadable -eq 1 ]]; then
+    finding local-env warn "could not verify ${managed//$'\n'/, } signed-commit requirement — reading protection requires repo-admin"
+  fi
+  # End deterministically at 0; the gate reads FINDINGS_BLOCK_COUNT, not this return.
+  return 0
+}
+
 # preflight_detect_gh_capability — §spec:preflight-gh-capability.
 # READ-ONLY probe of gh install + auth state, then the path-specific scope checks
 # (which parse the captured `auth_status`). Grants/requests nothing.
@@ -720,12 +832,16 @@ preflight_detect_gh_capability() {
 preflight_run() {
   echo
   echo "Pre-flight checks:"
+  # Reset the ruleset-read idempotence guard so this run re-reads rulesets once
+  # (then shares them across the detectors that consult protection).
+  PREFLIGHT_RULESETS_READ=0
   # >>> detector seam — add new detectors here >>>
   preflight_detect_gh_capability       # §spec:preflight-gh-capability
   preflight_detect_release_conflict    # §spec:preflight-release-conflict
   preflight_detect_version_tag_shape   # §spec:brownfield-detection
   preflight_detect_credentials_app     # §spec:preflight-credentials-app
   preflight_detect_branch_protection_bypass # §spec:brownfield-detection
+  preflight_detect_signed_commit_requirement # §spec:brownfield-detection
   preflight_inject                     # test-only hook (inert unless FLYWHEEL_TEST_HOOKS=1)
   # <<< detector seam <<<
   if [[ "$FINDINGS_BLOCK_COUNT" -gt 0 ]]; then
