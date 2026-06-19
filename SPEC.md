@@ -2577,7 +2577,7 @@ complete the suggested commands so a paste applies the fix.
 
 ## doctor credential checks file could-not-verify at warn §spec:doctor-credential-clarity
 
-*Status: not started*
+*Status: complete*
 
 `scripts/doctor.sh` treats an inability to read App-token credentials as a
 visibility limit on the local token, not as a defect in the repository — so an
