@@ -120,10 +120,10 @@ If you'd rather create the App by hand: follow GitHub's [Creating a GitHub App](
 - **Checks: read and write** — posting the `flywheel/conventional-commit` check
 - **Metadata: read**
 
-Install the App on your repo. Then store its credentials in Settings → Secrets and variables → Actions:
+Install the App on your repo. Then store the Flywheel GitHub App's shared credentials — the App's automation identity, not a personal access token or per-user secret — in Settings → Secrets and variables → Actions (at repo scope, or at org scope with `visibility=all`):
 
-- `FLYWHEEL_GH_APP_ID` — the numeric App ID (visible on the App's settings page). Store as a **Variable**, not a Secret — it's not sensitive.
-- `FLYWHEEL_GH_APP_PRIVATE_KEY` — the PEM-format private key downloaded from the App settings. Store as a **Secret**.
+- `FLYWHEEL_GH_APP_ID` — the App's public numeric App ID (visible on the App's settings page). Store as a **Variable**, not a Secret — it's not sensitive.
+- `FLYWHEEL_GH_APP_PRIVATE_KEY` — the App's PEM-format private key downloaded from the App settings. Store as a **Secret**.
 
 Pass these straight into the Flywheel action via the `app-id` and `app-private-key` inputs (see the workflow YAML in §3). The action mints its own short-lived installation token internally and validates that the App's granted permissions match the list above — if anything is missing it fails fast with a friendly error pointing you at the App settings. You do not need a separate `actions/create-github-app-token` step.
 

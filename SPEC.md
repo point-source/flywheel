@@ -1128,6 +1128,110 @@ rather than an already-superseded one. §req:setup-node-v5
 
 §req:setup-node-v5-constraints
 
+## init.sh credentials prompt §spec:init-credentials-prompt
+
+*Status: complete*
+
+When an adopter runs `scripts/init.sh` interactively on an
+organization-owned repository, the credential prompts name the two things
+being placed and report what already exists. The "where should they live?"
+scope prompt no longer asks an adopter to make a placement decision about
+an unnamed "credentials" blob, and a re-run or second-repo onboarding is
+not asked from a blank slate when half the answer is already present.
+§req:init-credentials-prompt
+
+**The two values are named where they are set.** The credential prompts
+identify the pair being written as the Flywheel GitHub App's automation
+identity: `FLYWHEEL_GH_APP_ID` — the App's public numeric ID, stored as an
+Actions **Variable** — and `FLYWHEEL_GH_APP_PRIVATE_KEY` — the App's
+PEM-format private key, stored as an Actions **Secret**. The prompts make
+clear these are App-level credentials shared by the automation, not a
+personal access token or a per-user secret, and that the chosen scope
+writes them to the repo's or org's *Settings → Secrets and variables →
+Actions* — so an adopter reading only the terminal can name both values
+and find them afterward. This is the cheaper, higher-confidence half of
+the change and the framing all other surfaces are reconciled against.
+§req:init-credentials-prompt-criteria §req:init-credentials-prompt-stories
+§req:init-credentials-prompt-priorities
+
+**Detection state is surfaced, and only the gap is prompted.** `init.sh`
+already probes both repo and org level for the App ID (Variable) and
+private key (Secret), recording for each the scope it was found at. The
+run reports what that probe found and prompts only for what is missing:
+
+| Found | Behavior |
+| ----- | -------- |
+| Both values | Report both and their scope(s); prompt for neither (unchanged from today). |
+| Exactly one value | Report which value is set and at which scope (repo vs. org); the interactive flow asks only for the missing value. |
+| Neither value | Prompt as today. |
+
+When exactly one value already exists, the scope for the missing value
+defaults to the scope where the present value lives, so the App ID and its
+private key co-locate rather than being split across repo and org by an
+uninformed choice. This reuses state the existing probe already gathered —
+it adds no new GitHub API round-trip.
+§req:init-credentials-prompt-criteria §req:init-credentials-prompt-stories
+§req:init-credentials-prompt-constraints
+
+**One vocabulary across every surface.** The same naming holds across all
+of `init.sh`'s credential prompts — the scope prompt, the
+create/paste-existing/skip path, and the manual-setup instructions printed
+on non-interactive runs — and matches `docs/adopter/setup.md`, which
+already describes `FLYWHEEL_GH_APP_ID` as a Variable and
+`FLYWHEEL_GH_APP_PRIVATE_KEY` as a Secret. The terminal and the
+documentation never contradict each other about what the adopter is
+setting or where it is stored.
+§req:init-credentials-prompt-constraints
+§req:init-credentials-prompt-stories
+
+**Behavior preserved.** `--scope`, `--skip-secrets`, and non-interactive
+runs behave exactly as before; only the interactive wording and the use of
+already-detected state change. The change writes the same Variable/Secret
+names (`FLYWHEEL_GH_APP_ID`, `FLYWHEEL_GH_APP_PRIVATE_KEY`) to the same
+scopes (repo-level, or org-level with `visibility=all`) as today.
+§req:init-credentials-prompt-constraints
+
+**Criteria.**
+
+- The interactive credential prompts shall name both `FLYWHEEL_GH_APP_ID`
+  (the App's numeric ID, stored as a Variable) and
+  `FLYWHEEL_GH_APP_PRIVATE_KEY` (the PEM private key, stored as a Secret),
+  and identify them as the Flywheel GitHub App's credentials rather than a
+  personal token.
+- The scope prompt shall state where the chosen scope writes the two
+  values — a repo-level Variable + Secret, or an org-level Variable +
+  Secret with `visibility=all`.
+- When exactly one of the two values already exists at repo or org level,
+  the run shall report which value is set and at which scope, and the
+  interactive flow shall prompt only for the missing value.
+- When one value already exists, the scope chosen for the missing value
+  shall default to the scope where the existing value lives, so the App ID
+  and private key co-locate.
+- When both values already exist, the run shall report them and their
+  scope (unchanged from today).
+- `init.sh`'s create/paste/skip prompts, its non-interactive manual-setup
+  instructions, and `docs/adopter/setup.md` shall describe the two values
+  identically — Variable for the App ID, Secret for the private key.
+- Detection shall add no GitHub API calls beyond the repo- and org-level
+  probes `init.sh` already performs.
+- `--scope`, `--skip-secrets`, and non-interactive runs shall behave
+  exactly as before, writing the same names to the same scopes.
+
+**Scope and alternatives.**
+
+- *Requiring the literal word "credentials" or adding a glossary* is
+  rejected: the value is the adopter confidently knowing what the two
+  things are, not the vocabulary used. The prompts name the values and
+  what each is for; wording is otherwise free.
+  §req:init-credentials-prompt-constraints
+- *Adding a fresh detection round to learn existing state* is rejected:
+  the probe already records the scope each value was found at, so
+  surfacing partial state reuses what is known and respects the repo's
+  CI/API budget (§spec:sandbox-test-budget, §req:sandbox-ci-budget).
+- *Relocating an already-placed value to a different scope* (e.g. moving a
+  repo-level key org-wide) is out of scope. The flow reports what exists
+  and fills the gap; it does not move credentials already in place.
+
 ## Pre-flight finding classification §spec:preflight-classification
 
 *Status: complete*
@@ -2470,6 +2574,150 @@ complete the suggested commands so a paste applies the fix.
 - *Modifying `apply-rulesets.sh`/`init.sh` or the adopter docs* is out of scope:
   the curl forms are already documented; the defect is solely in doctor's
   printed guidance.
+
+## doctor credential checks file could-not-verify at warn §spec:doctor-credential-clarity
+
+*Status: complete*
+
+`scripts/doctor.sh` treats an inability to read App-token credentials as a
+visibility limit on the local token, not as a defect in the repository — so an
+under-scoped local run no longer reports a correctly-configured repo as broken.
+Under "App-token credentials" doctor checks that the two values flywheel runs
+on are present: `FLYWHEEL_GH_APP_ID` (a repo or org **Variable**) and
+`FLYWHEEL_GH_APP_PRIVATE_KEY` (a repo or org **Secret**). To check them it
+lists the repository's Variables and Secrets via `gh api` and looks for those
+names. §req:doctor-credential-clarity §req:doctor-credential-clarity-criteria
+
+**The false block this closes.** Listing Variables or Secrets requires an admin
+PAT: GitHub App installation tokens are categorically forbidden from reading
+either, and an ordinary `gh auth login` token without admin scope cannot list
+them. So the *common* local case — an adopter authenticated with an ordinary
+account, or running doctor from a context holding an App token — cannot perform
+this check at all. doctor already detects this: the list call fails and doctor
+knows it could not read, as distinct from reading an empty list and finding the
+value absent. But it then reported that could-not-read as a hard **block**
+("could not list repo variables — listing requires an admin PAT…"), which drives
+doctor's exit code to 1. The credentials section is the visually prominent block
+an adopter scans to confirm setup, so the combined signal was "flywheel's
+credentials are broken" — when the truth is "doctor, from this machine with this
+token, simply cannot see them." The credentials may be perfectly configured at
+the org or repo level. §req:doctor-credential-clarity
+§req:doctor-credential-clarity-stories
+
+**Two levers, both pulled toward §spec:doctor-settings-read.** This is the same
+defect class its sibling fixed for the repo-settings block — a permission gap
+mis-reported as a fault — and it takes the same shape of fix. First, the
+**severity is corrected**: a can't-verify-from-here condition is a limit on the
+adopter's local token, not a misconfiguration of the repo, so it is reported
+`local-env` + `warn`, never a block, exactly as §spec:doctor-settings-read files
+an unreadable repo field. The credential block already *distinguishes*
+could-not-list from absent — the hard part settings-read had to add — so only the
+severity and the wording change here. Second, the **consequence is stated**:
+doctor says outright that a skipped or unverifiable credential check does not
+mean flywheel won't work — it means only that doctor could not verify that area
+from here — rather than leaving the adopter to infer the worst from a bare
+warning. §req:doctor-credential-clarity-criteria
+§req:doctor-credential-clarity-constraints
+
+**The genuine failure is preserved.** When the token *can* list (an admin PAT)
+and the Variable or Secret is truly absent, that is a real misconfiguration
+flywheel cannot run without; it stays a `config` + `block` finding with its
+existing `gh variable set` / secret-set remediation. doctor fails on credentials
+only when it has actually established the value is missing — never merely because
+it could not look. When the token can list and both values are present, doctor
+reports them OK exactly as today, including the source annotation ("repo" /
+"org (all|private|selected)"). §req:doctor-credential-clarity-criteria
+
+**Four distinct states, kept distinct.** An adopter can land in one of four
+credential outcomes, each reported in language that tells it from the others at a
+glance: **verified-present** (`ok`), **skipped** via `--skip-credentials`,
+**could-not-verify** (`local-env` + `warn`), and **genuinely-missing**
+(`config` + `block`). An inability to look is never collapsed into "missing."
+This reuses the bucket × severity vocabulary of §spec:preflight-classification
+(§req:preflight-detection) without inventing a new severity or bucket name.
+§req:doctor-credential-clarity-criteria §req:doctor-credential-clarity-constraints
+
+**The opt-in lever is intentionally not taken.** The original issue paired this
+messaging fix with a behavior change — making credential checks opt-out by
+default and adding a flag to run them. That lever is declined: checks continue to
+run by default, the existing `--skip-credentials` flag (used by CI flows that
+already minted an App token, where the mint is itself the credential proof) keeps
+its current meaning, and no new flag is introduced. The friction is resolved by
+making the unverifiable case read correctly — a non-fatal "could not verify from
+here, and that's fine" — not by hiding the check. Keeping it on by default means
+an adopter who *does* hold an admin token still gets the genuine
+missing-credential block with no extra ceremony. §req:doctor-credential-clarity
+§req:doctor-credential-clarity-constraints
+
+**Reassurance reaches every non-pass outcome.** The "a skipped or unverifiable
+check does not mean flywheel won't work" framing is present wherever the
+credential check ends in anything other than a confirmed pass — both the
+could-not-verify findings and the existing `--skip-credentials` skip note carry
+it — so the adopter is never left to read a warning as a verdict.
+§req:doctor-credential-clarity-criteria §req:doctor-credential-clarity-constraints
+
+**Scope and blast radius.** The change is confined to doctor's App-token
+credentials block: the severity of the can't-list case and the wording of its
+could-not-verify, skip, and missing findings. It requests no additional scopes —
+the whole point is to behave correctly precisely when the local token is
+under-scoped, not to demand a stronger one. It does not touch how flywheel reads
+credentials at run time, init.sh's invocation of doctor (out of scope for #237),
+or any release behavior, and it leaves doctor read-only. The exit contract is
+unchanged: a could-not-verify `warn` is not a block, so doctor still exits 1 only
+when a `block`-severity finding is present and 0 otherwise
+(§spec:preflight-classification, §req:preflight-detection-criteria). The change
+removes a false block; it adds none. §req:doctor-credential-clarity-constraints
+
+**Criteria.**
+
+- When doctor runs with a token that cannot list Variables/Secrets (an ordinary
+  `gh auth login` account or an App installation token), it shall report a
+  `local-env` + `warn` could-not-verify finding for each of `FLYWHEEL_GH_APP_ID`
+  and `FLYWHEEL_GH_APP_PRIVATE_KEY` — never a "missing" claim and never a block.
+  The finding shall state that verifying these requires an admin PAT and that
+  this is a limit on the local token, not a defect in the repo.
+- That could-not-verify finding shall not drive doctor's exit code to 1; with no
+  genuine block present, doctor exits 0, so an under-scoped local run no longer
+  reports the repository as broken.
+- The credentials block shall state, wherever the check ends in anything other
+  than a confirmed pass (the could-not-verify case and the `--skip-credentials`
+  skip note), that a skipped or unverifiable credential check does not mean
+  flywheel won't work — only that doctor could not verify that area from here.
+- When the token can list and the Variable or Secret is genuinely absent, doctor
+  shall report a `config` + `block` finding with the existing remediation
+  guidance, unchanged.
+- When the token can list and both values are present (at repo or org level),
+  doctor shall report them OK exactly as today, including the source annotation
+  ("repo" / "org (all|private|selected)").
+- Credential checks shall continue to run by default. `--skip-credentials` shall
+  keep its current meaning — skip the checks, caller verifies out of band — and
+  no new flag shall be added to opt into or out of the checks.
+- The four credential states — verified-present, skipped, could-not-verify,
+  genuinely-missing — shall each be reported in language that tells them apart at
+  a glance; no two states read the same, and could-not-verify is never collapsed
+  into missing.
+- A fast test shall exercise the could-not-verify path: fed a list call that
+  fails for lack of scope, doctor reports "could not verify" at `warn` and exits
+  0, not a block. The test shall need no live GitHub access and add no load to
+  the rate-limited sandbox installation (§spec:sandbox-test-budget,
+  §req:sandbox-ci-budget).
+
+**Scope and alternatives.**
+
+- *Taking the issue's opt-in-by-default lever — making credential checks off by
+  default behind a flag* is rejected: hiding the check trades a false-broken
+  signal for no signal, and an adopter with an admin token would lose the genuine
+  missing-credential block for no gain. Correcting the unverifiable case to a
+  non-fatal warn fixes the friction without removing coverage.
+- *Reporting could-not-verify as a block* is rejected: doctor cannot confirm the
+  credential either way, and a visibility limit on a read-only validator must not
+  halt the adopter or fail the run.
+- *Collapsing could-not-verify into the genuinely-missing FAIL* is rejected: it
+  is the exact conflation this section removes — doctor must not assert a
+  credential is missing when it merely could not look.
+- *Requesting admin scope so the listing always succeeds* is rejected: it asks
+  for privilege precisely where the value behaves correctly without it, and an
+  App installation token still could not list the values.
 
 ## init.sh preset wording §spec:init-preset-wording
 

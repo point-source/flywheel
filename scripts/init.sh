@@ -24,8 +24,8 @@
 #                                          in parallel, each cutting its own
 #                                          prereleases with its own version
 #                                          suffix and auto-merge rules
-#   --skip-secrets        do not prompt for App credentials (FLYWHEEL_GH_APP_ID
-#                         variable, FLYWHEEL_GH_APP_PRIVATE_KEY secret)
+#   --skip-secrets        do not prompt for the App's shared credentials
+#                         (FLYWHEEL_GH_APP_ID Variable, FLYWHEEL_GH_APP_PRIVATE_KEY Secret)
 #   --skip-rulesets       do not offer to run apply-rulesets.sh
 #   --strict              treat warn-severity outstanding items (e.g. deferred
 #                         App credentials from --skip-secrets, deferred rulesets
@@ -931,7 +931,8 @@ record_outcome ".gitattributes + merge drivers" configured
 
 # 3. App-token secrets.
 #
-# SCOPE controls where the credentials live:
+# SCOPE controls where the App's shared credentials (FLYWHEEL_GH_APP_ID Variable
+# + FLYWHEEL_GH_APP_PRIVATE_KEY Secret) live:
 #   repo — Variable + Secret on $REPO (default; isolates per repo)
 #   org  — Variable + Secret on $OWNER with visibility=all, so every repo
 #          in the org inherits them (matches an org-installed App). The
@@ -1006,7 +1007,10 @@ create_app_via_manifest() {
     echo "  error: could not set FLYWHEEL_GH_APP_ID variable at scope=$SCOPE." >&2
     return 1
   }
-  printf '%s' "$pem" | write_app_key_secret
+  printf '%s' "$pem" | write_app_key_secret || {
+    echo "  error: could not set FLYWHEEL_GH_APP_PRIVATE_KEY secret at scope=$SCOPE." >&2
+    return 1
+  }
   echo "  set FLYWHEEL_GH_APP_ID variable and FLYWHEEL_GH_APP_PRIVATE_KEY secret (scope=$SCOPE)."
   echo
   echo "  Final manual step: install the App on $REPO."
@@ -1047,6 +1051,10 @@ install_app_on_repo() {
 
 prompt_existing_app_credentials() {
   cat <<EOF
+  Paste the Flywheel GitHub App's shared credentials (the App's own identity,
+  not a personal access token): its numeric App ID — stored as the
+  FLYWHEEL_GH_APP_ID Variable — and its PEM private key — stored as the
+  FLYWHEEL_GH_APP_PRIVATE_KEY Secret.
   If you haven't created the App yet, follow:
     https://docs.github.com/en/apps/creating-github-apps/about-creating-github-apps/creating-a-github-app
   Required permissions: Contents r/w, Pull requests r/w, Issues r/w,
@@ -1061,7 +1069,7 @@ EOF
   # maps these three states to configured / failed-block / deferred-warn.
   local skipped=0
   if [[ "$has_app_id" -eq 0 ]]; then
-    read -r -u 3 -p "  GitHub App ID (numeric): " app_id
+    read -r -u 3 -p "  App ID (numeric, stored as the FLYWHEEL_GH_APP_ID Variable): " app_id
     if [[ -z "$app_id" ]]; then
       echo "  empty App ID — skipping FLYWHEEL_GH_APP_ID variable."
       skipped=1
@@ -1075,7 +1083,7 @@ EOF
     fi
   fi
   if [[ "$has_app_key" -eq 0 ]]; then
-    read -r -u 3 -p "  Path to private-key PEM file: " pem_path
+    read -r -u 3 -p "  Path to PEM private-key file (stored as the FLYWHEEL_GH_APP_PRIVATE_KEY Secret): " pem_path
     if [[ -z "$pem_path" ]]; then
       echo "  empty path — skipping FLYWHEEL_GH_APP_PRIVATE_KEY secret."
       skipped=1
@@ -1195,7 +1203,7 @@ app_keep_detected() {
 }
 
 if [[ "$SKIP_SECRETS" -eq 1 ]]; then
-  echo "  --skip-secrets set; not touching App credentials."
+  echo "  --skip-secrets set; not touching the App's FLYWHEEL_GH_APP_ID Variable or FLYWHEEL_GH_APP_PRIVATE_KEY Secret."
   # SCOPE is not yet resolved this early; default to the repo form (matches the
   # non-interactive branch's fallback below).
   app_creds_cmd="$(app_creds_finish_cmd repo)"
@@ -1246,7 +1254,9 @@ else
       # Derive the displayed hint from app_creds_finish_cmd so the command form
       # lives in exactly one place (it is also what gets recorded below).
       app_creds_cmd="$(app_creds_finish_cmd "$SCOPE")"
-      echo "  non-interactive shell — skipping App-credential prompts. Set them manually:"
+      echo "  non-interactive shell — skipping App-credential prompts. Set the Flywheel"
+      echo "  GitHub App's two shared values manually — the FLYWHEEL_GH_APP_ID Variable and"
+      echo "  the FLYWHEEL_GH_APP_PRIVATE_KEY Secret, under Settings → Secrets and variables → Actions:"
       echo "    $app_creds_cmd"
       record_outcome "App credentials" deferred config warn "$app_creds_cmd"
     fi
@@ -1312,13 +1322,19 @@ else
     # write_app_key_secret know where to write. If the owner is a User
     # account, org-level vars/secrets don't exist on GitHub at all, so
     # we silently lock to repo. If --scope was set explicitly, honor it.
+    # In partial state SCOPE is now non-empty, so the scope prompt below is
+    # skipped; the org-owner validation still runs for an explicit/co-located org.
     if [[ -z "$SCOPE" ]]; then
       detect_owner_type
       if [[ "$OWNER_TYPE" == "Organization" ]]; then
         echo
-        echo "  Where should the credentials live?"
-        echo "    1) Repo $REPO only (default)"
-        echo "    2) Org-wide ($OWNER) — visibility=all, shared across every repo in the org"
+        echo "  Where should the Flywheel GitHub App's shared credentials live?"
+        echo "  These are the App's own identity (its numeric App ID + PEM private key),"
+        echo "  not a personal access token or per-user secret. Each option writes both:"
+        echo "  the FLYWHEEL_GH_APP_ID Variable and the FLYWHEEL_GH_APP_PRIVATE_KEY Secret."
+        echo "    1) Repo $REPO only (default) — writes the Variable + Secret on this repo"
+        echo "    2) Org-wide ($OWNER) — writes the Variable + Secret on the org with"
+        echo "       visibility=all, shared across every repo in the org"
         echo "       (requires an admin:org gh token; useful when one App serves many repos)"
         read -r -u 3 -p "  Selection [1/2] (default 1): " scope_choice
         case "${scope_choice:-1}" in
@@ -1361,8 +1377,8 @@ else
     echo
     echo "  Pick a setup path:"
     echo "    1) Create the App for me  — opens browser, ~30s round-trip"
-    echo "    2) I have an App already — paste credentials manually"
-    echo "    3) Skip — I'll set the App credentials later"
+    echo "    2) I have an App already — paste its App ID (Variable) + PEM private key (Secret)"
+    echo "    3) Skip — I'll set the App's Variable + Secret later"
     read -r -u 3 -p "  Selection [1/2/3] (default 1): " app_choice
     case "${app_choice:-1}" in
       1)

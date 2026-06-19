@@ -614,8 +614,8 @@ describe("init.sh App step — interactive confirm/override (Python pty)", () =>
     // Cold menu skipped (app_step_resolved set on confirm).
     expect(r.out).not.toContain("Pick a setup path");
     // Present pieces are never re-pasted.
-    expect(r.out).not.toContain("GitHub App ID (numeric):");
-    expect(r.out).not.toContain("Path to private-key PEM file:");
+    expect(r.out).not.toContain("App ID (numeric, stored as the FLYWHEEL_GH_APP_ID Variable):");
+    expect(r.out).not.toContain("Path to PEM private-key file (stored as the FLYWHEEL_GH_APP_PRIVATE_KEY Secret):");
   });
 
   it("override (n) → falls through to the cold create/paste/skip menu", () => {
@@ -639,8 +639,8 @@ describe("init.sh App step — interactive confirm/override (Python pty)", () =>
     expect(r.exit, r.out).toBe(0);
     expect(r.out).toContain("Use the detected credentials? [Y/n]");
     // Missing piece is prompted; present piece (App ID) is NOT.
-    expect(r.out).toContain("Path to private-key PEM file:");
-    expect(r.out).not.toContain("GitHub App ID (numeric):");
+    expect(r.out).toContain("Path to PEM private-key file (stored as the FLYWHEEL_GH_APP_PRIVATE_KEY Secret):");
+    expect(r.out).not.toContain("App ID (numeric, stored as the FLYWHEEL_GH_APP_ID Variable):");
     // Confirm path, not override → no cold menu.
     expect(r.out).not.toContain("Pick a setup path");
     // The PEM write was skipped, so the secret is still unset — the summary must
