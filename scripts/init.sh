@@ -416,6 +416,36 @@ preflight_detect_release_conflict() {
   return 0
 }
 
+# ---------------------------------------------------------------------------
+# Brownfield-condition registry (SPEC.md §spec:brownfield-resolution).
+#
+# Every brownfield hazard a detector CONFIRMS is recorded here so the resolution
+# phase (brownfield_resolve, below) can iterate the conditions: enumerate them,
+# hard-stop the blocks to the manual §0 guide, and — once #233-3 lands the
+# resolvers — offer each a shown-before-applied, per-step opt-in fix. Until then
+# every entry hard-stops (block) or is deferred (info).
+#
+# bash 3.2-safe: a single indexed array of tab-separated records
+#   token \t bucket \t severity \t resolvable \t message
+# `resolvable` records the spec's forward intent (#233-3 acts on it per resolver);
+# it is NOT consulted this batch. An empty array — a greenfield repo — makes the
+# resolution phase a strict no-op (zero blast radius).
+#
+# could-not-verify warns (a degraded read, not a confirmed condition) are NOT
+# registered: they stay plain `finding ... warn`.
+# ---------------------------------------------------------------------------
+BROWNFIELD_CONDITIONS=()
+
+# brownfield_finding <token> <resolvable> <bucket> <severity> <message>
+# Emit a brownfield finding through the shared `finding` vocabulary AND record it
+# in BROWNFIELD_CONDITIONS, keeping the registry in lockstep with what the adopter
+# sees. Use this — not bare `finding` — for every CONFIRMED brownfield hazard.
+brownfield_finding() {
+  local token="$1" resolvable="$2" bucket="$3" severity="$4" message="$5"
+  finding "$bucket" "$severity" "$message" || return 1
+  BROWNFIELD_CONDITIONS+=("${token}"$'\t'"${bucket}"$'\t'"${severity}"$'\t'"${resolvable}"$'\t'"${message}")
+}
+
 # preflight_detect_version_tag_shape — read-only scan for pre-existing tags whose
 # shape would mislead semantic-release's `v`-prefixed versioning (SPEC.md
 # §spec:brownfield-detection). `git tag -l` is the authoritative local source: it
@@ -460,10 +490,10 @@ preflight_detect_version_tag_shape() {
   done <<<"$tags"
 
   if [[ -n "$bare_semver" ]]; then
-    finding instance block "bare-semver tag(s) ${bare_semver%, } collide with Flywheel's v-prefixed scheme — semantic-release would silently mis-version the first release. Resolvable inline later by re-tagging with a 'v' prefix."
+    brownfield_finding tag_shape_bare_semver yes instance block "bare-semver tag(s) ${bare_semver%, } collide with Flywheel's v-prefixed scheme — semantic-release would silently mis-version the first release. Resolvable inline later by re-tagging with a 'v' prefix."
   fi
   if [[ -n "$non_semver" ]]; then
-    finding instance block "non-semver release tag(s) ${non_semver%, } collide with Flywheel's v-prefixed scheme. This needs an adopter baseline choice and is NOT auto-resolvable — pick a starting version before layering Flywheel on."
+    brownfield_finding tag_shape_non_semver no instance block "non-semver release tag(s) ${non_semver%, } collide with Flywheel's v-prefixed scheme. This needs an adopter baseline choice and is NOT auto-resolvable — pick a starting version before layering Flywheel on."
   fi
   # See preflight_detect_release_conflict: end deterministically at 0; the gate
   # reads FINDINGS_BLOCK_COUNT, not this return.
@@ -680,7 +710,7 @@ preflight_detect_branch_protection_bypass() {
   done <<< "$managed"
 
   if [[ -n "$affected" ]]; then
-    finding instance block "branch protection on ${affected%, } omits the Flywheel App as a bypass actor — the release push and back-merge push will fail \"changes must be made through a pull request\". Add the App (id ${app_id:-<your-app-id>}) as an Integration bypass actor on those branches' ruleset(s)."
+    brownfield_finding branch_protection_bypass yes instance block "branch protection on ${affected%, } omits the Flywheel App as a bypass actor — the release push and back-merge push will fail \"changes must be made through a pull request\". Add the App (id ${app_id:-<your-app-id>}) as an Integration bypass actor on those branches' ruleset(s)."
   elif [[ $PREFLIGHT_RULESET_UNREADABLE -eq 1 ]]; then
     # Rulesets exist but at least one couldn't be read — never assert absent.
     finding local-env warn "could not verify ${managed//$'\n'/, } branch protection bypass — reading protection requires repo-admin"
@@ -769,7 +799,7 @@ preflight_detect_signed_commit_requirement() {
   if [[ -n "$affected" || $tag_signing -eq 1 ]]; then
     local what="${affected%, }"
     [[ $tag_signing -eq 1 ]] && what="${affected:+${affected%, }, }refs/tags/v*"
-    finding instance block "$what requires signed commits/tags, which flywheel's App identity (semantic-release-bot / github-actions[bot] commits) cannot satisfy — the release and back-merge commits (and v* tags) it pushes will be rejected. This is NOT auto-resolvable: disabling a signing requirement is an adopter judgment call, so setup will hard-stop to the manual guide in a later batch."
+    brownfield_finding signed_commit no instance block "$what requires signed commits/tags, which flywheel's App identity (semantic-release-bot / github-actions[bot] commits) cannot satisfy — the release and back-merge commits (and v* tags) it pushes will be rejected. This is NOT auto-resolvable: disabling a signing requirement is an adopter judgment call, so setup hard-stops to the manual brownfield guide (docs/adopter/setup.md §0)."
   elif [[ $PREFLIGHT_RULESET_UNREADABLE -eq 1 || $classic_unreadable -eq 1 ]]; then
     finding local-env warn "could not verify ${managed//$'\n'/, } signed-commit requirement — reading protection requires repo-admin"
   fi
@@ -821,10 +851,10 @@ preflight_detect_history_and_prs() {
   fi
 
   if [[ $skipci_count -gt 0 ]]; then
-    finding instance info "$skipci_count recent commit(s) carry [skip ci]/[ci skip] — these suppress workflow runs, so they could suppress the first promotion's workflows. Advisory only: flywheel does not rewrite history."
+    brownfield_finding history_skip_ci no instance info "$skipci_count recent commit(s) carry [skip ci]/[ci skip] — these suppress workflow runs, so they could suppress the first promotion's workflows. Advisory only: flywheel does not rewrite history."
   fi
   if [[ $nonconv_count -gt 0 ]]; then
-    finding instance info "$nonconv_count of the recent commit(s) are not Conventional Commits — legacy non-conventional history may distort the first semantic-release version computation. Advisory only: flywheel does not rewrite history."
+    brownfield_finding history_nonconventional no instance info "$nonconv_count of the recent commit(s) are not Conventional Commits — legacy non-conventional history may distort the first semantic-release version computation. Advisory only: flywheel does not rewrite history."
   fi
 
   # --- Open-PR scan (token-gated). When REPO is unresolved, skip silently:
@@ -842,7 +872,7 @@ preflight_detect_history_and_prs() {
         fi
       done <<< "$titles"
       if [[ $rewrite_count -gt 0 ]]; then
-        finding instance info "$rewrite_count open PR(s) have non-conventional titles that flywheel will rewrite to Conventional Commits at cutover. Advisory only: review the rewritten titles after setup."
+        brownfield_finding open_pr_rewrite no instance info "$rewrite_count open PR(s) have non-conventional titles that flywheel will rewrite to Conventional Commits at cutover. Advisory only: review the rewritten titles after setup."
       fi
     else
       finding local-env warn "could not verify open PRs — listing pull requests requires repo access"
@@ -982,7 +1012,52 @@ preflight_gate() {
   exit 1
 }
 
+# brownfield_resolve — the resolution phase (SPEC.md §spec:brownfield-resolution).
+# Runs AFTER the detection pass and BEFORE the gate / any scaffold write — the
+# first point init could mutate PRE-EXISTING repo state, so it is governed by the
+# safety contract: shown-before-applied, explicit per-step opt-in, NOTHING
+# destructive non-interactively, idempotent, no new privilege.
+#
+# This batch is the FRAMEWORK only: the concrete resolvers (#233-3) do not exist
+# yet, so every condition takes the no-resolver path —
+#   * block  -> HARD-STOPPED: named here in the shared bucket x severity
+#               vocabulary and routed to the manual §0 guide. The gate (next) owns
+#               the single non-zero exit, so this never overrides the gate's
+#               contract (§spec:setup-exit-contract).
+#   * info   -> DEFERRED (advisory): the adopter is informed; a later step folds
+#               these into the completion summary.
+#
+# NON-INTERACTIVE (curl|bash, CI): performs ZERO mutation. True trivially now (no
+# resolver mutates); when #233-3 adds resolvers, each mutation MUST be gated
+# behind `INTERACTIVE -eq 1` here, degrading to detect-and-report exactly like the
+# credential prompts (§spec:init-credentials-prompt). Reporting/routing happens in
+# both modes — only mutation is interactive-only.
+#
+# GREENFIELD: BROWNFIELD_CONDITIONS is empty -> strict no-op, no output.
+brownfield_resolve() {
+  [[ "${#BROWNFIELD_CONDITIONS[@]}" -gt 0 ]] || return 0
+  local rec token bucket severity resolvable message printed_header=0
+  for rec in "${BROWNFIELD_CONDITIONS[@]}"; do
+    IFS=$'\t' read -r token bucket severity resolvable message <<< "$rec"
+    # No resolver exists yet (#233-3 adds them, keyed on $token). A future
+    # interactive resolver would offer its change here — shown-before-applied, on
+    # an explicit per-step yes. Until then there is nothing to offer or mutate;
+    # blocks hard-stop, infos are advisory (folded into the completion summary).
+    [[ "$severity" == "block" ]] || continue
+    if [[ "$printed_header" -eq 0 ]]; then
+      printf '\nBrownfield conditions need your hand before adoption:\n'
+      printed_header=1
+    fi
+    format_finding "$bucket" "$severity" "$message"
+  done
+  if [[ "$printed_header" -eq 1 ]]; then
+    printf '  Resolve these with the manual brownfield guide: docs/adopter/setup.md §0 (Adopting Flywheel into an existing project), then re-run.\n'
+  fi
+  return 0
+}
+
 preflight_run
+brownfield_resolve
 preflight_gate
 
 # ---------------------------------------------------------------------------
