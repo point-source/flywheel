@@ -304,6 +304,69 @@ describe("init.sh App step — detected-credentials confirm/override (source-sli
   });
 });
 
+// ===========================================================================
+// A1. SOURCE-SLICE — org-App-not-installed install action & menu (WS1/WS2)
+// ===========================================================================
+// PREFLIGHT_APP_INSTALLED == "no" means: an org-level flywheel App ID is
+// detected but is NOT installed on THIS repo, so its credentials exist yet its
+// tokens cannot mint for the repo. WS1/WS2 added a guided "install the existing
+// App on this repo" action: a 3-option menu interactively, and a print-the-
+// manual-finish-command + defer outcome non-interactively. These slices pin the
+// literal copy/structure of that action (immune to INTERACTIVE gating).
+describe("init.sh App step — org-App-not-installed install action (source-slice)", () => {
+  it("defines install_app_on_repo and app_install_finish_cmd", () => {
+    expect(source).toContain("install_app_on_repo() {");
+    expect(source).toContain("app_install_finish_cmd() {");
+  });
+
+  it("install_app_on_repo routes to the org installations settings URL", () => {
+    expect(source).toContain(
+      "Open: https://github.com/organizations/$OWNER/settings/installations",
+    );
+    expect(source).toContain(
+      "Find the flywheel App, click Configure, add $REPO under 'Only select repositories', and Save.",
+    );
+    expect(source).toContain(
+      "This is the one step that lets the App mint tokens for $REPO.",
+    );
+  });
+
+  it("install_app_on_repo waits for ENTER once interactive", () => {
+    expect(source).toContain(
+      'read -r -u 3 -p "  Press ENTER once the App is installed on $REPO..."',
+    );
+  });
+
+  it("app_install_finish_cmd is the single-source one-line install instruction (org URL)", () => {
+    expect(source).toContain(
+      "Install the existing flywheel App on $REPO: open https://github.com/organizations/$OWNER/settings/installations , Configure the App, and add $REPO under 'Only select repositories'.",
+    );
+  });
+
+  it("offers the 3-option install menu when the org App is not installed", () => {
+    expect(source).toContain(
+      "1) Install the existing App on this repo (recommended)",
+    );
+    expect(source).toContain("2) Use the detected credentials anyway");
+    expect(source).toContain(
+      "3) Override — create or paste different credentials",
+    );
+    // The menu is gated on PREFLIGHT_APP_INSTALLED == "no".
+    expect(source).toContain('if [[ "$PREFLIGHT_APP_INSTALLED" == "no" ]]; then');
+  });
+
+  it("non-interactive 'no' path prints the manual finish line and DEFERS (not configured)", () => {
+    expect(source).toContain(
+      "non-interactive shell — the org App is not installed on $REPO. Finish manually:",
+    );
+    // The deferred outcome is recorded with the config bucket + warn severity
+    // (NOT configured) — the credentials exist but the App can't mint yet.
+    expect(source).toContain(
+      'record_outcome "App credentials" deferred config warn "$app_install_cmd"',
+    );
+  });
+});
+
 // The canonical "both credentials present at repo level, App installed" stub —
 // the scenario the reuse boundary and the confirm path both exercise.
 const BOTH_PRESENT_REPO: Record<string, string> = {
@@ -312,6 +375,20 @@ const BOTH_PRESENT_REPO: Record<string, string> = {
   STUB_REPO_APP_ID: "12345",
   STUB_REPO_SECRETS: "FLYWHEEL_GH_APP_PRIVATE_KEY",
   STUB_INSTALLED_APP_IDS: "12345",
+};
+
+// Org-level App ID + key detected, but the App is NOT in the org's installations
+// list → detect_app_installation sets PREFLIGHT_APP_INSTALLED="no". Owner must be
+// an Organization, the App ID must be found at org level (so PREFLIGHT_HAS_APP_ID=1,
+// PREFLIGHT_APP_ID_AT=org), and the installations list must be readable, non-empty,
+// and EXCLUDE our App ID (a different App is installed). This is the new WS1/WS2
+// "exists at the org level but is not installed on this repo" path.
+const ORG_APP_NOT_INSTALLED: Record<string, string> = {
+  STUB_OWNER_TYPE: "Organization",
+  STUB_ORG_VARS: "FLYWHEEL_GH_APP_ID",
+  STUB_ORG_APP_ID: "12345",
+  STUB_ORG_SECRETS: "FLYWHEEL_GH_APP_PRIVATE_KEY",
+  STUB_INSTALLED_APP_IDS: "99999", // a DIFFERENT App is installed, not ours
 };
 
 // ===========================================================================
@@ -389,6 +466,94 @@ describe("init.sh App step — non-interactive runtime (reuse boundary)", () => 
       rmSync(r.work, { recursive: true, force: true });
     }
   });
+
+  it("org App not installed → prints the manual install finish line, DEFERS (not configured), exit 0", () => {
+    const r = runInit({ env: ORG_APP_NOT_INSTALLED });
+    try {
+      const out = stripAnsi(r.stdout);
+      // Deferred is warn severity, not block → the run still completes 0.
+      expect(r.status, `stderr:\n${r.stderr}\nstdout:\n${out}`).toBe(0);
+      // The install-finish instruction is printed (the org installations URL).
+      expect(out).toContain(
+        "non-interactive shell — the org App is not installed on acme/widget. Finish manually:",
+      );
+      expect(out).toContain(
+        "Install the existing flywheel App on acme/widget: open https://github.com/organizations/acme/settings/installations , Configure the App, and add acme/widget under 'Only select repositories'.",
+      );
+      // It must NOT claim the creds are already-set/configured: the App still
+      // cannot mint tokens here. Assert the deferred machine record explicitly.
+      expect(out).not.toContain("already set");
+      expect(out).toMatch(
+        /FLYWHEEL_SETUP_STEP outcome=deferred bucket=config severity=warn command="Install the existing flywheel App on acme\/widget:.*" label="App credentials"/,
+      );
+      expect(out).not.toMatch(
+        /FLYWHEEL_SETUP_STEP outcome=configured .* label="App credentials"/,
+      );
+    } finally {
+      rmSync(r.work, { recursive: true, force: true });
+    }
+  });
+});
+
+// ===========================================================================
+// B. STABLE-IDENTIFIER CONTRACT — a working installed run is unchanged
+// ===========================================================================
+// Proves WS1/WS2's org-App-not-installed work did not perturb the credentials a
+// previously-working run leaves behind: both creds present at the SAME level AND
+// the App installed (so NOT the new "no" path). The run must still print the
+// existing already-set line, record the App configured, and perform ZERO
+// credential WRITES (no `gh variable set` / `gh secret set`).
+describe("init.sh App step — stable-identifier contract (working run unchanged)", () => {
+  it("both creds present + App installed → already-set line, configured, ZERO credential writes", () => {
+    const { work, binDir, doctorStub } = makeWorkdir();
+    const callLog = join(work, "gh-calls.log");
+    try {
+      const r = spawnSync("bash", [initSh, ...SCAFFOLD_ARGS], {
+        cwd: work,
+        encoding: "utf8",
+        input: "",
+        timeout: 30000,
+        env: {
+          ...process.env,
+          PATH: `${binDir}:${process.env.PATH}`,
+          FLYWHEEL_TEST_HOOKS: "1",
+          FLYWHEEL_DOCTOR_OVERRIDE: doctorStub,
+          STUB_CALL_LOG: callLog,
+          ...BOTH_PRESENT_REPO,
+        },
+      });
+      const out = stripAnsi(r.stdout ?? "");
+      expect(r.status, `stderr:\n${r.stderr}\nstdout:\n${out}`).toBe(0);
+
+      // The existing backward-compat already-set line + configured outcome.
+      expect(out).toContain(
+        "FLYWHEEL_GH_APP_ID variable + FLYWHEEL_GH_APP_PRIVATE_KEY secret already set (repo-level).",
+      );
+      expect(out).toContain(
+        'FLYWHEEL_SETUP_STEP outcome=configured bucket= severity= command="" label="App credentials"',
+      );
+
+      // The credentials a working run leaves behind are UNCHANGED: it writes
+      // neither the FLYWHEEL_GH_APP_ID variable nor the FLYWHEEL_GH_APP_PRIVATE_KEY
+      // secret. Assert via the gh call log (no write subcommands logged).
+      const log = readFileSync(callLog, "utf8");
+      expect(log).not.toMatch(/variable set FLYWHEEL_GH_APP_ID/);
+      expect(log).not.toMatch(/secret set FLYWHEEL_GH_APP_PRIVATE_KEY/);
+      // No writes of ANY kind in this read-only working run.
+      expect(log).not.toMatch(/^variable set\b/m);
+      expect(log).not.toMatch(/^secret set\b/m);
+    } finally {
+      rmSync(work, { recursive: true, force: true });
+    }
+  });
+
+  it("uses the exact identifiers FLYWHEEL_GH_APP_ID (variable) and FLYWHEEL_GH_APP_PRIVATE_KEY (secret) — not renamed", () => {
+    // Source-slice guard: the credential identifiers and their kinds are a stable
+    // contract shared with workflows, doctor.sh, and docs. Pin both names and that
+    // init describes them as a "variable" and a "secret" respectively.
+    expect(source).toContain("FLYWHEEL_GH_APP_ID variable");
+    expect(source).toContain("FLYWHEEL_GH_APP_PRIVATE_KEY secret");
+  });
 });
 
 // ===========================================================================
@@ -451,5 +616,74 @@ describe("init.sh App step — interactive confirm/override (Python pty)", () =>
     expect(r.out).toContain("FLYWHEEL_GH_APP_PRIVATE_KEY secret: found (org-level)");
     expect(r.out).toContain("Keeping the detected credentials.");
     expect(r.out).not.toContain("Pick a setup path");
+  });
+});
+
+// ===========================================================================
+// C. RUNTIME INTERACTIVE — org-App-not-installed install MENU (Python pty)
+// ===========================================================================
+// The 3-option install menu lives behind `read -u 3` and only renders when
+// PREFLIGHT_APP_INSTALLED == "no". Drive it under the pty for each option:
+//   1) install (recommended) → install instructions + Press-ENTER, then keep creds
+//   2) use anyway            → keep the detected credentials (no install detour)
+//   3) override              → fall through to the cold create/paste/skip menu
+describe("init.sh App step — org-App-not-installed install menu (Python pty)", () => {
+  it("renders the 3-option menu only when the org App is not installed", () => {
+    // Option 2 (use anyway) is the simplest no-`read ENTER` path to confirm the
+    // menu renders. answers: "2\n" selects "use the detected credentials anyway".
+    const r = runInitPty({ answers: "2\n", stub: ORG_APP_NOT_INSTALLED });
+    expect(r.exit, r.out).toBe(0);
+    expect(r.out).toContain(
+      "This App is not installed on acme/widget, so its tokens cannot act here yet.",
+    );
+    expect(r.out).toContain("Pick how to proceed:");
+    expect(r.out).toContain(
+      "1) Install the existing App on this repo (recommended)",
+    );
+    expect(r.out).toContain("2) Use the detected credentials anyway");
+    expect(r.out).toContain(
+      "3) Override — create or paste different credentials",
+    );
+  });
+
+  it("option 1 (install, recommended) → prints install instructions + Press-ENTER, then keeps creds", () => {
+    // "1\n\n" = select install, then press ENTER at install_app_on_repo's
+    // "Press ENTER once the App is installed" prompt. The run then keeps the
+    // already-detected credentials and records configured.
+    const r = runInitPty({ answers: "1\n\n", stub: ORG_APP_NOT_INSTALLED });
+    expect(r.exit, r.out).toBe(0);
+    // install_app_on_repo's guided instructions (org installations settings URL).
+    expect(r.out).toContain("Install the existing App on this repo:");
+    expect(r.out).toContain(
+      "Open: https://github.com/organizations/acme/settings/installations",
+    );
+    expect(r.out).toContain(
+      "Find the flywheel App, click Configure, add acme/widget under 'Only select repositories', and Save.",
+    );
+    expect(r.out).toContain("Press ENTER once the App is installed on acme/widget");
+    // After the install detour, the detected credentials are kept (configured).
+    expect(r.out).toContain("Keeping the detected credentials.");
+    expect(r.out).toContain("App credentials — configured");
+    // The install path is NOT an override → the cold menu never appears.
+    expect(r.out).not.toContain("Pick a setup path");
+  });
+
+  it("option 2 (use anyway) → keeps the detected credentials, no install detour, no cold menu", () => {
+    const r = runInitPty({ answers: "2\n", stub: ORG_APP_NOT_INSTALLED });
+    expect(r.exit, r.out).toBe(0);
+    expect(r.out).toContain("Keeping the detected credentials.");
+    expect(r.out).toContain("App credentials — configured");
+    // "Use anyway" skips the install instructions and the cold menu.
+    expect(r.out).not.toContain("Install the existing App on this repo:");
+    expect(r.out).not.toContain("Pick a setup path");
+  });
+
+  it("option 3 (override) → falls through to the cold create/paste/skip menu", () => {
+    // "3\n1\n3\n" = override → scope prompt answer 1 (repo) → cold menu answer 3 (skip).
+    const r = runInitPty({ answers: "3\n1\n3\n", stub: ORG_APP_NOT_INSTALLED });
+    expect(r.exit, r.out).toBe(0);
+    expect(r.out).toContain("Pick a setup path:");
+    // Override clears the detected locals → it does NOT keep them.
+    expect(r.out).not.toContain("Keeping the detected credentials.");
   });
 });
