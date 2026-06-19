@@ -3,7 +3,7 @@
 #
 # Read-only. Exits 0 if every check passes, 1 if any FAIL is reported.
 # Usage:
-#   ./scripts/doctor.sh [--skip-credentials] [owner/repo]
+#   ./scripts/doctor.sh [--skip-credentials] [--summary] [owner/repo]
 # If owner/repo is omitted, uses 'gh repo view' on the current directory.
 #
 # --skip-credentials skips the FLYWHEEL_GH_APP_ID / FLYWHEEL_GH_APP_PRIVATE_KEY
@@ -13,20 +13,29 @@
 # doctor expects to be run with a token that can list repo Variables and
 # Secrets — i.e. an admin PAT.
 #
+# --summary suppresses decoration (section headers, green ok lines, and the
+# trailing FAIL/OK summary block) but still emits every block/warn/info
+# finding, then prints a single machine-readable trailer as its last line:
+#   DOCTOR_RESULT blocks=<n> warns=<m>
+# init.sh consumes this to fold doctor's verdict into its completion summary.
+# The exit contract is unchanged (1 iff a block fired, else 0).
+#
 # Dependencies: git, gh, jq, python3 with PyYAML.
 
 set -uo pipefail
 
 skip_credentials=0
+summary_mode=0
 REPO=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --skip-credentials) skip_credentials=1; shift ;;
+    --summary) summary_mode=1; shift ;;
     -h|--help)
       cat <<'EOF'
 doctor.sh — validate that a repo is correctly configured for Flywheel.
 
-Usage: ./scripts/doctor.sh [--skip-credentials] [owner/repo]
+Usage: ./scripts/doctor.sh [--skip-credentials] [--summary] [owner/repo]
 
 If owner/repo is omitted, uses 'gh repo view' on the current directory.
 
@@ -35,6 +44,10 @@ If owner/repo is omitted, uses 'gh repo view' on the current directory.
                       credentials work by minting an App installation token.
                       Without the flag, doctor expects a token that can list
                       repo Variables and Secrets (an admin PAT).
+  --summary           Suppress section headers, ok lines, and the trailing
+                      summary block; still emit every finding, then print a
+                      machine-readable trailer 'DOCTOR_RESULT blocks=<n>
+                      warns=<m>' as the last line. Exit code is unchanged.
 EOF
       exit 0
       ;;
@@ -49,14 +62,6 @@ EOF
   esac
 done
 
-fails=0
-warns=0
-
-bold()  { printf '\033[1m%s\033[0m\n' "$*"; }
-ok()    { printf '  \033[32m✓\033[0m %s\n' "$*"; }
-fail()  { printf '  \033[31m✗\033[0m %s\n' "$*"; fails=$((fails+1)); }
-warn()  { printf '  \033[33m!\033[0m %s\n' "$*"; warns=$((warns+1)); }
-
 for tool in git gh jq python3; do
   command -v "$tool" >/dev/null 2>&1 || {
     echo "error: '$tool' is required but not installed." >&2
@@ -66,6 +71,117 @@ done
 python3 -c "import yaml" 2>/dev/null || {
   echo "error: PyYAML is required. Install with: pip3 install --user pyyaml" >&2
   exit 1
+}
+
+# Locate the script's directory so we can source on-disk siblings. When doctor
+# is invoked via `curl … | bash` there is no on-disk sibling; downstream code
+# falls back to fetching from the same v1 source.
+doctor_src="${BASH_SOURCE[0]:-}"
+doctor_dir=""
+if [[ -n "$doctor_src" ]]; then
+  doctor_dir="$(cd "$(dirname "$doctor_src")" 2>/dev/null && pwd || true)"
+fi
+
+# The single invocation-mode flag. Derived from the one seam — on-disk siblings
+# next to this script. Both dependency-loading (below) and remediation
+# references (fix_script_cmd) branch on this so there is exactly one notion of
+# how doctor was invoked.
+if [[ -n "$doctor_dir" && -f "$doctor_dir/lib/findings.sh" ]]; then
+  doctor_local=1   # checkout: on-disk siblings present
+else
+  doctor_local=0   # curl … | bash: fetch over the network
+fi
+
+# Resolve the flywheel scripts base URL for network fetches, honoring a pinned
+# consumer (FLYWHEEL_TEMPLATES_BASE) and defaulting to main. Returns …/scripts.
+flywheel_scripts_base() {
+  local tb="${FLYWHEEL_TEMPLATES_BASE:-https://raw.githubusercontent.com/point-source/flywheel/main/scripts/templates}"
+  printf '%s' "${tb%/templates}"
+}
+
+# Emit a remediation reference to a flywheel fix script in the same invocation
+# mode doctor was run from. $1 = script filename (e.g. apply-rulesets.sh);
+# remaining args = the arguments the script needs. Under a checkout (on-disk
+# siblings present) emits the local scripts/… path; under curl emits the
+# version-consistent network one-liner against the ref doctor was fetched from.
+fix_script_cmd() {
+  local script="$1"; shift
+  local args="$*"
+  # Emit the base command per mode, then append the args as a pure suffix only
+  # when present — so an arg-less call (e.g. init.sh) yields a clean
+  # `scripts/init.sh` / `curl … | bash` with no trailing space or dangling
+  # `-s --`, while arg-bearing callers (apply-rulesets.sh) are byte-identical.
+  if [[ "$doctor_local" == 1 ]]; then
+    printf 'scripts/%s' "$script"
+    [[ -n "$args" ]] && printf ' %s' "$args"
+  else
+    printf 'curl -fsSL %s/%s | bash' "$(flywheel_scripts_base)" "$script"
+    [[ -n "$args" ]] && printf ' -s -- %s' "$args"
+  fi
+}
+
+# Source the shared finding vocabulary (scripts/lib/findings.sh). Locate it next
+# to this script; otherwise fetch it. The fetch ref follows FLYWHEEL_TEMPLATES_BASE
+# when set (so a pinned consumer gets the matching findings.sh, not main),
+# defaulting to main otherwise. Without it doctor cannot emit vocabulary
+# findings — that is a hard error.
+# shellcheck source=scripts/lib/findings.sh
+if [[ "$doctor_local" == 1 ]]; then
+  # shellcheck disable=SC1091
+  . "$doctor_dir/lib/findings.sh"
+else
+  findings_tmp="$(mktemp)"
+  if curl -fsSL "$(flywheel_scripts_base)/lib/findings.sh" -o "$findings_tmp" 2>/dev/null; then
+    # shellcheck disable=SC1090
+    . "$findings_tmp"
+    rm -f "$findings_tmp"
+  else
+    rm -f "$findings_tmp"
+    echo "error: could not locate or fetch scripts/lib/findings.sh — doctor cannot emit findings without it." >&2
+    exit 1
+  fi
+fi
+
+warns=0
+
+# In --summary mode, bold section headers and green ok lines are suppressed so
+# only real findings (and the machine trailer) reach stdout. fail/warn/note
+# always emit — those are the findings init folds into its summary.
+bold()  { [[ $summary_mode -eq 1 ]] && return 0; printf '\033[1m%s\033[0m\n' "$*"; }
+ok()    { [[ $summary_mode -eq 1 ]] && return 0; printf '  \033[32m✓\033[0m %s\n' "$*"; }
+# fail/warn are thin wrappers over the shared `finding` emitter: each takes a
+# bucket as its first arg. fail → block (counted by FINDINGS_BLOCK_COUNT),
+# warn → warn (counted locally for the summary line).
+fail()  { finding "$1" block "$2"; }
+warn()  { finding "$1" warn "$2"; warns=$((warns+1)); }
+# note → info; same wrapper shape so NOTE sites read like the others.
+note()  { finding "$1" info "$2"; }
+
+# Classify a boolean field on an already-successful gh api response as one of
+# `true` / `false` / `absent`. GitHub omits admin-gated fields (e.g. the merge
+# settings) from the repo object entirely for an under-scoped or App token —
+# the call still succeeds, and a plain `jq -r` reads the absent field back as
+# `null`, indistinguishable from a genuine `false`. Branching on `has($f)`
+# inside jq keeps "could not read it" from being reported as "it is disabled".
+classify_repo_field() {
+  local json="$1" field="$2"
+  echo "$json" | jq -r --arg f "$field" \
+    'if has($f) then (.[$f] == true) else "absent" end'
+}
+
+# Read a ruleset's detail JSON into the global RULESET_DETAIL. On a failed read
+# — a permission gap where listing rulesets is allowed but reading one's detail
+# requires repo-admin — emit a could-not-verify warn and return non-zero so the
+# caller can mark coverage indeterminate and skip the ruleset. Sets a global
+# rather than echoing, so the warn it emits reaches the report instead of being
+# swallowed by a caller's command substitution (and `warns` increments persist).
+read_ruleset_detail() {
+  local rid="$1"
+  if RULESET_DETAIL="$(gh api "repos/$REPO/rulesets/$rid" 2>/dev/null)"; then
+    return 0
+  fi
+  warn local-env "could not verify ruleset $rid — reading it requires repo-admin"
+  return 1
 }
 
 cwd_repo=""
@@ -100,7 +216,7 @@ else
     echo "$yml_content" | base64 --decode > "$yml"
     ok "fetched .flywheel.yml from $REPO"
   else
-    fail "no .flywheel.yml in $REPO repo root"
+    fail instance "no .flywheel.yml in $REPO repo root"
     yml=""
   fi
 fi
@@ -109,12 +225,7 @@ branches=()
 if [[ -n "$yml" ]]; then
   # Locate the linter sibling. When doctor.sh is invoked via curl|bash
   # there are no on-disk siblings; fall back to fetching the linter from
-  # the same v1 source.
-  doctor_src="${BASH_SOURCE[0]:-}"
-  doctor_dir=""
-  if [[ -n "$doctor_src" ]]; then
-    doctor_dir="$(cd "$(dirname "$doctor_src")" 2>/dev/null && pwd || true)"
-  fi
+  # the same v1 source. ($doctor_dir was resolved near the top.)
   linter=""
   if [[ -n "$doctor_dir" && -f "$doctor_dir/lint-flywheel-config.py" ]]; then
     linter="$doctor_dir/lint-flywheel-config.py"
@@ -126,7 +237,7 @@ if [[ -n "$yml" ]]; then
   fi
 
   if [[ -z "$linter" ]]; then
-    fail ".flywheel.yml linter unavailable — could not locate or fetch lint-flywheel-config.py"
+    fail instance ".flywheel.yml linter unavailable — could not locate or fetch lint-flywheel-config.py"
   elif validation="$(python3 "$linter" "$yml" 2>/dev/null)"; then
     have_branches_line=0
     while IFS= read -r line; do
@@ -137,21 +248,21 @@ if [[ -n "$yml" ]]; then
           # shellcheck disable=SC2206
           branches=($rest)
           ;;
-        "RESULT OK "*)   ok   "${line#RESULT OK }"   ;;
-        "RESULT FAIL "*) fail "${line#RESULT FAIL }" ;;
-        "RESULT WARN "*) warn "${line#RESULT WARN }" ;;
-        "RESULT NOTE "*) printf '  \033[36mi\033[0m %s\n' "${line#RESULT NOTE }" ;;
+        "RESULT OK "*)   ok        "${line#RESULT OK }"   ;;
+        "RESULT FAIL "*) fail config "${line#RESULT FAIL }" ;;
+        "RESULT WARN "*) warn config "${line#RESULT WARN }" ;;
+        "RESULT NOTE "*) note config "${line#RESULT NOTE }" ;;
       esac
     done <<< "$validation"
     if [[ $have_branches_line -eq 1 ]]; then
       if [[ "${#branches[@]}" -eq 0 ]]; then
-        fail ".flywheel.yml has no branches"
+        fail instance ".flywheel.yml has no branches"
       else
         ok "${#branches[@]} managed branch(es): ${branches[*]}"
       fi
     fi
   else
-    fail ".flywheel.yml linter crashed — is PyYAML installed? (pip3 install --user pyyaml)"
+    fail instance ".flywheel.yml linter crashed — is PyYAML installed? (pip3 install --user pyyaml)"
   fi
 fi
 
@@ -162,7 +273,7 @@ if [[ "${#branches[@]}" -gt 0 ]]; then
     if gh api "repos/$REPO/branches/$b" >/dev/null 2>&1; then
       ok "$b"
     else
-      fail "branch '$b' missing on remote"
+      fail instance "branch '$b' missing on remote"
     fi
   done
 fi
@@ -194,7 +305,7 @@ detect_owner_type() {
 # $1 = "variables" or "secrets"
 # $2 = resource name
 org_resource_visible_to_repo() {
-  local kind="$1" name="$2" resp visibility priv
+  local kind="$1" name="$2" resp visibility repo_obj
   detect_owner_type
   [[ "$OWNER_TYPE" == "Organization" ]] || return 1
   resp="$(gh api "orgs/$OWNER/actions/$kind/$name" 2>/dev/null)" || return 1
@@ -205,10 +316,15 @@ org_resource_visible_to_repo() {
       return 0
       ;;
     private)
-      priv="$(gh api "repos/$REPO" --jq .private 2>/dev/null || echo "")"
-      if [[ "$priv" == "true" ]]; then
-        echo "private"
-        return 0
+      # Branch on the repo read SUCCEEDING — a failed/permission-gapped call
+      # must not collapse to "" and read back as "repo is not private".
+      # `.private` is always present on a successful repo read, so
+      # classify_repo_field returns true/false here, never "absent".
+      if repo_obj="$(gh api "repos/$REPO" 2>/dev/null)"; then
+        if [[ "$(classify_repo_field "$repo_obj" private)" == "true" ]]; then
+          echo "private"
+          return 0
+        fi
       fi
       return 1
       ;;
@@ -227,7 +343,7 @@ org_resource_visible_to_repo() {
 
 bold "App-token credentials"
 if [[ $skip_credentials -eq 1 ]]; then
-  printf '  \033[36mi\033[0m skipped (--skip-credentials) — caller is responsible for verifying FLYWHEEL_GH_APP_ID and FLYWHEEL_GH_APP_PRIVATE_KEY out of band\n'
+  note config "skipped (--skip-credentials) — caller is responsible for verifying FLYWHEEL_GH_APP_ID and FLYWHEEL_GH_APP_PRIVATE_KEY out of band"
 else
   # FLYWHEEL_GH_APP_ID — repo level first, then org level.
   found_var_at=""
@@ -236,7 +352,7 @@ else
       found_var_at="repo"
     fi
   else
-    fail "could not list repo variables — listing requires an admin PAT (App installation tokens cannot list variables); re-run with 'gh auth login' as a repo admin, or pass --skip-credentials if invoking from CI that already minted an App token"
+    fail local-env "could not list repo variables — listing requires an admin PAT (App installation tokens cannot list variables); re-run with 'gh auth login' as a repo admin, or pass --skip-credentials if invoking from CI that already minted an App token"
   fi
   if [[ -z "$found_var_at" ]]; then
     if visibility="$(org_resource_visible_to_repo variables FLYWHEEL_GH_APP_ID)"; then
@@ -246,7 +362,7 @@ else
   if [[ -n "$found_var_at" ]]; then
     ok "FLYWHEEL_GH_APP_ID variable set ($found_var_at)"
   else
-    fail "FLYWHEEL_GH_APP_ID variable missing — set with: gh variable set FLYWHEEL_GH_APP_ID --body <app-id> --repo $REPO  (or --org $OWNER --visibility all for org-wide)"
+    fail config "FLYWHEEL_GH_APP_ID variable missing — set with: gh variable set FLYWHEEL_GH_APP_ID --body <app-id> --repo $REPO  (or --org $OWNER --visibility all for org-wide)"
   fi
 
   # FLYWHEEL_GH_APP_PRIVATE_KEY — repo level first, then org level.
@@ -256,10 +372,10 @@ else
       found_secret_at="repo"
     fi
     if echo "$secrets_json" | jq -e '.secrets[] | select(.name == "GH_PAT")' >/dev/null; then
-      warn "GH_PAT secret present — Flywheel does not use it; remove if it's left over from an older setup"
+      warn config "GH_PAT secret present — Flywheel does not use it; remove if it's left over from an older setup"
     fi
   else
-    fail "could not list repo secrets — listing requires an admin PAT (App installation tokens cannot list secrets); re-run with 'gh auth login' as a repo admin, or pass --skip-credentials if invoking from CI that already minted an App token"
+    fail local-env "could not list repo secrets — listing requires an admin PAT (App installation tokens cannot list secrets); re-run with 'gh auth login' as a repo admin, or pass --skip-credentials if invoking from CI that already minted an App token"
   fi
   if [[ -z "$found_secret_at" ]]; then
     if visibility="$(org_resource_visible_to_repo secrets FLYWHEEL_GH_APP_PRIVATE_KEY)"; then
@@ -269,25 +385,27 @@ else
   if [[ -n "$found_secret_at" ]]; then
     ok "FLYWHEEL_GH_APP_PRIVATE_KEY secret set ($found_secret_at)"
   else
-    fail "FLYWHEEL_GH_APP_PRIVATE_KEY secret missing — Flywheel requires GitHub App tokens (PATs are not supported)"
+    fail config "FLYWHEEL_GH_APP_PRIVATE_KEY secret missing — Flywheel requires GitHub App tokens (PATs are not supported)"
   fi
 fi
 
 # 4. Repo settings: allow_auto_merge, delete_branch_on_merge.
 bold "Repo settings"
 if repo_settings="$(gh api "repos/$REPO" 2>/dev/null)"; then
-  if [[ "$(echo "$repo_settings" | jq -r .allow_auto_merge)" == "true" ]]; then
-    ok "allow_auto_merge enabled"
-  else
-    fail "allow_auto_merge disabled — flywheel cannot schedule native auto-merge, so eligible PRs fall back to a direct merge that bypasses required status checks (#147). Re-run scripts/apply-rulesets.sh $REPO, or enable in Settings → General → Pull Requests → Allow auto-merge"
-  fi
-  if [[ "$(echo "$repo_settings" | jq -r .delete_branch_on_merge)" == "true" ]]; then
-    ok "delete_branch_on_merge enabled (head branches auto-delete on merge)"
-  else
-    warn "delete_branch_on_merge disabled — apply-rulesets.sh enables this alongside the deletion-blocking ruleset (re-run scripts/apply-rulesets.sh $REPO), or flip manually in Settings → General → 'Automatically delete head branches'"
-  fi
+  case "$(classify_repo_field "$repo_settings" allow_auto_merge)" in
+    true)  ok "allow_auto_merge enabled" ;;
+    false) warn config "allow_auto_merge disabled — flywheel cannot schedule native auto-merge, so eligible PRs fall back to a direct merge that bypasses required status checks (#147). Re-run $(fix_script_cmd apply-rulesets.sh "$REPO --app-id <your-app-id>"), or enable in Settings → General → Pull Requests → Allow auto-merge" ;;
+    absent) warn local-env "could not verify allow_auto_merge — reading it requires repo-admin" ;;
+    *) warn local-env "could not verify allow_auto_merge — unexpected response from repos/$REPO" ;;
+  esac
+  case "$(classify_repo_field "$repo_settings" delete_branch_on_merge)" in
+    true)  ok "delete_branch_on_merge enabled (head branches auto-delete on merge)" ;;
+    false) warn config "delete_branch_on_merge disabled — apply-rulesets.sh enables this alongside the deletion-blocking ruleset (re-run $(fix_script_cmd apply-rulesets.sh "$REPO --app-id <your-app-id>")), or flip manually in Settings → General → 'Automatically delete head branches'" ;;
+    absent) warn local-env "could not verify delete_branch_on_merge — reading it requires repo-admin" ;;
+    *) warn local-env "could not verify delete_branch_on_merge — unexpected response from repos/$REPO" ;;
+  esac
 else
-  fail "could not read repo settings"
+  fail instance "could not read repo settings"
 fi
 
 # 5. Workflow files. Read from cwd when validating the local repo,
@@ -301,7 +419,7 @@ for wf in flywheel-pr.yml flywheel-push.yml; do
   elif wf_content="$(gh api "repos/$REPO/contents/$path" -q .content 2>/dev/null)"; then
     content="$(echo "$wf_content" | base64 --decode)"
   else
-    fail "$path missing in $REPO"
+    fail instance "$path missing in $REPO"
     continue
   fi
   # Match either the action ref (`point-source/flywheel@<ver>`), the reusable
@@ -310,12 +428,12 @@ for wf in flywheel-pr.yml flywheel-push.yml; do
   if echo "$content" | grep -qE "point-source/flywheel(/\.github/workflows/[a-z]+\.yml)?@|uses:[[:space:]]*\./"; then
     ok "$path references the flywheel action"
   else
-    fail "$path exists but does not reference point-source/flywheel@<version>"
+    fail instance "$path exists but does not reference point-source/flywheel@<version>"
   fi
   if echo "$content" | grep -qE "(app-id:|actions/create-github-app-token)"; then
     ok "$path uses App-token plumbing"
   else
-    warn "$path does not use app-id input or actions/create-github-app-token — Flywheel expects App-token plumbing"
+    warn instance "$path does not use app-id input or actions/create-github-app-token — Flywheel expects App-token plumbing"
   fi
 done
 
@@ -335,7 +453,7 @@ if [[ $remote_only -eq 0 ]]; then
       if grep -qE '^[[:space:]]*merge_group:' "$path"; then
         ok "$path triggers on merge_group"
       else
-        warn "$path triggers on pull_request but not merge_group — required-check workflows must include merge_group: to unblock the merge queue"
+        warn config "$path triggers on pull_request but not merge_group — required-check workflows must include merge_group: to unblock the merge queue"
       fi
     fi
   done
@@ -347,14 +465,22 @@ bold "Branch protection rulesets"
 if rulesets_json="$(gh api "repos/$REPO/rulesets" 2>/dev/null)"; then
   branch_ruleset_ids="$(echo "$rulesets_json" | jq -r '.[] | select(.target == "branch") | .id')"
   if [[ -z "$branch_ruleset_ids" ]]; then
-    fail "no branch rulesets defined — run scripts/apply-rulesets.sh $REPO"
+    fail instance "no branch rulesets defined — run $(fix_script_cmd apply-rulesets.sh "$REPO --app-id <your-app-id>")"
   else
     # Parallel arrays (bash 3.2 compatible — no associative arrays).
     ruleset_includes=()
     ruleset_has_pr=()
+    # Track whether any ruleset DETAIL read failed (permission gap). A failed
+    # detail call must not collapse into empty includes and surface as a false
+    # "no ruleset covers branch" BLOCK — it is a could-not-verify warn instead.
+    ruleset_detail_unreadable=0
     while read -r rid; do
       [[ -z "$rid" ]] && continue
-      detail="$(gh api "repos/$REPO/rulesets/$rid" 2>/dev/null || true)"
+      if ! read_ruleset_detail "$rid"; then
+        ruleset_detail_unreadable=1
+        continue
+      fi
+      detail="$RULESET_DETAIL"
       includes="$(echo "$detail" | jq -r '.conditions.ref_name.include[]?' 2>/dev/null)"
       has_pr="$(echo "$detail" | jq -r '[.rules[]? | select(.type == "pull_request")] | length' 2>/dev/null)"
       while IFS= read -r inc; do
@@ -378,16 +504,28 @@ if rulesets_json="$(gh api "repos/$REPO/rulesets" 2>/dev/null)"; then
         i=$((i+1))
       done
       if [[ $matched -eq 0 ]]; then
-        fail "no ruleset covers branch '$b' — run scripts/apply-rulesets.sh $REPO"
+        if [[ $ruleset_detail_unreadable -eq 1 ]]; then
+          warn local-env "could not verify branch '$b' is covered by a ruleset — reading rulesets requires repo-admin"
+        else
+          fail instance "no ruleset covers branch '$b' — run $(fix_script_cmd apply-rulesets.sh "$REPO --app-id <your-app-id>")"
+        fi
       elif [[ $pr_required -eq 0 ]]; then
-        fail "branch '$b' is in a ruleset but no pull_request requirement — re-run scripts/apply-rulesets.sh"
+        if [[ $ruleset_detail_unreadable -eq 1 ]]; then
+          # A matched branch with no PR rule among the READABLE rulesets is only
+          # a genuine misconfiguration if every ruleset was readable — an unread
+          # ruleset could carry the PR requirement, so report could-not-verify
+          # rather than a false block (#239).
+          warn local-env "could not verify branch '$b' pull_request requirement — reading rulesets requires repo-admin"
+        else
+          fail instance "branch '$b' is in a ruleset but no pull_request requirement — re-run $(fix_script_cmd apply-rulesets.sh "$REPO --app-id <your-app-id>")"
+        fi
       else
         ok "branch '$b' protected, requires PRs"
       fi
     done
   fi
 else
-  fail "could not list rulesets"
+  fail instance "could not list rulesets"
 fi
 
 # 7. Tag-namespace ruleset on v*.
@@ -395,17 +533,24 @@ bold "Tag namespace ruleset"
 if [[ -n "${rulesets_json:-}" ]]; then
   tag_ruleset_ids="$(echo "$rulesets_json" | jq -r '.[] | select(.target == "tag") | .id')"
   found_v_protect=0
+  tag_ruleset_detail_unreadable=0
   while read -r rid; do
     [[ -z "$rid" ]] && continue
-    detail="$(gh api "repos/$REPO/rulesets/$rid" 2>/dev/null || true)"
+    if ! read_ruleset_detail "$rid"; then
+      tag_ruleset_detail_unreadable=1
+      continue
+    fi
+    detail="$RULESET_DETAIL"
     if echo "$detail" | jq -e '.conditions.ref_name.include[]? | select(. == "refs/tags/v*")' >/dev/null 2>&1; then
       found_v_protect=1
     fi
   done <<< "$tag_ruleset_ids"
   if [[ $found_v_protect -eq 1 ]]; then
     ok "v* tag namespace protected"
+  elif [[ $tag_ruleset_detail_unreadable -eq 1 ]]; then
+    warn local-env "could not verify 'refs/tags/v*' protection — reading rulesets requires repo-admin"
   else
-    fail "no ruleset protects 'refs/tags/v*' — run scripts/apply-rulesets.sh $REPO"
+    fail instance "no ruleset protects 'refs/tags/v*' — run $(fix_script_cmd apply-rulesets.sh "$REPO --app-id <your-app-id>")"
   fi
 fi
 
@@ -417,14 +562,14 @@ fi
 if [[ $remote_only -eq 0 && -n "$yml" ]]; then
   bold ".gitattributes merge drivers"
   if [[ ! -f .gitattributes ]]; then
-    warn ".gitattributes missing — local merges of CHANGELOG.md will fall back to text merge (CI is unaffected). Re-run scripts/init.sh to write the managed block."
+    warn instance ".gitattributes missing — local merges of CHANGELOG.md will fall back to text merge (CI is unaffected). Re-run $(fix_script_cmd init.sh) to write the managed block."
   elif ! grep -qF "flywheel: managed merge-driver attributes" .gitattributes; then
-    warn ".gitattributes lacks Flywheel-managed block — re-run scripts/init.sh to add it."
+    warn instance ".gitattributes lacks Flywheel-managed block — re-run $(fix_script_cmd init.sh) to add it."
   else
     if grep -qE '^CHANGELOG\.md[[:space:]]+merge=flywheel-changelog' .gitattributes; then
       ok "CHANGELOG.md mapped to flywheel-changelog driver"
     else
-      warn ".gitattributes block exists but missing 'CHANGELOG.md merge=flywheel-changelog' — re-run scripts/init.sh."
+      warn instance ".gitattributes block exists but missing 'CHANGELOG.md merge=flywheel-changelog' — re-run $(fix_script_cmd init.sh)."
     fi
     # Each release_files entry in .flywheel.yml should also have a
     # merge=flywheel-release-file mapping. Init writes a comment template
@@ -452,7 +597,7 @@ PY
     if [[ -n "$missing_paths" ]]; then
       while IFS= read -r p; do
         [[ -z "$p" ]] && continue
-        warn "release_files path '$p' lacks merge=flywheel-release-file in .gitattributes — add: '$p merge=flywheel-release-file'"
+        warn instance "release_files path '$p' lacks merge=flywheel-release-file in .gitattributes — add: '$p merge=flywheel-release-file'"
       done <<< "$missing_paths"
     else
       ok "release_files paths covered (or none declared)"
@@ -460,15 +605,21 @@ PY
   fi
 fi
 
-# Summary.
-echo
-if [[ $fails -gt 0 ]]; then
-  printf '\033[31mFAIL\033[0m — %d failing check(s), %d warning(s)\n' "$fails" "$warns"
-  exit 1
-elif [[ $warns -gt 0 ]]; then
-  printf '\033[33mOK with warnings\033[0m — %d warning(s)\n' "$warns"
-  exit 0
+# Summary. Exit 1 iff any block-severity finding was emitted (tracked by the
+# shared FINDINGS_BLOCK_COUNT), else 0 — warnings/info never fail the run.
+# In --summary mode, suppress the human FAIL/OK block and instead print a single
+# machine-readable trailer as the last line (mirrors the linter→doctor RESULT
+# convention) for init.sh to parse.
+if [[ $summary_mode -eq 1 ]]; then
+  printf 'DOCTOR_RESULT blocks=%d warns=%d\n' "$FINDINGS_BLOCK_COUNT" "$warns"
 else
-  printf '\033[32mOK\033[0m — all checks pass\n'
-  exit 0
+  echo
+  if [[ "$FINDINGS_BLOCK_COUNT" -gt 0 ]]; then
+    printf '\033[31mFAIL\033[0m — %d blocking finding(s), %d warning(s)\n' "$FINDINGS_BLOCK_COUNT" "$warns"
+  elif [[ $warns -gt 0 ]]; then
+    printf '\033[33mOK with warnings\033[0m — %d warning(s)\n' "$warns"
+  else
+    printf '\033[32mOK\033[0m — all checks pass\n'
+  fi
 fi
+exit "$(findings_exit_code)"

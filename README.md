@@ -23,7 +23,13 @@ Run from your repo, with `gh auth login` already done:
 curl -fsSL https://raw.githubusercontent.com/point-source/flywheel/main/scripts/init.sh | bash
 ```
 
-`init.sh` picks a `.flywheel.yml` preset, writes both Flywheel workflow files, prompts for the GitHub App credentials, and (optionally) applies the recommended branch + tag rulesets. Validate any time with:
+`init.sh` picks a `.flywheel.yml` preset, writes both Flywheel workflow files, prompts for the GitHub App credentials, and (optionally) applies the recommended branch + tag rulesets. The three presets differ by purpose:
+
+- **`minimal`** — a single release line on one branch that cuts a release on every qualifying push.
+- **`three-stage`** — one release line through staged branches (develop → staging → main) with promotion PRs between them.
+- **`multi-stream`** — two or more independent release lines in parallel, each cutting its own prereleases with its own version suffix and auto-merge rules.
+
+See [docs/adopter/setup.md §2](./docs/adopter/setup.md#2-add-flywheelyml) for the full per-preset walkthrough. Validate any time with:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/point-source/flywheel/main/scripts/doctor.sh | bash

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { execFileSync, spawnSync } from "node:child_process";
 import { readdirSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
 // Static lint pass for every shell script in `scripts/`. Catches the class
@@ -18,10 +18,22 @@ function shellcheckAvailable(): boolean {
   return spawnSync("shellcheck", ["--version"], { stdio: "ignore" }).status === 0;
 }
 
-function listShellScripts(): string[] {
-  return readdirSync(scriptsDir)
-    .filter((f) => f.endsWith(".sh"))
-    .sort();
+// Recurse so subdirectories of scripts/ (e.g. scripts/lib/, home of the
+// sourceable findings.sh vocabulary lib) are linted too — a top-level-only
+// readdir let scripts/lib/*.sh escape coverage entirely. Returns paths
+// relative to scriptsDir (e.g. "doctor.sh", "lib/findings.sh") so each
+// script's location is visible in the test report.
+function listShellScripts(dir: string = scriptsDir): string[] {
+  const out: string[] = [];
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const full = join(dir, entry.name);
+    if (entry.isDirectory()) {
+      out.push(...listShellScripts(full));
+    } else if (entry.name.endsWith(".sh")) {
+      out.push(relative(scriptsDir, full));
+    }
+  }
+  return out.sort();
 }
 
 describe.skipIf(!shellcheckAvailable())("shellcheck — every scripts/*.sh", () => {

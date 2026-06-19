@@ -1130,7 +1130,7 @@ rather than an already-superseded one. §req:setup-node-v5
 
 ## init.sh credentials prompt §spec:init-credentials-prompt
 
-*Status: landed — naming/vocabulary half (#235-1) and partial-state detection half (#235-2) both shipped*
+*Status: complete*
 
 When an adopter runs `scripts/init.sh` interactively on an
 organization-owned repository, the credential prompts name the two things
@@ -1231,3 +1231,1478 @@ scopes (repo-level, or org-level with `visibility=all`) as today.
 - *Relocating an already-placed value to a different scope* (e.g. moving a
   repo-level key org-wide) is out of scope. The flow reports what exists
   and fills the gap; it does not move credentials already in place.
+
+## Pre-flight finding classification §spec:preflight-classification
+
+*Status: complete*
+
+Setup tooling speaks one vocabulary for "what is wrong with my setup."
+Every finding emitted by `init.sh`'s pre-flight pass and by `doctor.sh`
+carries two independent labels: a **bucket** — one of `local-env`,
+`instance`, `config` — and a **severity** — one of `block`, `warn`,
+`info`. The bucket answers *whose problem this is and when it gets fixed*;
+the severity answers *how bad it is*. The two are orthogonal: a `block`
+may be `local-env` (`gh` not authenticated) or `instance` (the repo
+already runs release-please), and a `config` finding may be `warn`
+(`allow_auto_merge` disabled) or `info`. §req:preflight-detection
+§req:preflight-detection-constraints
+
+The buckets carry fixed meanings an adopter can act on without reading
+docs:
+
+- **`local-env`** — a condition on the adopter's own machine or account
+  (a missing or under-scoped `gh`), which they fix themselves before
+  setup can proceed. A pre-flight concern.
+- **`instance`** — a one-time fix to *this* repository made during
+  install (a conflicting release system to remove). An install-time
+  concern that does not recur once resolved.
+- **`config`** — an ongoing configuration setting that lives on past
+  install (`allow_auto_merge`, `delete_branch_on_merge`). A long-term
+  concern that can drift later.
+
+**Why two axes rather than one severity scale.** Before this change an
+adopter could read a finding's seriousness but never its ownership or
+lifetime — the same "`allow_auto_merge` disabled" message read
+identically whether it was theirs to fix on their machine, a one-shot
+repo edit, or a setting that would silently regress. Collapsing
+ownership-and-lifetime into the severity scale loses information the
+adopter needs to know *who* fixes a finding and *whether it comes back*.
+Keeping the axes independent lets every (bucket, severity) combination
+carry its own meaning. §req:preflight-detection-stories
+§req:preflight-detection-constraints
+
+**Why init and doctor share the vocabulary.** An adopter wiring up
+flywheel previously met two languages: init's ad-hoc `error:` / `warning:`
+prefixes and doctor's `FAIL` / `WARN` / `NOTE`. doctor's existing severity
+levels map onto the shared names (`FAIL`→`block`, `WARN`→`warn`,
+`NOTE`→`info`), and doctor additionally prints each finding's bucket
+label. Whether init and doctor share implementation code is a build-time
+decision deferred to ROADMAP; the spec requires only that the *vocabulary*
+— bucket names and severity names — is identical across the two tools.
+doctor stays read-only and keeps its exit contract: exit 1 when any
+`block`-severity finding is present, 0 otherwise. §req:preflight-detection
+§req:preflight-detection-criteria §req:preflight-detection-constraints
+
+**Criteria.**
+
+- Every finding emitted by init's pre-flight pass and by `doctor.sh` shall
+  carry exactly one bucket from {`local-env`, `instance`, `config`} and
+  exactly one severity from {`block`, `warn`, `info`}.
+- The bucket and severity names shall be identical between init's
+  pre-flight and `doctor.sh` — an adopter reads one vocabulary, not two.
+- `doctor.sh` shall print the bucket label on each finding it reports.
+- `doctor.sh` shall remain read-only — it probes state and prints
+  findings, and writes nothing to the repository.
+- `doctor.sh` shall exit 1 when any `block`-severity finding is present
+  and 0 otherwise, unchanged from its current contract.
+- When `gh` is unauthenticated the finding shall read `local-env` +
+  `block`; when the repo already runs an interfering release system the
+  finding shall read `instance` + `block`; when `allow_auto_merge` is
+  disabled the finding shall read `config` + `warn`.
+
+**Scope and alternatives.**
+
+- *A single combined severity-with-ownership scale* (e.g. five levels from
+  "fix-on-your-machine-now" to "advisory-config") was rejected: it forces
+  one ordering on two genuinely independent questions and produces a scale
+  no one can memorize.
+- *Sharing a finding-emitter implementation between init and doctor* is a
+  reasonable build choice but is left to ROADMAP; the spec constrains the
+  vocabulary, not the code path.
+
+## Pre-flight gate and control flow §spec:preflight-gate
+
+*Status: complete*
+
+`init.sh` runs a single pre-flight detection pass as the **first** thing
+it does — before it issues any prompt and before it writes any file
+(`.flywheel.yml`, the two workflow files, `.gitattributes`, merge-driver
+git config). An adopter whose environment or repository has a
+`block`-severity problem learns of it while nothing has been written yet;
+setup never leaves a half-laid scaffold behind a late-discovered blocker.
+§req:preflight-detection §req:preflight-detection-criteria
+§req:preflight-detection-constraints
+
+Severity drives control flow:
+
+- A **`block`** halts setup. **Interactively**, setup stops and does not
+  begin scaffolding until the adopter resolves the condition — or, where
+  an override is offered, passes it deliberately. **Non-interactively** (no
+  TTY, e.g. `curl … | bash` or CI), a `block` causes setup to exit
+  non-zero with the reason printed, rather than proceeding on defaults the
+  way init does today.
+- **`warn`** and **`info`** are advisory. They are reported in the
+  pre-flight summary and never halt setup, interactively or not.
+
+**Why detection precedes action.** Today init discovers the
+environment piecemeal and late — it prompts and writes, then probes for
+App credentials or account type partway through, and a missing
+prerequisite surfaces only after the scaffold is partly written or as a
+raw `gh` error in a later step. Moving the full detection pass ahead of
+the first prompt or write makes "before setup starts" literal: the
+pre-flight summary is the first thing the adopter sees, and a `block`
+stops setup before any repository state changes. §req:preflight-detection
+§req:preflight-detection-stories
+
+**Why non-interactive runs fail loudly.** A maintainer running setup in CI
+or via `curl … | bash` cannot answer a prompt; init's current behavior of
+printing a problem and continuing on defaults means an unattended setup
+can scaffold over a broken environment silently. Exiting non-zero with the
+reason makes the failure visible to the surrounding automation.
+§req:preflight-detection-stories §req:preflight-detection-constraints
+
+**Why the override is explicit and never default.** Setup never silently
+proceeds past a `block`. Where an override is offered (the existing
+release-system block, per §spec:preflight-release-conflict), it is an
+opt-in flag the adopter passes deliberately — a recorded decision, not
+a default that erodes the gate. §req:preflight-detection-constraints
+
+**Backward compatibility.** On a clean machine and a clean repository the
+pre-flight pass finds no blockers, prints a passing summary, and setup
+proceeds exactly as before. The pass is purely additive to a healthy
+setup's flow. Adopters consuming flywheel as a GitHub Action are
+unaffected — this is setup-time tooling only, adding no Action behavior
+and no GitHub App scope. §req:preflight-detection-criteria
+§req:preflight-detection-constraints
+
+**Criteria.**
+
+- When `init.sh` runs, the pre-flight detection pass shall complete before
+  any prompt is issued and before any file is written.
+- When a `block`-severity finding is present and the run is interactive,
+  setup shall not write any scaffold file until the adopter resolves the
+  condition or passes an offered override flag.
+- When a `block`-severity finding is present and the run is
+  non-interactive, setup shall exit non-zero and print the reason.
+- `warn`- and `info`-severity findings shall not halt setup in either
+  mode.
+- When the environment and repository are clean, the pre-flight pass shall
+  report no blockers, print a passing summary, and setup shall proceed
+  unchanged from its prior behavior.
+- Detection shall be read-only — it probes local tools, `gh` auth state,
+  and repo/remote state, and requests no privilege beyond what setup
+  already needs.
+
+**Scope and alternatives.**
+
+- *Keeping late probing and merely improving error messages* was rejected:
+  a clearer message after a half-written scaffold still leaves the adopter
+  to unwind partial state. The fix is ordering, not wording.
+- *Defaulting non-interactive runs past blocks for convenience* was
+  rejected: it reintroduces the silent-scaffold-over-broken-environment
+  failure the gate exists to prevent.
+
+## Pre-flight gh capability detection §spec:preflight-gh-capability
+
+*Status: complete*
+
+The pre-flight pass reports, up front, whether `gh` is installed,
+authenticated, and carries the **specific** scopes and permissions the
+path the adopter chose needs — and, for a missing one, names the later
+step it would block. A scope gap surfaces as a labelled finding before any
+write, not as a raw `gh` API error mid-run. These are `local-env` findings
+(the adopter fixes them on their own machine/account); a missing required
+scope is `block` severity. §req:preflight-detection
+§req:preflight-detection-criteria §req:preflight-detection-stories
+
+The scopes checked are tied to what the chosen path actually does:
+
+- **repo-admin** — needed to write the `FLYWHEEL_GH_APP_ID` variable and
+  the `FLYWHEEL_GH_APP_PRIVATE_KEY` secret and to apply rulesets.
+- **`admin:org`** — needed when credentials are scoped org-wide.
+- **GitHub-App creation permission** — needed when the adopter asks init
+  to create the App.
+
+**Why scope detection up front, tied to the blocked step.** init proceeds
+optimistically and dies at the first `gh` call that exceeds the token's
+grant, with an error naming the API call rather than the missing
+prerequisite — and today the credential/ruleset `gh` calls swallow scope
+failures with `|| true`, so setup re-prompts or silently does nothing
+instead of reporting the gap. Detecting the scopes the chosen path needs,
+before that path runs, lets setup say "this token lacks repo-admin, which
+the App-ID variable write in a later step needs" instead of surfacing an
+opaque API error after the adopter has already answered prompts.
+§req:preflight-detection §req:preflight-detection-stories
+§req:preflight-detection-constraints
+
+**Why the checks are path-specific.** The required scopes depend on the
+adopter's choices — repo- versus org-scoped credentials, whether init
+creates the App. Probing only the scopes the chosen path needs avoids
+blocking an adopter on a permission their path never exercises. (Threat
+note: scope detection only *reads* `gh` auth state; it grants nothing and
+requests no permission beyond what setup already needs — it exists partly
+to surface when those permissions are absent.) §req:preflight-detection
+§req:preflight-detection-constraints
+
+**Criteria.**
+
+- The pre-flight pass shall report whether `gh` is installed and
+  authenticated as `local-env` findings.
+- When the chosen path needs a scope the authenticated token lacks, the
+  pass shall report a `local-env` + `block` finding that names the missing
+  scope and the later step it would block.
+- A path writing repo-level credentials or applying rulesets shall check
+  for repo-admin; a path scoping credentials org-wide shall check for
+  `admin:org`; a path that asks init to create the App shall check for
+  GitHub-App creation permission.
+- A missing scope shall be reported before any prompt or write, not as a
+  raw `gh` API error during a later step.
+- Scope detection shall read `gh` auth state only and shall request no
+  additional privilege.
+
+**Scope and alternatives.**
+
+- *Requesting the union of all scopes regardless of path* was rejected: it
+  blocks adopters on permissions their chosen path never uses.
+- *Catching the `gh` API error at the call site and re-explaining it* was
+  rejected: by then prompts have been answered and scaffold may be
+  written; the value is in reporting before action.
+
+## Existing release-system detection §spec:preflight-release-conflict
+
+*Status: complete*
+
+The pre-flight pass detects whether the repository **already runs a
+release system that would race flywheel's releases** — another tag or
+release producer such as release-please, a separate semantic-release, or
+hand-rolled `gh release create` / `git tag` / `npm version` in a push or
+dispatch workflow — and reports it as an `instance` + `block` finding.
+Layering flywheel on top of such a system produces two pipelines racing to
+tag and publish, a conflict the adopter would otherwise discover only when
+releases start colliding. §req:preflight-detection
+§req:preflight-detection-criteria §req:preflight-detection-stories
+
+Interactive setup **halts** on this finding unless the adopter passes an
+explicit override flag; the override is a deliberate action, never a
+default (per §spec:preflight-gate). Non-interactively, the block exits
+non-zero like any other.
+
+**Why best-effort and minimal, biased toward false negatives.** The check
+covers the systems that would actually race flywheel's releases — not an
+exhaustive audit of every release tool in existence. It is deliberately
+tuned to tolerate a missed exotic system (a false negative) rather than
+block a clean repo on a false positive: a needless block on a healthy repo
+is friction every adopter might hit, whereas a missed exotic system is
+rare and still caught downstream when releases actually collide.
+§req:preflight-detection-criteria §req:preflight-detection-constraints
+
+**Why `instance` + `block`.** A conflicting release system is a one-time
+fix to *this* repository made during install — remove or disable the other
+producer — so it is bucketed `instance`. It is `block` because proceeding
+produces colliding releases, the most damaging silent outcome in the
+onboarding cluster; the adopter decides deliberately (resolve or
+override) before flywheel layers on top. §req:preflight-detection-stories
+§req:preflight-detection-constraints
+
+**Criteria.**
+
+- When the repository runs a known flywheel-interfering release producer
+  (release-please, a separate semantic-release, or hand-rolled
+  `gh release create` / `git tag` / `npm version` in a push or dispatch
+  workflow), the pass shall report an `instance` + `block` finding.
+- Interactive setup shall halt on this finding unless the adopter passes
+  an explicit override flag; the override shall never be the default.
+- The check shall be scoped to known interfering producers, not an
+  exhaustive release-tool scanner.
+- The check shall prefer a false negative (missing an exotic system) over
+  a false positive that blocks a clean repository.
+
+**Scope and alternatives.**
+
+- *An exhaustive release-tooling scanner* was rejected: the cost of false
+  positives — blocking clean repos — outweighs catching every exotic
+  system, which is caught downstream when releases collide.
+- *Auto-disabling the detected system* is out of scope: detection is
+  read-only and the adopter owns the one-time `instance` fix.
+
+## Pre-flight credentials and App detection §spec:preflight-credentials-app
+
+*Status: complete*
+
+The credentials detection — the `FLYWHEEL_GH_APP_ID` variable and the
+`FLYWHEEL_GH_APP_PRIVATE_KEY` secret, at both repo and org level — and the
+GitHub-App existence/installation detection run as part of the **same**
+pre-flight pass and are classified on the same two axes as every other
+finding. #232 ships the complete pre-flight pass; the sibling issues
+(#234–242) refine the prompts and messaging that *consume* these findings.
+§req:preflight-detection §req:preflight-detection-criteria
+§req:preflight-detection-constraints
+
+**Why these detections belong in the spine, not the siblings.** The
+credentials prompt (#234–242) and the GitHub-App detection both need the
+same environment-probing and classification capability. Building detection
+and vocabulary once here — and having the sibling issues refine only the
+prompts and messaging on top — avoids each feature reinventing detection or
+inventing a third vocabulary. The pre-flight pass is the shared spine of
+the setup-onboarding cluster; this section fixes the scope boundary
+between what #232 detects and what the siblings present.
+§req:preflight-detection §req:preflight-detection-stories
+§req:preflight-detection-constraints
+
+**Scope boundary.** In scope for #232: detecting whether the App-ID
+variable and private-key secret exist (repo- and org-level) and whether
+the GitHub App exists and is installed, and classifying each on the
+bucket × severity axes. Out of scope for #232 and deferred to the
+siblings: the wording and flow of the credentials prompt, the
+create-versus-reuse App choice presentation, and the install-confirmation
+messaging. §req:preflight-detection-constraints
+
+**Criteria.**
+
+- The credentials detection (the `FLYWHEEL_GH_APP_ID` variable and
+  `FLYWHEEL_GH_APP_PRIVATE_KEY` secret, at repo and org level) shall run as
+  part of the pre-flight pass and carry a bucket and severity.
+- The GitHub-App existence/installation detection shall run as part of the
+  same pre-flight pass and carry a bucket and severity.
+- The detection capability and the classification vocabulary shall be
+  reusable by the credentials and GitHub-App sibling work (#234–242)
+  without redefining either.
+- The prompts and messaging that consume these findings are out of scope
+  for this section and are refined by the sibling issues.
+
+**Scope and alternatives.**
+
+- *Letting each sibling issue probe credentials and App state on its own*
+  was rejected as the explicit anti-goal: it reinvents detection per
+  feature and risks a third severity vocabulary. Detection and vocabulary
+  are built once here and reused.
+
+## apply-rulesets self-provisions PyYAML ephemerally §spec:apply-rulesets-pyyaml
+
+*Status: complete*
+
+`scripts/apply-rulesets.sh` is the one-shot setup step an adopter runs once
+per repository — documented in `docs/adopter/setup.md` (§5) as a
+`curl -fsSL … | bash -s -- <owner/repo>` one-liner — to apply Flywheel's
+branch- and tag-protection rulesets. To enumerate the managed branches it
+runs two small Python snippets that load `.flywheel.yml` with PyYAML: one
+emits every managed branch ref, the other the subset with
+`release: production`. The script never asks the adopter to install PyYAML
+and never leaves anything installed on their machine. When PyYAML is missing,
+the script provisions it for itself in a throwaway location, uses it for the
+two parses, and removes it before exiting. §req:apply-rulesets-pyyaml
+§req:apply-rulesets-pyyaml-criteria
+
+**The behavior is ephemeral because the need is ephemeral.** The script runs a
+single time per repository, so a dependency it needs only for that run leaves
+no trace afterward. On stock macOS — the common case — the Xcode Command Line
+Tools `python3` (3.9.x) adopters actually have does not ship PyYAML, so a
+first-time adopter following the documented setup would otherwise hit a hard
+stop on the very first Flywheel action they take. Rather than instruct them to
+*permanently* mutate their user site-packages for a one-shot script (the prior
+`pip3 install --user pyyaml` message), the script automates exactly the
+workaround the reporter of #245 performed by hand: stand up a disposable
+PyYAML, use it, tear it down. §req:apply-rulesets-pyyaml
+§req:apply-rulesets-pyyaml-stories
+
+**Why keep PyYAML rather than drop it.** The two reads shall stay byte-for-byte
+equivalent to today's output — the same complete list of managed branch refs
+and the same `release: production` subset, feeding the same ruleset behavior.
+PyYAML is what computes that result now; continuing to parse `.flywheel.yml`
+with PyYAML is the surest guarantee of parse parity. Hand-rolling a YAML parser
+in shell/`awk`, or swapping in a different YAML tool, would re-implement the
+parse and risk diverging on quoting, anchors, or block structure for no
+adopter-visible gain. The change is to *how the dependency is satisfied*, not
+to *what the parses compute*. §req:apply-rulesets-pyyaml-criteria
+§req:apply-rulesets-pyyaml-constraints
+
+**Tiered satisfaction, fast path preserved.** When the invoking `python3`
+can already `import yaml`, the script uses it directly — no provisioning, no
+added latency, no extra steps. An adopter who already has PyYAML sees no
+change. Only when the import fails does the script provision an ephemeral,
+isolated environment (a throwaway interpreter context that exists for the
+duration of the run and nowhere in the adopter's persistent Python install),
+satisfy PyYAML there, and run the two parses against it. The provisioning
+installs PyYAML and nothing else, into an isolated throwaway location, so it
+cannot alter the adopter's interpreter or global/user packages. The cleanup is
+unconditional — it runs whether the script succeeds, fails, or is interrupted —
+so a partial run leaves nothing behind. §req:apply-rulesets-pyyaml
+§req:apply-rulesets-pyyaml-criteria §req:apply-rulesets-pyyaml-constraints
+
+**Graceful degradation, not a cryptic stop.** Where self-provisioning
+genuinely cannot work in a given environment — for example an interpreter with
+`ensurepip` stripped (some Debian/Ubuntu builds) and no alternative provisioner
+available, or no network to fetch the package — the script exits with a clear,
+copy-pasteable, actionable message naming the precise remedy for that
+environment, rather than the bare `PyYAML is required` import error. The
+failure path is the exception, reached only after auto-provisioning has been
+attempted and ruled out. §req:apply-rulesets-pyyaml-criteria
+§req:apply-rulesets-pyyaml-constraints
+
+**Documentation matches reality.** The script's header comment no longer
+claims PyYAML is `preinstalled on macOS` — true only of the retired system
+Python 2, not the Xcode CLT `python3` adopters have. Its stated dependencies
+describe what adopters actually run and how the script obtains PyYAML when it
+is absent. §req:apply-rulesets-pyyaml §req:apply-rulesets-pyyaml-stories
+
+**Blast radius.** The change is confined to `apply-rulesets.sh` — its
+dependency-resolution preamble and header comment — and to the matching
+dependency note in `docs/adopter/setup.md`. The ruleset-application logic (the
+`gh api` calls, payload assembly, idempotent create-or-replace) is untouched.
+Because the script runs unauthenticated-input-free over an `owner/repo`
+argument the adopter supplies and fetches only PyYAML into a disposable
+location, auto-provisioning adds a runtime network dependency on the package
+index but no persistent footprint and no new credential surface.
+§req:apply-rulesets-pyyaml-constraints
+
+**Criteria.**
+
+- When an adopter on stock macOS (Xcode CLT `python3`, no PyYAML) runs the
+  script as documented, the script shall complete end-to-end without any
+  manual dependency install and without prompting the adopter to install
+  anything.
+- After the script exits — on success, failure, or interruption — the
+  adopter's Python environment and user site-packages shall be exactly as
+  they were before; nothing PyYAML-related shall remain installed.
+- When the invoking `python3` can already `import yaml`, the script shall use
+  it directly, adding no provisioning step and no latency.
+- The two `.flywheel.yml` reads shall produce results identical to today: the
+  complete list of managed branch refs, and the `release: production` subset,
+  with the same downstream ruleset behavior.
+- When self-provisioning genuinely cannot succeed in the environment, the
+  script shall exit with a clear, copy-pasteable, actionable message naming
+  the remedy — not a bare import error.
+- The script's header comment shall not claim PyYAML is preinstalled on
+  macOS; the stated dependencies shall match what adopters actually have and
+  how the script obtains PyYAML when it is missing.
+
+**Scope and alternatives.**
+
+- *Instructing a persistent `pip install`* (the prior behavior) is rejected:
+  it leaves a lasting change on the adopter's machine for a script run once —
+  the core grievance of #245.
+- *Dropping PyYAML for a hand-rolled or alternate-tool YAML parse* is rejected:
+  it risks parse divergence against a hard parse-parity requirement for no
+  adopter-visible benefit, and a different tool (`yq`) is no more likely to be
+  present on stock macOS than PyYAML.
+- *Requiring a project checkout or a pre-existing virtualenv* is rejected: the
+  script must stay `curl … | bash`-friendly and safe to re-run, with no
+  assumption of local project tooling.
+
+§req:apply-rulesets-pyyaml-constraints §req:apply-rulesets-pyyaml-stories
+
+## Stdin-safe ruleset application §spec:apply-rulesets-stdin
+
+*Status: complete*
+
+The `apply-rulesets.sh` one-liner documented in `docs/adopter/setup.md` §5
+— `curl -fsSL …/apply-rulesets.sh | bash -s -- <owner/repo>` — applies the
+full set of branch and tag protection rulesets end to end for an adopter
+who has no Flywheel checkout. The piped run resolves its four ruleset
+templates (`managed-branches.json`, `managed-branches-review.json`,
+`tag-namespace.json`, `release-gate.json`) regardless of the working
+directory the adopter happens to be in — `$HOME`, an unrelated repository,
+or an empty `mktemp -d` all produce the same applied rulesets. No run dies
+with exit 2 or "Could not open file" before the first GitHub API call.
+§req:apply-rulesets-stdin §req:apply-rulesets-stdin-criteria
+
+**The problem this fixes.** A script piped through `bash` has no file on
+disk, so `BASH_SOURCE[0]` is unset. `apply-rulesets.sh` located its
+templates with `SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"`
+and read `"$SCRIPT_DIR/rulesets/<name>.json"` — a self-location that only
+resolves when the script's own file is present. Under the piped form, with
+`set -u` active, the unbound `BASH_SOURCE[0]` degrades `SCRIPT_DIR` to the
+caller's working directory; the subsequent `jq … "$SCRIPT_DIR/rulesets/…"`
+read fails unless the caller already stands inside a Flywheel checkout —
+exactly the situation the piped form exists to avoid. The documented first
+protection step of the quick path therefore never applied anything for an
+adopter taking the piped route. §req:apply-rulesets-stdin
+
+**The resolution rule — local first, then fetch, mirroring the sibling
+scripts.** The fix adopts the self-location idiom the other stdin-safe
+quick-start scripts already use (`init.sh`, `doctor.sh`): guard
+`BASH_SOURCE[0]` under strict mode (`${BASH_SOURCE[0]:-}`), use the bundled
+`rulesets/` directory when the script runs from a checkout, and otherwise
+fetch the four templates over the network — the same `raw.githubusercontent.com`
+source the run was itself piped from, and the same source `init.sh` fetches
+its `templates/` from. This was chosen over inventing a new mechanism
+because (a) it is the proven idiom already in this script family, (b) it
+keeps the `rulesets/*.json` files the single source of truth rather than
+duplicating them, and (c) it makes the invocation contract uniform across
+`init.sh`, `doctor.sh`, and `apply-rulesets.sh` — a consistency the
+requirement calls for in its own right. §req:apply-rulesets-stdin-constraints
+
+**Version-consistent templates without self-location.** Because a piped
+script cannot read its own file, it cannot derive from the runner which
+Flywheel ref it was fetched from. The templates a piped run applies shall
+nonetheless match the logic of the script applying them, never a silent
+script-from-one-version / shapes-from-another mismatch. The fetch therefore
+draws from a deterministically chosen ref — the same ref the documented
+`curl` URL publishes from — rather than from anything inferred at runtime,
+and the ruleset JSON shapes the script's `jq`/`gh` logic depends on stay
+stable across versions. A checkout run is inherently consistent because it
+reads the templates shipped alongside it. §req:apply-rulesets-stdin-constraints
+
+**Docs present only invocation forms that work.** `docs/adopter/setup.md`
+(and the README, where it documents one-liners) shows a piped form for
+`apply-rulesets.sh` only because the piped form now works; the checkout
+form is documented alongside as before. Every script the docs present as a
+`curl … | bash` one-liner is verified stdin-safe — none carries a latent
+`BASH_SOURCE`/`SCRIPT_DIR` self-location failure. Where a script shall run
+from a checkout, the docs do not show a piped form for it. The maintainer
+learns of any such latent failure from this audit rather than from an
+adopter's bug report. §req:apply-rulesets-stdin-criteria §req:apply-rulesets-stdin-stories
+
+**Fail clean, idempotent, strict, no new dependencies — all preserved.** A
+run that cannot obtain valid templates (e.g. no network on a piped run)
+still aborts before creating any ruleset, flipping `delete_branch_on_merge`,
+or changing any repository setting — the adopter's repository is left
+exactly as it was found, never half-protected. The create-or-replace-by-name
+behaviour is untouched: re-running (piped or from a checkout) updates
+existing rulesets in place rather than stacking duplicates. The fix coexists
+with `set -u` and the script's other strict-mode guards rather than relaxing
+them to paper over the unbound variable. It imposes no tool or privilege on
+the adopter beyond what the script already requires (`gh`, `jq`,
+`python3`/PyYAML, and network — a piped run is itself network-fetched and
+calls the GitHub API). §req:apply-rulesets-stdin-criteria §req:apply-rulesets-stdin-constraints
+
+**Same shape as the composite-action-path defect.** This is the
+§req:composite-action-path failure mode (§spec:composite-self-reference) in
+a second place: a code path only the real adopter exercises — consuming a
+Flywheel script without Flywheel's source already on disk — that the
+project's own runs, which always have the checkout present, never modelled.
+The fix is to make that path work and to widen the audit to every documented
+one-liner, so the class is closed rather than patched at one site.
+§req:apply-rulesets-stdin
+
+**Alternatives considered.**
+
+- *Embed the four ruleset JSONs inline in the script* (heredocs), so a
+  piped run carries its own templates and there is zero script/template
+  version skew by construction. This is the strongest version-consistency
+  guarantee, but it duplicates the `rulesets/*.json` files into the script
+  (a new drift surface needing its own parity guard) and diverges from the
+  local-first/fetch idiom the sibling scripts use — losing the uniform
+  invocation contract the requirement asks for. Rejected in favour of the
+  sibling-script idiom plus stable, deterministically-sourced templates.
+- *Relax `set -u` or default `SCRIPT_DIR` to a hardcoded path.* Papers over
+  the unbound `BASH_SOURCE[0]` without making the piped path actually find
+  its templates, and weakens the strict-mode guard the script relies on to
+  fail fast. Rejected.
+- *Document the piped form away — show only the checkout invocation.* Keeps
+  the docs honest at the cost of the quick-path capability the piped form
+  exists to provide, and leaves the adopter who pipes `init.sh`/`doctor.sh`
+  successfully to wonder why this one script is special. Rejected: the
+  decided outcome is to make the documented command work, not to retract it.
+
+## Stdin-path ruleset regression test §spec:apply-rulesets-stdin-test
+
+*Status: complete*
+
+A test in Flywheel's cheap suite — unit / per-PR CI, not the rate-limited
+e2e sandbox — runs `apply-rulesets.sh` the way an adopter pipes it: read
+from stdin, with no Flywheel checkout in the working directory. It fails
+when the script cannot resolve its four ruleset templates and passes once
+the script resolves them. This class of break — a Flywheel script unable to
+find its own bundled assets when run without a workspace that already holds
+Flywheel's source — is caught before a release is built, not only by the
+e2e gate or by an adopter. §req:apply-rulesets-stdin-criteria §req:apply-rulesets-stdin-stories
+
+**Why the cheap suite, and why e2e was not enough.** The defect shipped
+because every-PR suites always invoked the script from a checkout, where
+`SCRIPT_DIR` resolves and the templates are found; only the adopter path,
+which the cheap suites never modelled, exercises the stdin self-location.
+A cheap test moves first detection of this class to every PR. The test
+reproduces the failure at template resolution — before any `gh` API call —
+so it needs no live GitHub access and adds no load to the rate-limited
+sandbox installation the e2e suite already strains (§spec:sandbox-test-budget,
+§req:sandbox-ci-budget). This mirrors the cheap adopter-style guard added
+for the composite-action-path defect (§spec:adopter-resolution-test).
+§req:apply-rulesets-stdin §req:apply-rulesets-stdin-constraints
+
+**What the test asserts.** The guard models the resolution outcome, not a
+literal code shape: piped from stdin in a directory containing no Flywheel
+source, the script obtains all four ruleset templates rather than aborting
+on a missing `SCRIPT_DIR/rulesets/…` read. A reviewer can state the property
+in one sentence — "piped with no checkout, the script still finds its
+templates" — and it stays true after the underlying resolution mechanism
+changes. §req:apply-rulesets-stdin-criteria
+
+**Backstop unchanged.** The e2e suite keeps exercising the full adopter
+path as a backstop; it is no longer the first line of defence for this bug
+class. §req:apply-rulesets-stdin-criteria
+
+## Setup completion summary §spec:setup-completion-summary
+
+*Status: complete*
+
+`init.sh` ends with an **outcome summary** that reports what the run
+actually did, not a fixed "Next steps" list. Today the run closes with a
+static block — review `.flywheel.yml`, commit and push, open a smoke-test
+PR, run `doctor.sh` — printed identically whether the adopter configured
+App credentials or skipped them, applied the protection rulesets or
+declined, hit a pre-flight blocker or sailed through clean. The new summary
+accounts for **every scaffold step init can touch**, each with its real
+outcome: the `.flywheel.yml` preset, the two adopter workflow files,
+`.gitattributes` plus the merge-driver git config, the App credentials (the
+`FLYWHEEL_GH_APP_ID` variable and `FLYWHEEL_GH_APP_PRIVATE_KEY` secret), and
+ruleset application. Each step reads as **configured**, **skipped**,
+**failed**, or **deferred** to the adopter. §req:setup-completion-summary
+§req:setup-completion-summary-criteria §req:setup-completion-summary-stories
+
+The summary closes with an **explicit verdict**: "complete", or
+"incomplete — N items remain". A **deliberate skip is not a failure** —
+when the adopter answers no to a step or passes a `--skip-*` flag, the
+verdict can still read "complete", with the skipped item listed as deferred
+alongside the exact command that finishes it later. Only a step that was
+meant to run and failed, or an unresolved `block`-severity finding, makes
+the verdict "incomplete". §req:setup-completion-summary-criteria
+§req:setup-completion-summary-constraints
+
+Outstanding and deferred items are **labelled in the pre-flight
+vocabulary** — the same `local-env` / `instance` / `config` bucket and
+`block` / `warn` / `info` severity axes the pre-flight pass and `doctor.sh`
+already speak (§spec:preflight-classification). "App credentials not set"
+reads as the same kind of thing at completion as it would at pre-flight, so
+the adopter meets one vocabulary at the start of the run and the same one at
+the end. Each deferred item names **the exact command that finishes it** —
+the `scripts/apply-rulesets.sh <repo> --app-id <id>` line init already emits
+for skipped rulesets, surfaced uniformly for every deferred step — so the
+adopter never reconstructs the remaining work from scrollback.
+§req:setup-completion-summary-criteria §req:setup-completion-summary-stories
+§req:setup-completion-summary-constraints
+
+**Why an outcome summary replaces the fixed block.** The static list left
+the adopter to reconstruct from scrollback what was configured, skipped, or
+half-done, and to remember a *separate* validator to learn whether any of it
+took. There was no single moment that said "here is what I did, here is
+what is left, here is whether you are ready." The cost is friction on every
+adoption — frequent, mandatory, first-run-experience — rather than a
+release-correctness fault; the fix is to make the run's last screen report
+its own result. §req:setup-completion-summary §req:setup-completion-summary-stories
+
+**Why reuse the pre-flight vocabulary rather than invent a third.** The rest
+of the setup cluster (#234–242) already taught the adopter one language for
+"what is wrong" — bucket × severity, shared between init's pre-flight and
+doctor. A separate end-of-run vocabulary would make the adopter learn a
+second way to describe the same kinds of problem. Reusing bucket × severity
+keeps init's pre-flight, init's completion summary, and doctor speaking one
+language end to end. §req:setup-completion-summary-constraints
+
+**Why a deliberate skip cannot read as failure.** Conflating an adopter's
+intentional choice (answered no, passed `--skip-*`) with a step that was
+supposed to run and did not would train adopters to ignore "incomplete",
+defeating the signal the verdict exists to carry. The verdict distinguishes
+the two; a deferred-by-choice item is reported with its finishing command,
+not as a fault. §req:setup-completion-summary-constraints
+
+**Additive to the happy path.** A clean greenfield run that configures
+everything ends with an all-configured summary and a "complete" verdict.
+The change never turns a healthy setup into a scary one — it adds a passing
+summary, nothing more, to a run that previously just printed boilerplate.
+§req:setup-completion-summary-criteria §req:setup-completion-summary-constraints
+
+**Criteria.**
+
+- When `init.sh` finishes, it shall print a summary that lists every
+  scaffold step it can touch — the `.flywheel.yml` preset, the two workflow
+  files, `.gitattributes` plus merge-driver git config, the App credentials
+  (`FLYWHEEL_GH_APP_ID` variable and `FLYWHEEL_GH_APP_PRIVATE_KEY` secret),
+  and ruleset application — each with its real outcome of configured,
+  skipped, failed, or deferred.
+- The summary shall end with a verdict of "complete" or "incomplete — N
+  items remain".
+- When a step was skipped by the adopter (answered no, or a `--skip-*`
+  flag), the verdict shall still read "complete" and the step shall be
+  listed as deferred; only a step that was meant to run and failed, or an
+  unresolved `block`-severity finding, shall make the verdict "incomplete".
+- Each outstanding or deferred item shall carry a bucket from {`local-env`,
+  `instance`, `config`} and a severity from {`block`, `warn`, `info`}
+  identical to the names used by the pre-flight pass and `doctor.sh`.
+- Each deferred item shall name the exact command that finishes it.
+- A clean greenfield run that configures every step shall end with an
+  all-configured summary and a "complete" verdict, with no other change to
+  the run's behavior.
+
+**Scope and alternatives.**
+
+- *Keeping the static "Next steps" block and merely appending a status
+  line* was rejected: the block's flaw is that it ignores what the run did,
+  and a verdict bolted onto stale prose still leaves the adopter
+  reconstructing outcomes from scrollback.
+- *A new completion-only severity scale* was rejected: it forces the
+  adopter to learn a second vocabulary for problems the pre-flight already
+  named in bucket × severity terms (§spec:preflight-classification).
+- *Treating every deferral as "incomplete"* was rejected: it conflates a
+  deliberate choice with a real failure and trains adopters to ignore the
+  verdict.
+
+## Setup self-validation at end of run §spec:setup-auto-validation
+
+*Status: complete*
+
+`init.sh` **auto-runs the `doctor.sh` validation at the end of every run** —
+interactive or not — so the adopter sees a green/red confirmation that the
+scaffold actually took, instead of being told to go run a separate
+validator. The old run closed by *instructing* the adopter to run
+`doctor.sh` themselves; the validation now happens as the final step of
+setup, and its findings feed the same end-of-run summary
+(§spec:setup-completion-summary). Because doctor already speaks the same
+buckets and severity, init and doctor produce **one picture of "done", not
+two**. §req:setup-completion-summary §req:setup-completion-summary-criteria
+§req:setup-completion-summary-stories
+
+**Why setup validates itself instead of delegating.** A separate validator
+the adopter has to remember to run is a step that gets skipped, leaving the
+adopter to walk away from a setup they never confirmed took. Folding the
+validation into the run's tail means the last thing the adopter sees is a
+confirmation the wiring holds — the green/red signal arrives without a
+second command. §req:setup-completion-summary-stories
+
+**Why the auto-validation respects the cost ceiling.** Running `doctor.sh`
+costs `gh` API calls, and flywheel holds a deliberate API-budget posture
+(§req:sandbox-ci-budget). The end-of-run validation stays within that
+posture: it reuses what the run already learned — the pre-flight findings
+and the per-step outcomes — where it can, rather than ballooning into a
+heavy re-probe of the whole environment. The validation is a confirmation
+pass, not a second full audit. §req:setup-completion-summary-constraints
+
+**Why one picture of done.** doctor's findings and init's per-step outcomes
+both flow into the single completion summary, classified on the same axes,
+so an adopter who runs init and an adopter who later runs doctor read
+consistent results — the run does not assert "complete" while doctor would
+say otherwise. §req:setup-completion-summary-criteria
+§req:setup-completion-summary-constraints
+
+**Criteria.**
+
+- When `init.sh` finishes, it shall run the `doctor.sh` validation
+  automatically — in both interactive and non-interactive runs — without
+  the adopter issuing a separate command.
+- The validation's findings shall feed the same end-of-run summary and be
+  classified on the same buckets and severity as the rest of the summary.
+- The auto-validation shall reuse state the run already gathered where it
+  can and shall not balloon into a full re-probe of the environment,
+  staying within flywheel's API-budget posture (§req:sandbox-ci-budget).
+- `doctor.sh` shall remain read-only when invoked this way — it confirms
+  state and writes nothing to the repository.
+
+**Scope and alternatives.**
+
+- *Leaving validation as a documented manual step* was rejected: a step the
+  adopter has to remember is the step that gets skipped, so setup confirms
+  itself instead.
+- *Re-probing the full environment from scratch at end of run* was
+  rejected: it duplicates work the run already did and breaches the
+  API-budget posture; the pass reuses known state.
+
+## Non-interactive completion contract §spec:setup-exit-contract
+
+*Status: complete*
+
+In a **non-interactive run** (`curl … | bash`, CI) the completion summary
+is **machine-readable** and `init.sh` **exits with a meaningful code**: zero
+when setup is complete — including complete with deliberate deferrals — and
+non-zero when a step that was meant to run failed or a `block`-severity
+finding is unresolved. A clean setup the adopter intentionally trimmed still
+exits zero. This lets an unattended pipeline tell a finished setup from a
+half-finished one, where today a piped run prints "Next steps" and exits 0
+regardless of what failed or was silently skipped.
+§req:setup-completion-summary §req:setup-completion-summary-criteria
+§req:setup-completion-summary-stories
+
+A **strict mode** (a flag) **elevates `warn`-severity outstanding items to a
+non-zero exit**, so a maintainer who wants CI to treat any deferred-or-warned
+item as a failure-to-investigate can opt into it, while the default keeps
+deliberate skips green. §req:setup-completion-summary-criteria
+§req:setup-completion-summary-stories §req:setup-completion-summary-constraints
+
+The exit semantics extend, and do not override, the pre-flight gate's
+existing contract: a `block`-severity pre-flight finding still exits
+non-zero (§spec:preflight-gate). This section governs the **end-of-run**
+exit — after the scaffold steps have run — on the same severity vocabulary.
+§req:setup-completion-summary-constraints
+
+**Why the exit code is a stable, documented contract.** CI depends on the
+exit code to gate a pipeline; if "complete-with-deferrals" sometimes exited
+non-zero, or a real failure sometimes exited zero, the signal would be
+useless. The default semantics (zero on complete including deliberate
+deferrals, non-zero on real failure or unresolved block) and the strict
+flag are a contract automation can build on, and the §spec:preflight-gate
+block-exit behavior is preserved beneath it. §req:setup-completion-summary-constraints
+
+**Why machine-readability does not cost interactive readability.** The
+non-interactive summary is parseable, but the interactive run still reads as
+human-friendly prose. One summary serves both audiences rather than forcing
+a format good for neither — the same content, rendered for the reader at
+hand. §req:setup-completion-summary-constraints
+
+**Why a strict mode rather than changing the default.** Most adopters
+deliberately defer steps (rulesets later, org-scoped credentials elsewhere)
+and a default that failed CI on every deferral would punish ordinary use.
+Strict mode is opt-in for maintainers who want every deferred-or-warned item
+investigated, leaving the default green for intentional skips.
+§req:setup-completion-summary-stories §req:setup-completion-summary-constraints
+
+**Criteria.**
+
+- In a non-interactive run, `init.sh` shall emit a machine-readable
+  completion summary.
+- `init.sh` shall exit zero when setup is complete, including complete with
+  deliberate deferrals, and non-zero when a step that was meant to run
+  failed or a `block`-severity finding is unresolved.
+- A clean setup the adopter intentionally trimmed (via answered-no or
+  `--skip-*`) shall exit zero.
+- A strict-mode flag shall cause `warn`-severity outstanding items to
+  produce a non-zero exit; without the flag, `warn`-severity items shall not
+  fail the run.
+- The pre-flight gate's existing `block`-severity non-zero exit
+  (§spec:preflight-gate) shall be preserved, not overridden.
+- The interactive run shall still render the summary as human-readable
+  prose; one summary shall serve both the interactive and non-interactive
+  audiences.
+
+**Scope and alternatives.**
+
+- *Making the default fail on any deferral* was rejected: most adopters
+  defer steps on purpose, so the default stays green and strictness is
+  opt-in.
+- *A separate machine-only output mode divorced from the interactive
+  summary* was rejected: two formats drift; one summary is rendered for
+  both readers.
+- *Overriding the pre-flight gate's exit behavior* was rejected: this
+  section adds an end-of-run exit on the same vocabulary and preserves the
+  pre-flight contract beneath it.
+
+## Brownfield walkthrough completion parity §spec:setup-completion-docs-parity
+
+*Status: complete*
+
+The manual §0 brownfield walkthrough in `docs/adopter/setup.md` ends with a
+**completion check that mirrors the script's verdict and vocabulary**. An
+adopter retrofitting an existing repo by hand follows the walkthrough — audit
+tags, disable prior release automation, confirm the bot can push, audit
+recent commits — and today reaches the end with no single place confirming
+the whole sequence is done. The walkthrough now closes the same way init
+does: a check that reports outcomes in the `local-env` / `instance` /
+`config` and `block` / `warn` / `info` terms used everywhere else, and lands
+on the same "complete" / "incomplete" verdict. §req:setup-completion-summary
+§req:setup-completion-summary-criteria §req:setup-completion-summary-stories
+
+**Why the manual and scripted paths have to agree on "done".** When the script
+defines "finished" one way (or, today, not at all) and the docs describe it
+differently, an adopter who runs init and an adopter who follows the
+walkthrough learn two different pictures of done. Aligning the walkthrough's
+completion check with the script's verdict and vocabulary means both paths
+reach one definition of finished. §req:setup-completion-summary-stories
+§req:setup-completion-summary-constraints
+
+**Criteria.**
+
+- The §0 brownfield walkthrough in `docs/adopter/setup.md` shall end with a
+  completion check whose verdict matches the script's "complete" /
+  "incomplete" wording.
+- That completion check shall describe outstanding items in the same
+  `local-env` / `instance` / `config` buckets and `block` / `warn` / `info`
+  severity the script and `doctor.sh` use.
+- An adopter who follows the walkthrough and an adopter who runs `init.sh`
+  shall reach the same definition of "finished".
+
+**Scope and alternatives.**
+
+- *Leaving the walkthrough to end at its last step with no completion check*
+  was rejected: it leaves the manual adopter without the confirmation the
+  scripted adopter gets, and lets the two paths diverge on what "done"
+  means.
+
+## doctor repo-field reads are three-state §spec:doctor-settings-read
+
+*Status: complete*
+
+Batch 1 (#239) landed the two named repo settings (`allow_auto_merge`,
+`delete_branch_on_merge`): they read three-state via the `classify_repo_field`
+helper, satisfying criteria 1–3 and 5–7. Batch 2 generalized the same treatment
+to every permission-gated field read off an otherwise-successful `gh api`
+response (criterion 4) — the `.private` visibility probe and the branch/tag
+ruleset-detail reads now branch on call success and surface a `local-env` +
+`warn` could-not-verify finding instead of collapsing a permission gap into a
+false "absent"/"no coverage" block — closing the section.
+
+`scripts/doctor.sh` reports a repository setting as **enabled**,
+**disabled**, or **could-not-verify** — never collapsing the last into the
+second. Under "Repo settings" doctor checks two GitHub options flywheel
+depends on: `allow_auto_merge` (without it flywheel cannot schedule native
+auto-merge, so eligible PRs fall back to a direct merge that bypasses
+required status checks — see §spec:release-gate, #147/#153) and
+`delete_branch_on_merge` (without it head branches linger after every
+merge). Both are read off a single successful `gh api repos/<owner>/<repo>`
+response. §req:doctor-settings-read §req:doctor-settings-read-criteria
+
+**The false negative this closes.** GitHub omits these merge-setting fields
+from the repository object entirely when the caller's token lacks
+repo-admin: the API call still succeeds and returns the repo, just without
+the admin-only fields. doctor previously treated a setting as enabled only
+when its field read back exactly `true`, so an *absent* field — a `null`
+read — was indistinguishable from a genuine `false` and reported as
+**disabled**. An adopter running doctor with a non-admin or App
+installation token was told to go re-enable settings that were already on,
+chasing a non-problem and losing trust in the report; a check that
+confidently misdirects is worse than one that stays silent.
+§req:doctor-settings-read §req:doctor-settings-read-stories
+
+The reads now distinguish three states. The field present and `true` is
+enabled (reported `ok`, unchanged). The field present and `false` is
+genuinely disabled — reported `config` + `warn` with the existing
+remediation (re-run `scripts/apply-rulesets.sh`, or the Settings path),
+unchanged. The field **absent** from an otherwise-successful response is
+could-not-verify — reported `local-env` + `warn` with a message in the
+same register as doctor's existing permission notes: "could not verify
+`<setting>` — reading it requires repo-admin." doctor never asserts a
+setting is off when it merely could not read it.
+§req:doctor-settings-read-criteria §req:doctor-settings-read-constraints
+
+**Why `local-env` + `warn` for could-not-verify.** A field hidden by an
+under-scoped token is a condition on the adopter's own account, not a
+misconfiguration of their repo — the same shape as doctor's existing
+"could not list repo secrets — listing requires an admin PAT" finding,
+which is already `local-env`. It is `warn`, not `block`: doctor cannot
+confirm the setting either way, and a visibility limit shall not halt a
+read-only validator. This reuses the bucket × severity vocabulary of
+§spec:preflight-classification (§req:preflight-detection) without inventing
+a new severity or bucket name. §req:doctor-settings-read-criteria
+§req:doctor-settings-read-constraints
+
+**The fix generalizes beyond the two named settings.** The conflation
+doctor avoids everywhere else — its variable, secret, and ruleset checks
+already distinguish "could not read — needs admin" from "absent" by
+inspecting whether the API *call* succeeded — was specific to fields read
+off an otherwise-successful call. Every doctor check that reads a
+permission-gated field off a successful `gh api` response distinguishes
+enabled / disabled / could-not-verify; none silently reports "disabled" or
+"absent" when the real cause is a permission gap. The two repo settings are
+the identified instance, not a special case. §req:doctor-settings-read
+§req:doctor-settings-read-criteria §req:doctor-settings-read-constraints
+
+**Severity reconciliation is ratified, not re-opened.** `allow_auto_merge`
+and `delete_branch_on_merge`, when genuinely disabled, report at the
+**same** severity and bucket — `config` + `warn`. The pre-flight work
+(#250, §spec:preflight-classification) already reconciled the historical
+fail-vs-warn mismatch between them; this section records that as the settled
+end state, not a new proposal. §req:doctor-settings-read-constraints
+
+**Mechanism is open; behavior is fixed.** How doctor tells an absent field
+from a `false` one (branching on `null` versus `false`, probing field
+presence with `jq`, or another means) is an implementation choice the spec
+does not pin — the section survives a change of mechanism. What is fixed is
+the adopter-visible behavior: never a false "disabled."
+§req:doctor-settings-read-constraints
+
+**Scope and blast radius.** The change is confined to how doctor
+*interprets* fields it already reads; it requests no additional scopes
+(the whole point is to behave correctly when the token is under-scoped),
+alters neither `apply-rulesets.sh` nor any setting nor any release
+behavior, and leaves doctor read-only. The exit contract is unchanged:
+neither a disabled-setting `warn` nor a could-not-verify `warn` is a block,
+so doctor still exits 1 only when a `block`-severity finding is present and
+0 otherwise (§spec:preflight-classification,
+§req:preflight-detection-criteria). §req:doctor-settings-read-constraints
+
+**Criteria.**
+
+- When the setting is enabled and the token can read it (field present and
+  `true`), doctor shall report it enabled, exactly as before.
+- When the token cannot read the setting (the field is absent from an
+  otherwise-successful `gh api` response), doctor shall report a
+  `local-env` + `warn` "could not verify `<setting>` — reading it requires
+  repo-admin" finding and shall not claim the setting is disabled.
+- When the setting is genuinely disabled (field present and `false`),
+  doctor shall report it `config` + `warn` with the existing remediation
+  guidance, unchanged.
+- Every doctor check that reads a permission-gated field off an
+  otherwise-successful `gh api` response shall distinguish enabled,
+  disabled, and could-not-verify; no such check shall report "disabled" or
+  "absent" when the cause is a permission gap.
+- `allow_auto_merge` and `delete_branch_on_merge`, when genuinely disabled,
+  shall report at the same severity (`warn`) and bucket (`config`).
+- doctor shall remain read-only and shall exit 1 only when a
+  `block`-severity finding is present, 0 otherwise — neither the
+  could-not-verify nor the disabled finding is a block.
+- A fast test shall exercise the could-not-verify path: fed a repo response
+  with the admin-gated fields absent, doctor reports "could not verify,"
+  not "disabled." The test shall need no live GitHub access and add no load
+  to the rate-limited sandbox installation
+  (§spec:sandbox-test-budget, §req:sandbox-ci-budget).
+
+**Scope and alternatives.**
+
+- *Requesting repo-admin so the fields are always present* was rejected: it
+  asks for privilege precisely where the value is behaving correctly
+  without it, and an App installation token still could not see them.
+- *Reporting could-not-verify as `block`* was rejected: doctor cannot
+  confirm the setting either way, and a visibility limit on a read-only
+  validator must not halt the adopter.
+- *Fixing only the two named settings* was rejected: the same successful-call
+  field-absence pattern can recur in any future repo-field read, so the
+  three-state treatment is a property of every such check, not a patch to
+  two lines.
+
+## Dependabot deadlock: degraded-mode required check §spec:dependabot-degraded-check
+
+*Status: complete*
+
+When the conductor runs on a `pull_request` event and the App private key
+arrives empty, it validates the PR title and posts the
+`flywheel/conventional-commit` check — `success` or `failure`, reflecting the
+title — and then exits without performing any App-privileged action. The
+empty-key path is no longer "do nothing and skip"; it is "post the required
+check, do nothing privileged, exit." This is what breaks the Dependabot
+deadlock with zero adopter configuration: a Dependabot PR in a repo that
+requires `flywheel/conventional-commit`, whose run cannot reach the App key,
+still gets a concluded check instead of a permanently `Expected` one, so a
+maintainer can merge it once it is green and reviewed. §req:dependabot-deadlock
+§req:dependabot-deadlock-criteria
+
+**Why posting the check is separable from granting auto-merge — and always
+safe.** Posting a check needs only the low-privilege `checks: write`
+capability the workflow's built-in `GITHUB_TOKEN` can carry; it needs none of
+the App's authority. Auto-merge, title rewrite, label application, and
+promotion-PR upserts need the App. Splitting the empty-key path so it posts the
+check from the built-in token but mints no App token and runs no App-only
+action satisfies *safe by default*: breaking the deadlock and granting
+auto-merge become separate outcomes with separate triggers — the former
+unconditional, the latter gated on the key being reachable
+(§spec:dependabot-full-conductor-optin). A secret-less run gains exactly one
+new ability: to post a pass/fail verdict on its own title — the very gate it
+needs to pass — with no path to merge, label, or rewrite. §req:dependabot-deadlock
+§req:dependabot-deadlock-constraints
+
+**Why this fixes Dependabot but not forks — the same seam, a different token
+reach.** Dependabot opens its PRs from branches in the *same* repository
+(`dependabot/…`), so the PR workflow can grant the built-in token
+`checks: write` and the degraded post succeeds. A fork PR's built-in token is
+forced read-only by GitHub regardless of the workflow's `permissions:` block,
+so the post cannot succeed there. The degraded path attempts the post on any
+empty-key run and degrades gracefully when the token is read-only — so it
+shares a seam with the fork case (#162) and may relieve it, but it makes no
+claim to fix forks, whose residual read-only-token problem stays #162's.
+§req:dependabot-deadlock §req:dependabot-deadlock-constraints
+
+**Verdict parity.** The degraded path runs the title through the same
+conventional-commit parser a first-party PR uses, so a Dependabot
+`build(deps): …` or `chore(deps): …` receives the identical pass/fail verdict
+it would receive on a first-party PR. The check is the same check
+(`flywheel/conventional-commit`); only the token that posts it and the absence
+of any follow-on action differ. §req:dependabot-deadlock-criteria
+
+**Statelessness preserved.** The degraded path posts one check and returns; it
+holds no state between runs and waits on nothing after posting.
+§req:dependabot-deadlock-constraints
+
+**Criteria.**
+
+- When the App private key is empty on a `pull_request` run, the conductor
+  shall post a `flywheel/conventional-commit` check whose conclusion reflects
+  the title, using the workflow's built-in token rather than an App token.
+- On that same empty-key run the conductor shall mint no App token and perform
+  no App-only action — no title rewrite, no `flywheel:auto-merge` /
+  `flywheel:needs-review` label, no native auto-merge, no promotion-PR upsert.
+  The PR is made mergeable, not merged.
+- The pass/fail verdict a Dependabot title receives shall equal the verdict the
+  same title would receive on a first-party PR.
+- The `apply-rulesets.sh` default that makes `flywheel/conventional-commit`
+  required is unchanged; the fix posts the check, it does not weaken the
+  default.
+- Where the built-in token is read-only (the fork case), the path shall fail to
+  post gracefully rather than error the run; fork-specific behaviour remains out
+  of scope (#162).
+
+**Scope and alternatives.**
+
+- *Relaxing the `apply-rulesets.sh` default so the check is no longer required*
+  is rejected: the defect is the unposted check, not the requirement. Weakening
+  the default would let malformed titles through and remove the guard for every
+  adopter, first-party PRs included.
+- *Posting the check via the App token through a fallback secret, or
+  auto-granting App powers to secret-less runs* is rejected: minting the App
+  token is exactly what is impossible without the key, and handing App authority
+  to an untrusted actor is the repository-compromise vector the requirement
+  forbids.
+- *Marking the check advisory (non-required) only for Dependabot* is rejected:
+  Flywheel cannot un-require a ruleset check per-PR without weakening the
+  ruleset for everyone, and it would re-open the malformed-title gap.
+
+## Dependabot full conductor opt-in §spec:dependabot-full-conductor-optin
+
+*Status: complete*
+
+When the adopter registers `FLYWHEEL_GH_APP_PRIVATE_KEY` in the repository's
+(or organisation's) **Dependabot** secret store — alongside the existing
+Actions secret — a Dependabot-triggered run resolves the key non-empty
+(GitHub sources `secrets.*` from the Dependabot store for Dependabot runs), the
+empty-key path is not taken, and the conductor runs the full flow exactly as it
+does for a first-party PR: the title is validated and rewritten if malformed,
+the `flywheel:auto-merge` or `flywheel:needs-review` label is applied, native
+auto-merge is enabled, and the PR auto-merges when its title type is in the
+target branch's `auto_merge` set and every other required gate (other checks,
+required reviews) is satisfied. A Dependabot PR is **never** auto-merged unless
+the key is reachable on that run. §req:dependabot-deadlock
+§req:dependabot-deadlock-criteria §req:dependabot-deadlock-stories
+
+**The Dependabot secret store *is* the actor allowlist.** Trust is
+GitHub-enforced, not Flywheel-configured. An external fork can never write to a
+repository's Dependabot secret store, so a fork can never present the key, so a
+fork can never auto-merge — the same gate, with no Flywheel-side list to
+maintain. Adding a second trust mechanism (an `allowed_bots:` config, a
+hardcoded `dependabot[bot]` allowlist) is rejected: it would duplicate GitHub's
+trust boundary and risk drifting out of sync with it. Registering the secret is
+a deliberate, GitHub-native act of trust; that act, and only that act, opts
+Dependabot into the full flow. §req:dependabot-deadlock-constraints
+
+**No new mechanism on this path — the opt-in is secret placement, not config.**
+Once `FLYWHEEL_GH_APP_PRIVATE_KEY` resolves from the Dependabot store, the
+existing conductor proceeds unchanged; nothing about the full flow is
+Dependabot-specific. Auto-merge fires through the existing `auto_merge`
+title-type matching with no special-casing of which dependency types merge — so
+a `build(deps)` / `chore(deps)` bump auto-merges only if the adopter lists that
+type in the branch's `auto_merge` set. The deliverable here is therefore the
+documentation of the opt-in and the explicit, tested invariant that no
+auto-merge occurs without the key — not a new code path for the keyed case.
+§req:dependabot-deadlock-criteria §req:dependabot-deadlock-constraints
+
+**Documented opt-in.** `docs/adopter/setup.md` documents registering the App
+private key in the Dependabot secret store, alongside the Actions secret, as
+the step that enables full Flywheel behaviour — auto-merge included — for
+Dependabot PRs, so adopters enable it from the docs rather than discovering the
+deadlock through a bug report. §req:dependabot-deadlock-criteria
+§req:dependabot-deadlock-stories
+
+**Supply-chain risk is the adopter's to accept, and off by default.**
+Auto-merging Dependabot means a dependency update that passes checks can merge
+without human review — the standard supply-chain tradeoff. Flywheel makes that
+lever explicit and double-gated: it activates only when the adopter both
+registers the Dependabot secret *and* lists the relevant types in a branch's
+`auto_merge` set. Flywheel does not decide dependency trust on the adopter's
+behalf. §req:dependabot-deadlock-constraints
+
+**Criteria.**
+
+- With the App key registered in the Dependabot secret store, a Dependabot PR
+  shall run the full conductor identically to a first-party PR: title validated
+  and rewritten if malformed, auto-merge/needs-review label applied, and
+  auto-merge enabled when the title type is in the target branch's `auto_merge`
+  set and all other required gates pass.
+- A Dependabot PR shall never auto-merge unless the App key is reachable on the
+  run; absent the Dependabot secret it receives the degraded check
+  (§spec:dependabot-degraded-check) and waits for a human.
+- Flywheel shall introduce no actor allowlist of its own; the Dependabot secret
+  store is the sole opt-in marking Dependabot trusted.
+- `docs/adopter/setup.md` shall document the Dependabot-secret registration as
+  the step that enables full Flywheel behaviour, including auto-merge, for
+  Dependabot PRs.
+
+**Scope and alternatives.**
+
+- *A Flywheel-side actor allowlist* is rejected: it duplicates the secret-store
+  trust boundary and can drift out of sync with GitHub's.
+- *Auto-merging Dependabot by default, without the secret opt-in* is rejected:
+  it would auto-merge on the secret-less path, violating "never auto-merge
+  without the key" and granting repository write to any secret-less actor.
+
+## Dependabot empty-key regression guard §spec:dependabot-deadlock-test
+
+*Status: complete*
+
+A fast unit/CI test reproduces the empty-key Dependabot path and asserts the
+two halves of the contract: a well-formed Dependabot title posts a `success`
+`flywheel/conventional-commit` check and a malformed one posts `failure`, while
+in both cases no `flywheel:auto-merge` / `flywheel:needs-review` label is
+applied and no other App-only action runs. The test draws on no rate-limited
+e2e sandbox installation. §req:dependabot-deadlock-criteria
+§req:dependabot-deadlock-constraints
+
+**Why a unit guard, not e2e.** The deadlock is silent, permanent, and
+near-universal for its trigger, so it needs a guard that runs on every PR — not
+one gated behind the rate-limited sandbox budget (§spec:sandbox-test-budget,
+§req:sandbox-ci-budget). A deterministic unit test on the conductor's degraded
+branch, mirroring §spec:apply-rulesets-stdin-test, catches a regression that
+re-strands Dependabot PRs at the cheapest possible cost; the e2e suite stays a
+backstop, not the first line of defence for this class of deadlock.
+§req:dependabot-deadlock-constraints
+
+**Criteria.**
+
+- A unit/CI test shall exercise the empty-key path and assert the required
+  check is posted with the correct conclusion for both a well-formed and a
+  malformed Dependabot title.
+- The same test shall assert no auto-merge/needs-review label is applied and no
+  App-only action runs on that path.
+- The test shall not consume the e2e sandbox installation.
+
+**Scope and alternatives.**
+
+- *Relying on the e2e sandbox to catch this regression* is rejected: it draws on
+  the rate-limited installation and is slow, whereas the degraded path is a pure
+  conductor branch a unit test can cover deterministically.
+
+## doctor remediation matches its invocation mode §spec:doctor-curl-remediation
+
+*Status: complete*
+
+`scripts/doctor.sh` is a read-only validator an adopter runs to confirm a repo
+is wired for flywheel, and the README and `docs/adopter/setup.md` lead with the
+`curl -fsSL …/scripts/doctor.sh | bash` form — run straight off GitHub with no
+flywheel checkout on disk. When doctor reports a problem it also prints how to
+fix it, and the fix it names is itself a flywheel script (`apply-rulesets.sh` or
+`init.sh`) that is likewise documented to be runnable via a curl one-liner. The
+remediation each finding prints is **followable in the same mode doctor was
+invoked from**: an adopter who ran doctor via curl is given a curl command they
+can paste then and there; an adopter who ran `./scripts/doctor.sh` from a
+checkout is given the local `scripts/…` path. §req:doctor-curl-script-refs
+
+**The gap this closes.** doctor's remediation messages named their fix scripts
+by **local relative path** unconditionally — "Re-run `scripts/apply-rulesets.sh
+$REPO`", "run `scripts/apply-rulesets.sh $REPO`", "re-run `scripts/init.sh`".
+That instruction only resolves when doctor was run from a checkout. An adopter
+who followed the documented `curl … | bash` path has no `scripts/` directory, so
+the very next thing doctor told them to do pointed at a file absent from their
+machine — leaving them to reverse-engineer that the fix is "fetch *this* script
+the way I just fetched doctor, with the right arguments," precisely at the moment
+of greatest confusion. doctor already solved this for its **own** dependencies —
+to load `lib/findings.sh` and `lint-flywheel-config.py` it checks for its on-disk
+siblings and, when absent (the curl case), fetches them over the network — but
+that treatment was never extended to the scripts it *recommends*.
+§req:doctor-curl-script-refs §req:doctor-curl-script-refs-stories
+
+**One invocation-mode source of truth.** The local-vs-curl decision reuses the
+seam doctor already has — the presence of its on-disk siblings (`$doctor_dir`
+resolved from `BASH_SOURCE[0]`, the same signal that governs how `findings.sh`
+and the linter are located) — rather than introducing a second, independently
+drifting notion of "am I running from disk or from curl." There is exactly one
+notion of invocation mode, so the remediation form and the dependency-loading
+form can never disagree about which mode doctor is in.
+§req:doctor-curl-script-refs-constraints
+
+**Version-consistent fix URLs.** When a message emits a curl form, its URL
+resolves against the **same ref doctor itself was fetched from** — honoring the
+pin / `FLYWHEEL_TEMPLATES_BASE` that already governs doctor's own fetches,
+defaulting to `main`. A pinned adopter is pointed at the matching
+`apply-rulesets.sh` / `init.sh`, not a `main` that may have drifted from the
+doctor they are running. A message shall not hard-code `main` when doctor was
+fetched from a pin. This mirrors the version-consistency rule of
+§spec:apply-rulesets-stdin (§req:apply-rulesets-stdin) and the templates-base
+resolution doctor shares with §spec:doctor-settings-read.
+§req:doctor-curl-script-refs-criteria §req:doctor-curl-script-refs-constraints
+
+**Complete, paste-able commands.** Every remediation that names a fix script
+carries the arguments that script needs to actually perform the fix. The
+`apply-rulesets.sh` form is shown with `--app-id` and the repo target — not its
+bare path — because the script cannot apply the bypass actor without an App ID
+(today's bare "`scripts/apply-rulesets.sh $REPO`" makes even a checkout-holding
+adopter paste a command that dies on the missing argument). Where doctor cannot
+know a value it uses an obvious placeholder consistent with the form already in
+`docs/adopter/setup.md` (`--app-id <your-app-id>`), never a fabricated value or
+silent omission; where doctor *does* know a value it substitutes it (`$REPO`).
+The emitted curl form matches the documented quick-path invocation
+(`curl -fsSL …/apply-rulesets.sh | bash -s -- <owner/repo> --app-id …`), whose
+own stdin-piped resolution is the subject of §spec:apply-rulesets-stdin.
+§req:doctor-curl-script-refs-criteria §req:doctor-curl-script-refs-stories
+
+**Guidance-only, every site.** doctor stays read-only and its contract is
+untouched: same exit codes, same severity buckets, same finding vocabulary, the
+same set of findings on a given repo — only the human-readable remediation text
+changes (§spec:preflight-classification, §req:preflight-detection). The fix
+cannot alter what doctor *detects*, only what it *advises*. And it covers
+**every** finding that points at a flywheel script — the `apply-rulesets.sh`
+sites (repo-settings `allow_auto_merge`/`delete_branch_on_merge`,
+branch-protection no-ruleset / ruleset-without-PR / branch-not-covered,
+tag-namespace `refs/tags/v*`) and the `init.sh` sites (`.gitattributes`
+missing / lacking-block / missing-mapping) — so no remediation is left assuming a
+local layout that breaks under curl. The change touches only the strings doctor
+prints; it does not modify `apply-rulesets.sh`, `init.sh`, or the adopter docs.
+§req:doctor-curl-script-refs §req:doctor-curl-script-refs-criteria
+§req:doctor-curl-script-refs-constraints
+
+**Priority and placement.** This is low-severity, adopter-facing guidance
+correctness in the setup-onboarding cluster (#234–242) alongside
+§spec:preflight-classification (shared doctor vocabulary) and
+§spec:doctor-settings-read (same repo-settings findings). No release breaks and
+no adopter is hard-blocked — but an adopter who hits a finding on the documented
+curl path is handed an instruction they cannot follow, in the one tool whose job
+is to tell them how to fix their setup, so it ranks below the release- and
+major-breaking failures in this document yet earns its keep. In decreasing order
+of user impact: (1) make every remediation runnable in the curl mode adopters
+actually use; (2) keep the local-checkout form correct for maintainers; (3)
+complete the suggested commands so a paste applies the fix.
+§req:doctor-curl-script-refs-constraints
+
+**Criteria.**
+
+- When doctor runs without its on-disk siblings (the `curl … | bash` path) and
+  a finding names a flywheel fix script, the remediation it prints shall be the
+  **network/curl form** — a command that fetches and runs the named script over
+  the network — not a `scripts/…` path absent on that machine.
+- When doctor runs beside its on-disk siblings (`./scripts/doctor.sh` from a
+  checkout) and a finding names a flywheel fix script, the remediation shall be
+  the **local `scripts/…` path** form, with no regression to the local workflow.
+- Every remediation that names a fix script shall include the arguments that
+  script needs to perform the fix — `apply-rulesets.sh` shown with `--app-id`
+  and the repo target — using a clearly-marked placeholder (`<your-app-id>`)
+  where doctor cannot know the value and substituting `$REPO` where it can, so a
+  copy-paste applies the fix instead of erroring on a missing argument.
+- Every doctor finding that points at a flywheel script shall be corrected —
+  both the `apply-rulesets.sh` sites (repo-settings, branch-protection,
+  tag-namespace) and the `init.sh` sites (`.gitattributes`); no remediation
+  message shall remain that assumes a local `scripts/…` layout and breaks under
+  curl.
+- The curl form a message emits shall resolve against the same flywheel ref
+  doctor itself was fetched from — honoring `FLYWHEEL_TEMPLATES_BASE` / the
+  pinned consumer ref, defaulting to `main` — never hard-coding `main` when
+  doctor was fetched from a pin.
+- doctor's exit contract, severity buckets, and finding vocabulary shall be
+  unchanged: a repo healthy before is healthy after, and a finding that fired
+  before fires after with the same severity and bucket — only the remediation
+  wording changes.
+- A fast local/CI test shall confirm both modes: a finding's remediation is the
+  network/curl form when doctor runs without its on-disk siblings and the
+  local-path form when it runs beside them, so a future edit that reintroduces a
+  bare `scripts/…` path under curl is caught cheaply without drawing on the
+  rate-limited e2e sandbox (§spec:sandbox-test-budget, §req:sandbox-ci-budget).
+
+**Scope and alternatives.**
+
+- *Introducing a separate curl-vs-local detector for remediation* is rejected:
+  it would let the advice and the dependency-loading logic disagree about which
+  mode doctor is in. The single existing sibling-presence seam is the one source
+  of truth.
+- *Hard-coding the `main` ref in the emitted curl commands* is rejected: a
+  version-pinned adopter would be told to apply a script that disagrees with the
+  doctor they are running. The fix URL follows the same ref doctor resolved
+  itself from.
+- *Leaving the bare `scripts/apply-rulesets.sh $REPO` form even for checkout
+  users* is rejected: it omits the required `--app-id`, so even an adopter who
+  has the script pastes a command that fails on a missing argument.
+- *Modifying `apply-rulesets.sh`/`init.sh` or the adopter docs* is out of scope:
+  the curl forms are already documented; the defect is solely in doctor's
+  printed guidance.
+
+## init.sh preset wording §spec:init-preset-wording
+
+*Status: complete*
+
+The preset descriptions `init.sh` shows an adopter — at the interactive
+menu, in the `--preset` validation/usage text, and in the adopter docs —
+state what each preset is **for**, in plain language an adopter meets for
+the first time and can act on without opening docs or reading the bundled
+template files. The choice is self-evident at the point of decision: the
+menu line alone is enough to pick the right preset. §req:init-preset-wording
+§req:init-preset-wording-criteria
+
+The interactive menu offers three options, each described by its purpose
+rather than its branch shape:
+
+- **minimal** — a single release line on one branch that cuts a release on
+  every qualifying push.
+- **three-stage** — one release line that flows through staged branches
+  (`develop` → `staging` → `main`) with promotion PRs between them.
+- **multi-stream** — two or more **independent release lines in parallel**,
+  each cutting its own prereleases with its own version suffix and
+  auto-merge rules. A reader who has never seen Flywheel can tell from the
+  line what they would get and when they would want it.
+
+Option 3's line carries **no undefined jargon**: `customer-acme` does not
+appear in the menu as though it were a Flywheel concept. The preset is
+described generically as a second, independent release line; the concrete
+per-customer "acme" example survives only where there is room to frame it
+as an example — the bundled `flywheel.multi-stream.yml` template and the
+adopter docs (`docs/adopter/setup.md`, `README.md`).
+§req:init-preset-wording-criteria §req:init-preset-wording-stories
+
+The reworded copy is **consistent across every surface that names the
+presets** — the interactive menu (`scripts/init.sh`), the `--preset`
+validation/usage text in the same script, and the adopter-facing docs.
+An adopter meets one account of each preset no matter which surface they
+hit first, extending the cluster's "one vocabulary, end to end" principle
+(§spec:setup-completion-summary) from problem-classification to preset
+description. The docs additionally surface the concrete use cases that
+motivate multi-stream — a per-customer fork, a long-term-support line, a
+region-specific or white-label build — so an adopter who wants more than
+the menu line can answer "when would I choose this?" where there is space
+to explain it. §req:init-preset-wording-criteria
+§req:init-preset-wording-stories §req:init-preset-wording-constraints
+
+**Identifiers are a stable contract.** `minimal`, `three-stage`, and
+`multi-stream` remain the exact strings `--preset` accepts; the rewrite
+touches human-readable descriptions only. A run that chose a given preset
+before the change writes the byte-identical `.flywheel.yml` after it, and
+existing `--preset` invocations, scripts, and adopter automation keep
+working. The change is **copy-only and behaviour-unchanged**: which
+template each preset fetches and how `init.sh` behaves are untouched.
+§req:init-preset-wording-criteria §req:init-preset-wording-constraints
+
+Any `.flywheel.yml` example shown while clarifying the preset docs remains
+a config an adopter can copy verbatim — the documented snippets stay
+loadable under the repo's docs-examples guarantee (`tests/docs-examples.test.ts`).
+§req:init-preset-wording-constraints
+
+**Why describe by purpose, not by shape.** The menu is the first decision
+of the first run, with a default one keystroke away and no docs read yet —
+the least recoverable point at which to be unclear. A line that names a
+shape ("main-line + a customer-acme variant") tells an adopter what the
+preset *is* but not whether it is what they *want*; faced with a choice
+they cannot parse, they default to `minimal` and discover the gap later, or
+guess `multi-stream` and inherit a `customer-acme` branch they have to rename
+or tear out. Describing each preset by what it is for lets the adopter
+decide correctly at the prompt. This is pure first-run friction, not a
+release-correctness fault — every preset still works once chosen — but it
+is frequent (every adoption hits it) and mandatory (no adopter skips the
+preset choice), and it sets the tone for the §spec:preflight-classification
+and §spec:setup-completion-summary work later in the same run.
+§req:init-preset-wording §req:init-preset-wording-constraints
+
+**Why keep "acme" in the template and docs but not the menu.** The
+per-customer example is genuinely useful where it can be framed — the
+template is a working `.flywheel.yml` an adopter reads in full, and the
+docs have room to explain the customer-fork motivation. The menu does not:
+a bare branch name on a one-line option reads as vocabulary the adopter is
+expected to recognise. Concept over example at the prompt; the example
+where there is space to introduce it. §req:init-preset-wording-constraints
+
+**Priority.** Adopter-facing, on the documented onboarding path, and
+literally the first decision of the first run — but pure wording, with no
+release or correctness consequence, so it ranks below every requirement
+that protects releases or the v2 major (§spec:release-gate,
+§spec:composite-self-reference) and below the detection spine the rest of
+the setup cluster depends on (§spec:preflight-classification). In
+decreasing order of user impact: (1) rewrite option 3 so multi-stream's
+purpose is plain and `customer-acme` no longer reads as jargon; (2) extend
+the same clarity to the `--preset` help/validation text and the adopter
+docs so every surface agrees; (3) review options 1 and 2 to the same
+plain-language bar. §req:init-preset-wording-constraints
+
+**Criteria.**
+
+- The interactive preset menu shall describe each option by what it is for,
+  such that the menu line alone is sufficient to choose correctly without
+  opening docs or reading the template files.
+- Option 3's line shall state that multi-stream maintains two or more
+  independent release lines in parallel, each shipping its own prereleases —
+  not merely "main-line + a variant".
+- The menu line for option 3 shall contain no `customer-acme` token and no
+  other undefined Flywheel-internal term; the concept shall be described
+  generically.
+- `minimal`, `three-stage`, and `multi-stream` shall remain the exact
+  strings `--preset` accepts, and a run that selects a given preset shall
+  write the same `.flywheel.yml` as before the change.
+- The interactive menu, the `--preset` validation/usage text, and the
+  adopter docs (`README.md`, `docs/adopter/setup.md`) shall give the same
+  account of each preset.
+- Options 1 and 2 shall be reviewed to the same plain-language bar and
+  reworded wherever they lean on unexplained Flywheel vocabulary.
+- The adopter docs shall surface at least one concrete use case for
+  multi-stream (per-customer fork, LTS line, or regional/white-label build).
+- Every `.flywheel.yml` example shown in the clarified preset docs shall
+  remain a valid, loadable config.
+
+**Scope and alternatives.**
+
+- *Renaming the presets to self-describing identifiers* (e.g.
+  `parallel-streams` for `multi-stream`) is rejected: the identifiers are a
+  contract referenced by `--preset` across docs, scripts, and adopters' own
+  automation; the fix is descriptions, not names.
+- *Clarifying only the menu and leaving `--preset` help and the docs as they
+  are* is rejected: an adopter who passes `--preset` by hand or reads the
+  docs first would meet the old opaque framing, breaking the
+  one-explanation-every-surface bar.
+- *Dropping the "acme" example entirely* is rejected: it is useful where it
+  can be explained; the problem is its appearance as bare menu text, not its
+  existence in the template and docs.
