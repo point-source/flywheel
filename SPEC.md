@@ -2602,3 +2602,182 @@ plain-language bar. §req:init-preset-wording-constraints
 - *Dropping the "acme" example entirely* is rejected: it is useful where it
   can be explained; the problem is its appearance as bare menu text, not its
   existence in the template and docs.
+
+## init.sh GitHub-App step §spec:init-app-step
+
+*Status: not started*
+
+The GitHub-App step — the prompt `scripts/init.sh` shows immediately after the
+preset choice — explains the credential it is asking for in terms of **what
+the App is for and what it can touch**, not the GitHub-internal mechanism. The
+copy says, before the adopter chooses, that the App lets the flywheel workflows
+act on the repo as a bot — push releases and tags, open and merge promotion
+PRs, apply labels — and which permissions that requires, in place of the bare
+phrase "installation tokens". A first-time adopter who has never built a GitHub
+App can tell from the prompt alone what they are granting and why flywheel
+needs it. §req:app-step-clarify §req:app-step-clarify-criteria
+§req:app-step-clarify-stories
+
+The copy states that the App is a **permanent dependency**, used on every
+workflow run for the life of the adoption rather than a one-time install
+artifact, so an adopter does not later delete it as setup leftovers. It says in
+brief what changing it later looks like — the credential can be rotated or the
+App revoked — so the adopter treats the App as infrastructure they own.
+§req:app-step-clarify-criteria §req:app-step-clarify-stories
+
+The prompt answers "couldn't I just use a personal access token?" in one or two
+plain sentences, at the point of decision, so the adopter is not left guessing
+whether they are being made to do unnecessary work. No PAT path is offered: a
+PAT is not a viable substitute. Flywheel registers the App in its branch/tag
+rulesets as a bypass actor of type *Integration* so the bot can push releases
+and tags to protected branches, and only a GitHub App can be that kind of
+bypass actor. A PAT would also tie the automation to one human's account and
+rate limit, act as that person rather than a bot in the audit trail, and live
+as a long-lived manually rotated secret instead of a token minted fresh per
+run. This rationale is the reason both the copy says "why an App" and the
+script builds no PAT path. §req:app-step-clarify §req:app-step-clarify-criteria
+§req:app-step-clarify-stories §req:app-step-clarify-constraints
+
+**The step reflects what pre-flight already found rather than starting cold.**
+By the time this prompt appears, the pre-flight pass
+(§spec:preflight-classification, §req:preflight-detection) has already probed
+`FLYWHEEL_GH_APP_ID` and `FLYWHEEL_GH_APP_PRIVATE_KEY` at both repo and org
+level and recovered the numeric App ID where it could. When pre-flight detected
+an existing App or its credentials, the step shows the detected App — by ID and
+by the level (repo or org) it was found at — and offers it as the default the
+adopter confirms or overrides, instead of asking them to supply from scratch
+what the tooling already holds. Detected state is a default to confirm, never a
+silent decision: the adopter can always override what pre-flight found. The
+step consumes pre-flight's App-ID, credential, and installation findings rather
+than issuing its own duplicate `gh` lookups — detection is built once on the
+spine and read here. §req:app-step-clarify §req:app-step-clarify-criteria
+§req:app-step-clarify-stories §req:app-step-clarify-constraints
+
+**The "I have an App already" path reuses detection instead of demanding a
+fresh paste.** Where pre-flight found a credential already present as a variable
+or secret, the adopter is asked only for what is genuinely missing — not to
+re-enter a value the tooling can already see. The all-or-nothing "both present
+at the same level → already set, skip" case is no longer the only state the step
+honours; partial and org-level states are reflected at the prompt rather than
+falling through to a cold manual paste. §req:app-step-clarify
+§req:app-step-clarify-criteria §req:app-step-clarify-stories
+
+**An App that exists at the org level but is not installed on this repo is
+surfaced as its own state, and the step offers the action that fixes it.**
+Pre-flight emits a warning when it finds an org-level App ID that does not
+appear in the owner's installation list (§spec:preflight-classification). The
+App step acts on that finding: the adopter whose org already has a flywheel App
+is routed to **install the existing App on this repo** — the one action that
+resolves their situation — rather than being shown only "create" or "paste",
+neither of which mints tokens for the repo. This closes the gap where an
+adopter today either creates a redundant second App or pastes a key for an App
+that still cannot act on the repo, and discovers the shortfall only when the
+first workflow run fails. §req:app-step-clarify §req:app-step-clarify-criteria
+§req:app-step-clarify-stories
+
+**One vocabulary, every surface.** The App credential is named and described
+the same way across pre-flight, this prompt, the completion summary
+(§spec:setup-completion-summary), and doctor — same names for the App ID and
+key, same bucket/severity vocabulary (§spec:preflight-classification). The
+adopter meets one account of the App credential across every surface of the
+run, extending the cluster's "one vocabulary, end to end" principle that also
+governs the preset wording (§spec:init-preset-wording).
+§req:app-step-clarify-criteria §req:app-step-clarify-constraints
+
+**Identifiers and outcomes are a stable contract.** `FLYWHEEL_GH_APP_ID` (the
+variable) and `FLYWHEEL_GH_APP_PRIVATE_KEY` (the secret) remain the exact
+strings the action and workflows read. The change reworks the copy and how
+detected state is consumed; it does not rename the credentials or alter which
+credentials a successful run leaves behind. A run that produced working
+credentials before the change produces the same credentials after it.
+§req:app-step-clarify-criteria §req:app-step-clarify-constraints
+
+**Non-interactive and piped runs degrade unchanged.** On a non-interactive
+shell or a `curl … | bash` invocation the clarified step behaves as the current
+one does — it prints the manual finish command rather than blocking on a prompt
+— so the new detection-aware copy does not regress scripted adoption.
+§req:app-step-clarify-constraints
+
+**Why need before mechanism.** This step is where a first run most often stalls
+in a half-configured state: a created-but-uninstalled App, a pasted key with no
+matching installation, or a "skip" the adopter never returns to. The cause is a
+prompt that speaks in mechanism — "installation tokens" — to an adopter who does
+not yet know what an installation token is, and that throws away detection the
+run already performed. Framing the credential by need (what it does, what it can
+access, how long it lives) lets the adopter decide correctly at the prompt;
+consuming detection spares the retrofit adopter from re-supplying what already
+exists; surfacing the not-installed-here state routes them to the real fix. The
+step is frequent (every adoption reaches it) and mandatory (no workflow runs
+without the credential), which is why it ranks above pure-wording polish but,
+depending on the detection spine, below it. §req:app-step-clarify
+§req:app-step-clarify-constraints
+
+**Priority.** Adopter-facing and on the documented onboarding path, and the step
+where a first run most often stalls with a half-configured credential — so it
+ranks above the pure-wording polish of §spec:init-preset-wording but, like the
+rest of the setup cluster, below the requirements that protect releases or the
+v2 major (§spec:release-gate, §spec:composite-self-reference) and below the
+detection spine it depends on (§spec:preflight-classification). In decreasing
+order of user impact: (1) replace the "installation tokens" framing with
+permission-, lifetime-, and why-an-App copy so the choice is informed; (2)
+consume pre-flight's detected App and credentials so existing-App adopters
+confirm rather than re-paste; (3) surface the org-App-not-installed-here state
+and offer to install it, closing the one gap today's create/paste menu cannot.
+§req:app-step-clarify §req:app-step-clarify-constraints
+
+**Criteria.**
+
+- The App step shall explain the credential in terms of need before mechanism:
+  before the choice, the copy shall state what the App does (lets the flywheel
+  workflows act on the repo as a bot — push releases, open and merge promotion
+  PRs, apply labels) and which permissions it requires, in place of the bare
+  phrase "installation tokens", such that a first-time adopter can tell what
+  they are granting without prior GitHub-App knowledge.
+- The copy shall state that the App is a permanent dependency used on every
+  workflow run for the life of the adoption — not a one-time install artifact —
+  and shall say in brief what changing it later involves (rotate the credential
+  or revoke the App).
+- The copy shall say why a GitHub App and not a personal access token in one or
+  two plain sentences, and no PAT path shall be offered.
+- When pre-flight has detected an existing App or its credentials, the step
+  shall reflect that at the prompt — showing the detected App by ID and by the
+  level (repo or org) it was found at, offered as the default — rather than
+  asking the adopter to supply it from scratch.
+- Detected state shall be presented as a default the adopter confirms or
+  overrides, never as a silent decision.
+- The "I have an App already" path shall reuse what pre-flight found and ask
+  only for what is genuinely missing, rather than demanding a manual paste of
+  credentials already present as a variable or secret.
+- When an App exists at the org level but is not installed on this repo, the
+  step shall surface that specific state and offer to install the existing App
+  on this repo, rather than offering only "create" or "paste".
+- The step shall consume the pre-flight pass's App-ID, credential, and
+  installation findings (§spec:preflight-classification) rather than issuing its
+  own duplicate `gh` lookups.
+- The App credential shall be named and described consistently across
+  pre-flight, this prompt, the completion summary (§spec:setup-completion-summary),
+  and doctor — same identifiers, same bucket/severity vocabulary.
+- `FLYWHEEL_GH_APP_ID` and `FLYWHEEL_GH_APP_PRIVATE_KEY` shall remain the strings
+  workflows read, and a run that produced working credentials before the change
+  shall produce the same credentials after it.
+- On a non-interactive shell or a piped (`curl … | bash`) invocation, the step
+  shall print the manual finish command rather than blocking on a prompt, as the
+  current step does.
+
+**Scope and alternatives.**
+
+- *Offering a PAT path alongside the App* is rejected: flywheel adds the App to
+  its branch/tag rulesets as a bypass actor of type *Integration*, which only a
+  GitHub App can be, so a PAT cannot mint the tokens or perform the protected
+  pushes the automation requires. The prompt explains this; it does not build a
+  path that cannot work.
+- *Re-probing the App credentials in the step* is rejected: the pre-flight pass
+  (§spec:preflight-classification) already ran the repo-then-org lookup and
+  stored the result; re-listing costs redundant admin-PAT `gh` round-trips. The
+  step consumes the existing findings.
+- *Treating detected state as a decision the step makes for the adopter* is
+  rejected: detection informs the default, the adopter always retains the
+  override. Detection narrows the prompt; it does not replace the choice.
+- *Renaming the credentials to clearer identifiers* is rejected: the names are a
+  contract the action and workflows read; the change is to copy and detection
+  handling, not to the strings.
