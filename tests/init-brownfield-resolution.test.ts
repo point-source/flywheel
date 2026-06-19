@@ -57,7 +57,12 @@ interface RunResult {
  * detectors stay quiet. `tags` are created as REAL git tags in the work dir BEFORE
  * invoking init, so preflight_detect_version_tag_shape actually classifies them. */
 function runInit(
-  opts: { args?: string[]; env?: Record<string, string>; tags?: string[] } = {},
+  opts: {
+    args?: string[];
+    env?: Record<string, string>;
+    tags?: string[];
+    commits?: string[];
+  } = {},
 ): RunResult {
   const work = mkdtempSync(join(tmpdir(), "flywheel-brownfield-resolve-"));
   const binDir = join(work, "bin");
@@ -79,18 +84,22 @@ function runInit(
   const doctorStub = writeDoctorStub(binDir, { blocks: 0, warns: 0 });
   execFileSync("git", ["init", "-q"], { cwd: work });
   // git tags need a commit to point at — make a hermetic empty one before tagging.
-  if ((opts.tags ?? []).length > 0) {
-    const gitEnv = {
-      ...process.env,
-      GIT_AUTHOR_NAME: "t",
-      GIT_AUTHOR_EMAIL: "t@example.com",
-      GIT_COMMITTER_NAME: "t",
-      GIT_COMMITTER_EMAIL: "t@example.com",
-    };
-    execFileSync("git", ["commit", "-q", "--allow-empty", "-m", "init"], { cwd: work, env: gitEnv });
-    for (const tag of opts.tags ?? []) {
-      execFileSync("git", ["tag", tag], { cwd: work, env: gitEnv });
-    }
+  // `commits` lets a case shape real history (e.g. a NON-conventional subject so
+  // preflight_detect_history_and_prs emits its advisory `info`); when present it
+  // supplies the commit(s) any tags point at, so we don't add an extra "init" one.
+  const gitEnv = {
+    ...process.env,
+    GIT_AUTHOR_NAME: "t",
+    GIT_AUTHOR_EMAIL: "t@example.com",
+    GIT_COMMITTER_NAME: "t",
+    GIT_COMMITTER_EMAIL: "t@example.com",
+  };
+  const commitMsgs = opts.commits ?? ((opts.tags ?? []).length > 0 ? ["init"] : []);
+  for (const msg of commitMsgs) {
+    execFileSync("git", ["commit", "-q", "--allow-empty", "-m", msg], { cwd: work, env: gitEnv });
+  }
+  for (const tag of opts.tags ?? []) {
+    execFileSync("git", ["tag", tag], { cwd: work, env: gitEnv });
   }
   const r = spawnSync("bash", [initSh, ...(opts.args ?? [])], {
     cwd: work,
@@ -163,6 +172,41 @@ describe("brownfield resolution phase", () => {
       const tags = localTags(r.work);
       expect(tags).toContain("3.4.2");
       expect(tags).not.toContain("v3.4.2");
+    } finally {
+      rmSync(r.work, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("advisory-only brownfield → completion summary", () => {
+  // A repo whose only brownfield signal is advisory (non-conventional history)
+  // has NO blocking condition: it clears the gate and reaches the completion
+  // summary. The advisory `info` must surface there as a `deferred` outcome —
+  // a deliberate deferral the adopter has been shown — and MUST NOT move the
+  // complete/incomplete verdict (SPEC.md §spec:brownfield-resolution,
+  // §spec:setup-completion-summary, §spec:setup-exit-contract).
+  it("non-conventional history ⇒ deferred outcome, verdict stays complete, exits 0", () => {
+    const r = runInit({
+      args: SCAFFOLD_ARGS,
+      // A single NON-conventional commit subject — no tags, no release workflow,
+      // no protection — so the ONLY brownfield finding is the advisory `info`.
+      commits: ["did some stuff"],
+      env: { FLYWHEEL_ASSUME_INTERACTIVE: "1" },
+    });
+    try {
+      const out = stripAnsi(r.stdout);
+      const combined = stripAnsi(r.stdout + r.stderr);
+      // Deliberate deferral keeps the run complete/green.
+      expect(r.status, `combined:\n${combined}`).toBe(0);
+      // The advisory condition is folded into the summary as a deferred outcome,
+      // named in the shared bucket × severity vocabulary. The deferred renderer
+      // prints: `  i [instance] brownfield: <message> — deferred`.
+      expect(out).toContain("brownfield:");
+      expect(out).toContain("not Conventional Commits");
+      expect(out).toContain("deferred");
+      // Verdict stays complete — the deferral never moves it.
+      expect(out).toContain("complete");
+      expect(out).not.toContain("incomplete");
     } finally {
       rmSync(r.work, { recursive: true, force: true });
     }

@@ -1057,6 +1057,28 @@ record_outcome() {
   SUMMARY_RECORDS+=("${label}"$'\t'"${outcome}"$'\t'"${bucket}"$'\t'"${severity}"$'\t'"${command}")
 }
 
+# brownfield_emit_summary_records — fold the run's brownfield conditions into the
+# completion summary (SPEC.md §spec:brownfield-resolution, §spec:setup-completion-summary).
+# Only NON-blocking conditions reach here: a brownfield `block` hard-stops at the
+# gate (brownfield_resolve + preflight_gate) before any scaffold step, so on a run
+# that proceeds the registry holds advisory `info` conditions (legacy [skip ci] /
+# non-conventional history, open-PR title rewrites). Each is recorded as a
+# `deferred` outcome in the SAME bucket x severity vocabulary as the rest of the
+# summary — a deliberate deferral the adopter has been shown, never a failure, so
+# it never moves the complete/incomplete verdict (§spec:setup-exit-contract).
+# Empty registry (greenfield) -> no-op, zero blast radius.
+brownfield_emit_summary_records() {
+  [[ "${#BROWNFIELD_CONDITIONS[@]}" -gt 0 ]] || return 0
+  local rec token bucket severity resolvable message
+  for rec in "${BROWNFIELD_CONDITIONS[@]}"; do
+    IFS=$'\t' read -r token bucket severity resolvable message <<< "$rec"
+    # A block hard-stopped earlier; never record one as a completed-run outcome.
+    [[ "$severity" == "block" ]] && continue
+    record_outcome "brownfield: ${message}" deferred "$bucket" "$severity"
+  done
+}
+brownfield_emit_summary_records
+
 # run_setup_validation — auto-run doctor.sh at the end of the run and fold its
 # findings into the completion summary (SPEC.md §spec:setup-auto-validation), so
 # init and doctor produce ONE picture of "done". Read-only; never aborts the run.

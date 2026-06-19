@@ -3303,7 +3303,7 @@ might hit. §req:init-brownfield-criteria §req:init-brownfield-constraints
 
 ## Brownfield resolution flow §spec:brownfield-resolution
 
-*Status: not started*
+*Status: complete*
 
 `init.sh` gains a **resolution phase** that runs after the pre-flight detection
 pass and before any scaffold file is written. For each brownfield finding it can
