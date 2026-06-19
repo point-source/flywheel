@@ -1,3 +1,10 @@
+# [2.1.0-dev.10](https://github.com/point-source/flywheel/compare/v2.1.0-dev.9...v2.1.0-dev.10) (2026-06-19)
+
+
+### Features
+
+* clearer doctor.sh credential-check messaging (warn, not fail, when unverifiable) ([#260](https://github.com/point-source/flywheel/issues/260)) ([9a08933](https://github.com/point-source/flywheel/commit/9a0893334886ca23db6ecea9aa1e6b2f0dd6a1d0)), closes [#237](https://github.com/point-source/flywheel/issues/237) [#237](https://github.com/point-source/flywheel/issues/237) [#237](https://github.com/point-source/flywheel/issues/237) [#237](https://github.com/point-source/flywheel/issues/237)
+
 # [2.1.0-dev.9](https://github.com/point-source/flywheel/compare/v2.1.0-dev.8...v2.1.0-dev.9) (2026-06-19)
 
 
