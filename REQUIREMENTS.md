@@ -2092,3 +2092,186 @@ jargon, the polish downstream starts from a deficit.
   reads as jargon; (2) extend the same clarity to the `--preset` help text and
   the adopter docs so every surface agrees; (3) review options 1 and 2 to the
   same plain-language bar.
+
+## init.sh GitHub-App step §req:app-step-clarify
+
+After choosing a preset, the next thing `scripts/init.sh` asks an adopter to
+do is the step that most often stalls a first run: standing up the credential
+the flywheel workflows use to act on the repo. Interactive setup prints
+
+```text
+  Flywheel needs a GitHub App for installation tokens. Pick a setup path:
+    1) Create the App for me  — opens browser, ~30s round-trip
+    2) I have an App already — paste credentials manually
+    3) Skip — I'll set the App credentials later
+```
+
+and waits for a 1/2/3 choice. The line speaks in mechanism, not need.
+"installation tokens" is GitHub-internals jargon — an adopter who has never
+built a GitHub App has no idea what an installation token is, why flywheel
+needs one, or what they are agreeing to by picking option 1. The prompt
+never says **what the App is allowed to do** (which permissions it will
+hold), **how long it sticks around** (it is a permanent dependency, not an
+install-time scaffold), or **why an App rather than something simpler** like
+a personal access token the adopter may already have. The adopter is asked to
+create or paste a credential whose purpose, scope, and lifetime are all
+unstated.
+
+The step also assumes a blank slate. By the time this prompt appears,
+flywheel's own pre-flight pass (§req:preflight-detection) has *already* looked
+up the App credentials — it reads `FLYWHEEL_GH_APP_ID` and
+`FLYWHEEL_GH_APP_PRIVATE_KEY` at both repo and org level, recovers the numeric
+App ID when it can, and even checks whether an org-level App is actually
+installed on the owner. Yet the App step throws most of that away. It honours
+only the all-or-nothing case (both credentials already present at the same
+level → "already set", skip). Every partial or org-level state falls through
+to the same cold menu: an adopter who already has the App ID set as an org
+variable, or who has an App installed org-wide but not yet on this repo, is
+asked to "paste credentials manually" for an App the tooling already knows
+about. Option 2 in particular ignores what pre-flight found and demands a
+fresh paste of values that may already be one variable lookup away.
+
+The sharpest of the ignored states is **an App that exists but is not
+installed where it needs to be**. Pre-flight emits a warning when it finds an
+org-level App ID that does not appear in the owner's installation list, but
+the App step itself does nothing with that knowledge — it offers "create" or
+"paste", neither of which is the actual fix. The adopter whose org already has
+a flywheel App just needs to *install it on this repo*, and the one action
+that would resolve their situation is the one the menu does not offer. They
+either create a redundant second App or paste credentials for an App that
+still cannot mint tokens for this repo, and discover the gap only when the
+first workflow run fails.
+
+The users are the adopter wiring flywheel into a repo — greenfield, where
+"create the App for me" is the right path, and retrofit, where an App or its
+credentials frequently already exist somewhere in the org — and the
+maintainer who owns the setup tooling. The problem is frequent (every
+adoption reaches this step), mandatory (no workflow runs without the
+credential), and it is where a first run most often ends in a half-configured
+repo: a created-but-uninstalled App, a pasted key with no matching
+installation, or an abandoned "skip" the adopter never comes back to.
+
+This is the credential-prompt item of the setup-onboarding cluster
+(#234–242). It sits directly on the detection spine built once in
+§req:preflight-detection — it consumes that pass's App-ID, credential, and
+installation findings rather than re-probing — and it shares the cluster's
+"one vocabulary, end to end" goal with §req:setup-completion-summary and the
+plain-language bar set by §req:init-preset-wording.
+
+## init.sh GitHub-App step success criteria §req:app-step-clarify-criteria
+
+- The App step **explains the credential in terms of need, not mechanism**.
+  Before asking the adopter to choose, the copy says what the App is *for*
+  (it lets the flywheel workflows act on the repo as a bot — push releases,
+  open and merge promotion PRs, apply labels) and **which permissions** that
+  requires, in place of the bare phrase "installation tokens". A first-time
+  adopter can tell what they are granting without already knowing how GitHub
+  Apps work.
+- The copy **states that the App is a permanent dependency**, used on every
+  workflow run for the life of the adoption — not a one-time install artifact
+  — so an adopter does not later delete it as setup leftovers. It also says,
+  in brief, **what changing it later looks like** (the credential can be
+  rotated or the App revoked), so the adopter understands this is an ongoing
+  thing they own.
+- The copy **says why a GitHub App and not a personal access token**, in one
+  or two plain sentences, so an adopter who wonders "couldn't I just use a
+  PAT?" gets an answer at the prompt instead of guessing. A PAT path is **not**
+  offered.
+- When pre-flight has **already detected an existing App or its credentials**,
+  the App step **reflects that at the prompt** rather than starting cold. The
+  detected App (by ID, and the level — repo or org — it was found at) is shown
+  and offered as the default, so the adopter confirms or overrides what the
+  tooling already found instead of being asked to supply it from scratch.
+- The "I have an App already" path **reuses what pre-flight found** instead of
+  demanding a manual paste of credentials the tooling can already see. The
+  adopter is asked only for what is genuinely missing, not to re-enter values
+  already present as a variable or secret.
+- When an App **exists at the org level but is not installed on this repo**,
+  the App step **surfaces that specific state and offers the action that
+  fixes it** — installing the existing App here — rather than only "create" or
+  "paste". The adopter whose org already has a flywheel App is routed to
+  install it, not to create a duplicate.
+- The clarified credential framing is **consistent with how the rest of setup
+  and doctor speak** — same names for the App ID and key, same bucket/severity
+  vocabulary (§req:preflight-detection) — so the adopter meets one account of
+  the App credential across pre-flight, this prompt, the completion summary,
+  and doctor.
+- The **credential identifiers and behaviour are unchanged**:
+  `FLYWHEEL_GH_APP_ID` (variable) and `FLYWHEEL_GH_APP_PRIVATE_KEY` (secret)
+  remain the names workflows read, and a run that produced working credentials
+  before the change still produces them after. The change is to the copy and
+  to how detected state is consumed, not to what gets written.
+
+## init.sh GitHub-App step user stories §req:app-step-clarify-stories
+
+- As a first-time adopter at the App step, I want the prompt to tell me what
+  the App is allowed to do and why flywheel needs it, so I can decide to create
+  it without first learning how GitHub Apps and installation tokens work.
+- As an adopter weighing the choice, I want to know the App is a permanent part
+  of my setup and roughly what rotating or revoking it later involves, so I
+  treat it as infrastructure I own rather than setup debris I might delete.
+- As an adopter who already manages a personal access token, I want the prompt
+  to say why flywheel uses an App instead of a PAT, so I am not left wondering
+  whether I am being made to do unnecessary work.
+- As an adopter whose org already has the App ID or key configured, I want the
+  step to show me what it already found and let me confirm it, so I am not
+  asked to paste credentials the tooling can already see.
+- As an adopter who picks "I have an App already", I want setup to fill in the
+  parts it already detected and ask me only for what is missing, so I am not
+  re-entering values that are already set.
+- As an adopter whose org has a flywheel App that is not installed on this
+  repo, I want the step to recognise that and offer to install it here, so I
+  fix the real gap instead of creating a second App or pasting a key that still
+  cannot mint tokens for my repo.
+
+## init.sh GitHub-App step quality attributes and constraints §req:app-step-clarify-constraints
+
+- **Need before mechanism.** The prompt is judged by whether a first-time
+  adopter can decide from it alone — what the App does, what it can access, how
+  long it lives — without prior GitHub-App knowledge. Copy that only makes
+  sense to someone who already understands installation tokens does not meet
+  the bar.
+- **A PAT is not a viable substitute for this tool, and the copy must be able
+  to say why briefly.** Flywheel adds the App to its branch/tag rulesets as a
+  bypass actor of type *Integration* so the bot can push releases and tags to
+  protected branches; only a GitHub App can be that kind of bypass actor, so a
+  PAT cannot stand in. A PAT would also tie the automation to one human's
+  account and rate limit, run as that person rather than a bot in the audit
+  trail, and live as a long-lived, manually rotated secret instead of a
+  short-lived token minted per run. This is the rationale the prompt
+  summarises; it is also the reason no PAT path is built.
+- **Consume detection, do not re-probe.** The step reads the App-ID,
+  credential, and installation findings the pre-flight pass
+  (§req:preflight-detection) already produced rather than issuing its own
+  duplicate `gh` lookups. Detection is built once on the spine and consumed
+  here.
+- **Show what is detected; let the adopter override.** Detected state is a
+  default to confirm, never a silent decision. An adopter can always override
+  what pre-flight found — the detection informs the prompt, it does not replace
+  the adopter's choice.
+- **One vocabulary, every surface.** The App credential is named and described
+  the same way across pre-flight, this prompt, the completion summary
+  (§req:setup-completion-summary), and doctor — the cluster's end-to-end
+  consistency goal applies here as it does to the preset wording
+  (§req:init-preset-wording).
+- **Identifiers and outcomes are a stable contract.** `FLYWHEEL_GH_APP_ID` and
+  `FLYWHEEL_GH_APP_PRIVATE_KEY` are the strings the action and workflows read;
+  the change reworks copy and detection handling only and must not rename them
+  or alter which credentials a successful run leaves behind.
+- **Non-interactive and piped runs keep working.** The clarified step degrades
+  the same way the current one does on a non-interactive shell or a
+  `curl … | bash` invocation — it prints the manual finish command rather than
+  blocking on a prompt — so the new detection-aware copy does not regress
+  scripted adoption.
+- **Priority.** Adopter-facing and on the documented onboarding path, and the
+  step where a first run most often stalls with a half-configured credential —
+  so it ranks above the pure-wording polish of §req:init-preset-wording but,
+  like the rest of the setup cluster, below the requirements that protect
+  releases or the v2 major (§req:release-safety-gate,
+  §req:composite-action-path) and below the detection spine it depends on
+  (§req:preflight-detection). In decreasing order of user impact: (1) replace
+  the "installation tokens" framing with permission-, lifetime-, and
+  why-an-App copy so the choice is informed; (2) consume pre-flight's detected
+  App and credentials so existing-App adopters confirm rather than re-paste;
+  (3) surface the org-App-not-installed-here state and offer to install it,
+  closing the one gap that today's create/paste menu cannot.
