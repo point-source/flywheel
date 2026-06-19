@@ -20,6 +20,14 @@
 # init.sh consumes this to fold doctor's verdict into its completion summary.
 # The exit contract is unchanged (1 iff a block fired, else 0).
 #
+# GitHub Actions step summary: when $GITHUB_STEP_SUMMARY is set and non-empty
+# (it is set only inside a GitHub Actions step), doctor ALSO appends an
+# ANSI-free markdown rendering of the run — heading, full run body, and verdict
+# — to that file, so an adopter reading the run from the Actions tab sees the
+# result without scrolling raw logs. This is auto-detected (no CLI flag) and is
+# a SECOND output sink only: when the variable is unset (the local default),
+# behavior and stdout are byte-for-byte unchanged.
+#
 # Dependencies: git, gh, jq, python3 with PyYAML.
 
 set -uo pipefail
@@ -144,18 +152,40 @@ fi
 
 warns=0
 
+# GitHub Actions step-summary affordance. When $GITHUB_STEP_SUMMARY is set and
+# non-empty (only inside a GitHub Actions step), every report line is captured
+# — ANSI-free — into SS_BODY as it is emitted; at the end the buffer is wrapped
+# in a fenced markdown block and appended to that file alongside a heading and
+# verdict. When the variable is unset (the local default), capture is a no-op
+# and stdout is byte-for-byte unchanged. The `:-` default is required under
+# `set -u`.
+SS_BODY=()
+ss_enabled() { [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; }
+# Strip ANSI SGR escape sequences so the buffered text is plain markdown.
+ss_strip_ansi() { sed $'s/\x1b\\[[0-9;]*m//g'; }
+# Capture one plain (already ANSI-stripped) line into the step-summary buffer.
+ss_capture() { ss_enabled && SS_BODY+=("$1"); }
+# Capture a finding line, rendering it (the format_finding|sed work) ONLY when
+# the step summary is enabled — so the local default path (variable unset) does
+# zero extra work per finding rather than forking a subshell+sed it discards.
+ss_capture_finding() { ss_enabled && SS_BODY+=("$(format_finding "$@" | ss_strip_ansi)"); }
+
 # In --summary mode, bold section headers and green ok lines are suppressed so
 # only real findings (and the machine trailer) reach stdout. fail/warn/note
 # always emit — those are the findings init folds into its summary.
-bold()  { [[ $summary_mode -eq 1 ]] && return 0; printf '\033[1m%s\033[0m\n' "$*"; }
-ok()    { [[ $summary_mode -eq 1 ]] && return 0; printf '  \033[32m✓\033[0m %s\n' "$*"; }
+# The step-summary buffer captures the FULL local run regardless of --summary,
+# so bold/ok capture before the summary_mode early-return.
+bold()  { ss_capture "$*"; [[ $summary_mode -eq 1 ]] && return 0; printf '\033[1m%s\033[0m\n' "$*"; }
+ok()    { ss_capture "  ✓ $*"; [[ $summary_mode -eq 1 ]] && return 0; printf '  \033[32m✓\033[0m %s\n' "$*"; }
 # fail/warn are thin wrappers over the shared `finding` emitter: each takes a
 # bucket as its first arg. fail → block (counted by FINDINGS_BLOCK_COUNT),
-# warn → warn (counted locally for the summary line).
-fail()  { finding "$1" block "$2"; }
-warn()  { finding "$1" warn "$2"; warns=$((warns+1)); }
+# warn → warn (counted locally for the summary line). The matching ANSI-free
+# finding line is captured for the step summary via format_finding (same
+# glyph+[bucket] text, without printing it twice or touching the block counter).
+fail()  { finding "$1" block "$2"; ss_capture_finding "$1" block "$2"; }
+warn()  { finding "$1" warn "$2"; warns=$((warns+1)); ss_capture_finding "$1" warn "$2"; }
 # note → info; same wrapper shape so NOTE sites read like the others.
-note()  { finding "$1" info "$2"; }
+note()  { finding "$1" info "$2"; ss_capture_finding "$1" info "$2"; }
 
 # Classify a boolean field on an already-successful gh api response as one of
 # `true` / `false` / `absent`. GitHub omits admin-gated fields (e.g. the merge
@@ -643,4 +673,28 @@ else
     printf '\033[32mOK\033[0m — all checks pass\n'
   fi
 fi
+
+# When running inside a GitHub Actions step, append an ANSI-free markdown
+# rendering of the whole run to the step summary (a SECOND sink — stdout above
+# is unchanged). Heading + the captured run body in a fenced code block (so the
+# glyphs/alignment render verbatim) + the verdict line. Append (>>) — Actions
+# accumulates the summary file across steps.
+if ss_enabled; then
+  {
+    printf '## Flywheel doctor — %s\n\n' "$REPO"
+    printf '```\n'
+    if [[ "${#SS_BODY[@]}" -gt 0 ]]; then
+      printf '%s\n' "${SS_BODY[@]}"
+    fi
+    printf '```\n\n'
+    if [[ "$FINDINGS_BLOCK_COUNT" -gt 0 ]]; then
+      printf 'FAIL — %d blocking finding(s), %d warning(s)\n' "$FINDINGS_BLOCK_COUNT" "$warns"
+    elif [[ $warns -gt 0 ]]; then
+      printf 'OK with warnings — %d warning(s)\n' "$warns"
+    else
+      printf 'OK — all checks pass\n'
+    fi
+  } >> "$GITHUB_STEP_SUMMARY"
+fi
+
 exit "$(findings_exit_code)"

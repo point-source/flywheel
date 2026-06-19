@@ -340,12 +340,27 @@ function runDoctor(
   binDir: string,
   cwd: string,
   extraArgs: string[] = [],
-  { skipCredentials = true }: { skipCredentials?: boolean } = {},
+  {
+    skipCredentials = true,
+    summaryFile,
+  }: { skipCredentials?: boolean; summaryFile?: string } = {},
 ): RunResult {
   const flags = skipCredentials ? ["--skip-credentials"] : [];
+  // GITHUB_STEP_SUMMARY is scrubbed from the child env by default: when this
+  // suite itself runs inside GitHub Actions, process.env.GITHUB_STEP_SUMMARY is
+  // set, which would otherwise make WS1's step-summary affordance fire for EVERY
+  // test — polluting the real Actions step summary and making the run
+  // non-hermetic. Setting it to undefined drops it from the spawned env, so the
+  // affordance only fires when a test opts in via `summaryFile` (which points
+  // GITHUB_STEP_SUMMARY at a caller-owned temp path).
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    PATH: `${binDir}:${process.env.PATH ?? ""}`,
+    GITHUB_STEP_SUMMARY: summaryFile,
+  };
   const r = spawnSync("bash", [scriptPath, ...flags, ...extraArgs, REPO], {
     cwd,
-    env: { ...process.env, PATH: `${binDir}:${process.env.PATH ?? ""}` },
+    env,
     encoding: "utf8",
   });
   return { exitCode: r.status ?? -1, stdout: r.stdout ?? "", stderr: r.stderr ?? "" };
@@ -1021,3 +1036,274 @@ describe.skipIf(!depsAvailable)("doctor.sh — App-token credential clarity (#23
     }
   });
 });
+
+// CI-invocation contract (SPEC.md §spec:doctor-ci-workflow). The flywheel-doctor
+// CI workflow checks out the adopter repo and invokes doctor against it with
+// --skip-credentials (the App-token mint upstream is the credential proof).
+// These guards lock the observable contract #240-2 depends on:
+//   1. when the target IS the checked-out repo (remote_only==0) doctor runs its
+//      on-disk checks, not just the API checks;
+//   2. --skip-credentials reports a NON-FATAL info skip note, never a failure;
+//   3. doctor stays read-only under that invocation — nothing under cwd, and
+//      with the step-summary affordance active the ONLY write is the external
+//      $GITHUB_STEP_SUMMARY file;
+//   4. exit is 1 ONLY on a block-severity finding (warn / could-not-verify stay
+//      green).
+// Where the same behavior is already pinned elsewhere in this file we note it
+// rather than duplicate it.
+describe.skipIf(!depsAvailable)("doctor.sh — CI-invocation contract (#240)", () => {
+  // Contract bullet 1: on-disk checks run when target == checked-out repo.
+  // localRepo:true makes `gh repo view` print REPO → cwd_repo == REPO →
+  // remote_only=0, the LOCAL path, which unlocks the on-disk .gitattributes /
+  // merge-driver scan (gated on `remote_only -eq 0 && -n "$yml"`). A local
+  // .flywheel.yml sets $yml; .gitattributes is left absent so the on-disk
+  // ".gitattributes missing" finding fires. We then prove that SAME finding does
+  // NOT appear on the remote path (localRepo:false), so it can only have come
+  // from the on-disk section a self-checkout CI run reaches.
+  it("on-disk checks run when target == checked-out repo (a local-only finding appears that the remote path lacks)", () => {
+    const localStub = setupGhStub({ localRepo: true });
+    const localCwd = mkdtempSync(join(tmpdir(), "flywheel-doctor-cwd-"));
+    writeFileSync(join(localCwd, ".flywheel.yml"), SINGLE_BRANCH_YAML);
+    const remoteStub = setupGhStub({ localRepo: false });
+    const remoteCwd = mkdtempSync(join(tmpdir(), "flywheel-doctor-cwd-"));
+    try {
+      const local = stripAnsi(runDoctor(localStub.binDir, localCwd).stdout);
+      const remote = stripAnsi(runDoctor(remoteStub.binDir, remoteCwd).stdout);
+      // The on-disk merge-driver scan ran on the local (self-checkout) path.
+      expect(
+        local,
+        `expected the on-disk .gitattributes scan to run on the local path\n${local}`,
+      ).toContain(".gitattributes missing");
+      // …and did NOT run on the remote-only path — proving it is genuinely the
+      // on-disk section, not an API check that fires everywhere.
+      expect(
+        remote,
+        "the .gitattributes scan must be skipped on the remote-only path",
+      ).not.toContain(".gitattributes missing");
+    } finally {
+      localStub.cleanup();
+      rmSync(localCwd, { recursive: true, force: true });
+      remoteStub.cleanup();
+      rmSync(remoteCwd, { recursive: true, force: true });
+    }
+  });
+
+  // Contract bullet 2: --skip-credentials → a NON-FATAL info skip note, not a
+  // failure. The default runDoctor passes --skip-credentials; on an otherwise
+  // clean stub the skip note must be an INFO finding (glyph 'i', carries
+  // [config], NOT a block) and the run must exit 0. (No existing test asserts
+  // the skip-note line itself — App-token clarity tests run with
+  // skipCredentials:false and never reach this arm.)
+  it("--skip-credentials → a non-fatal [config] info skip note, exit 0", () => {
+    const stub = setupGhStub();
+    const cwd = mkdtempSync(join(tmpdir(), "flywheel-doctor-cwd-"));
+    try {
+      const r = runDoctor(stub.binDir, cwd); // --skip-credentials is the default
+      const plain = stripAnsi(r.stdout);
+      const skipLine = plain
+        .split("\n")
+        .find((l) => l.includes("skipped (--skip-credentials)"));
+      expect(skipLine, `expected a --skip-credentials skip note\n${plain}`).toBeDefined();
+      // It is an info note on [config] — not a block, and not a "missing" claim.
+      expect(skipLine).toContain("[config]");
+      expect(plain).not.toContain("variable missing");
+      expect(plain).not.toContain("secret missing");
+      // The skip is non-fatal — the otherwise-clean run exits 0.
+      expect(r.exitCode, `stderr:\n${r.stderr}\nstdout:\n${plain}`).toBe(0);
+      expect(plain).not.toMatch(/FAIL/);
+    } finally {
+      stub.cleanup();
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  // Contract bullet 3: read-only under the CI invocation. The remote-path
+  // read-only guarantee is already covered (the "is read-only — writes nothing
+  // into the cwd" test and the --summary variant); add the LOCAL (self-checkout)
+  // path, which runs more on-disk sections, and prove that when the
+  // step-summary affordance is active the ONLY thing written is the EXTERNAL
+  // $GITHUB_STEP_SUMMARY file — never anything under cwd.
+  it("is read-only on the local (self-checkout) path, even with the step summary active", () => {
+    const stub = setupGhStub({ localRepo: true });
+    const cwd = mkdtempSync(join(tmpdir(), "flywheel-doctor-cwd-"));
+    // The only pre-existing entry is the config we seed; record it as baseline.
+    writeFileSync(join(cwd, ".flywheel.yml"), SINGLE_BRANCH_YAML);
+    const before = readdirSync(cwd).sort();
+    // The step-summary sink lives OUTSIDE cwd so the read-only-cwd guarantee
+    // holds even while the affordance fires.
+    const ssDir = mkdtempSync(join(tmpdir(), "flywheel-doctor-ss-"));
+    const summaryFile = join(ssDir, "summary.md");
+    try {
+      runDoctor(stub.binDir, cwd, [], { summaryFile });
+      const after = readdirSync(cwd).sort();
+      expect(after, `doctor wrote into its cwd: ${after.join(", ")}`).toEqual(before);
+      // The affordance fired into the external sink — its only write.
+      expect(existsSync(summaryFile), "expected the external summary file to be written").toBe(
+        true,
+      );
+    } finally {
+      stub.cleanup();
+      rmSync(cwd, { recursive: true, force: true });
+      rmSync(ssDir, { recursive: true, force: true });
+    }
+  });
+
+  // Contract bullet 4: exit is red ONLY on a block. Pinned as a cohesive set.
+  // block → exit 1 and warn-only → exit 0 are already asserted (the "a
+  // block-severity finding → exit 1" / "allow_auto_merge:false …" /
+  // "zero block-severity findings → exit 0" tests above); the could-not-verify →
+  // exit 0 arm is also covered (admin-gated absent, unreadable rulesets, and the
+  // credVarList:"forbidden" credential path). This guard re-pins the three arms
+  // together so the exit contract reads as one unit, using minimal distinct
+  // stubs and adding the combinations not already grouped.
+  it("exit contract: block → 1, warn-only → 0, could-not-verify-only → 0", () => {
+    // (a) A block-severity finding (missing config + missing rulesets) → exit 1.
+    const blockStub = setupGhStub({ hasConfig: false, hasRulesets: false });
+    const blockCwd = mkdtempSync(join(tmpdir(), "flywheel-doctor-cwd-"));
+    // (b) A warn-only run (allow_auto_merge disabled, nothing else) → exit 0.
+    const warnStub = setupGhStub({ allowAutoMerge: false });
+    const warnCwd = mkdtempSync(join(tmpdir(), "flywheel-doctor-cwd-"));
+    // (c) A could-not-verify-only run (admin-gated settings absent) → exit 0.
+    const cnvStub = setupGhStub({ adminFieldsVisible: false });
+    const cnvCwd = mkdtempSync(join(tmpdir(), "flywheel-doctor-cwd-"));
+    try {
+      const block = runDoctor(blockStub.binDir, blockCwd);
+      expect(
+        block.exitCode,
+        `block run must exit 1\n${stripAnsi(block.stdout)}\n${block.stderr}`,
+      ).toBe(1);
+      expect(stripAnsi(block.stdout)).toMatch(/FAIL/);
+
+      const warn = runDoctor(warnStub.binDir, warnCwd);
+      const warnPlain = stripAnsi(warn.stdout);
+      expect(warn.exitCode, `warn-only run must exit 0\n${warnPlain}\n${warn.stderr}`).toBe(0);
+      expect(warnPlain).toMatch(/OK with warnings/);
+
+      const cnv = runDoctor(cnvStub.binDir, cnvCwd);
+      const cnvPlain = stripAnsi(cnv.stdout);
+      expect(
+        cnv.exitCode,
+        `could-not-verify-only run must exit 0\n${cnvPlain}\n${cnv.stderr}`,
+      ).toBe(0);
+      // It is a could-not-verify (warn), never a block.
+      expect(cnvPlain).toContain("could not verify allow_auto_merge");
+      expect(cnvPlain).not.toMatch(/FAIL/);
+    } finally {
+      blockStub.cleanup();
+      rmSync(blockCwd, { recursive: true, force: true });
+      warnStub.cleanup();
+      rmSync(warnCwd, { recursive: true, force: true });
+      cnvStub.cleanup();
+      rmSync(cnvCwd, { recursive: true, force: true });
+    }
+  });
+});
+
+// Step-summary affordance (WS1, SPEC.md §spec:doctor-ci-workflow). When
+// $GITHUB_STEP_SUMMARY is set (only inside a GitHub Actions step) doctor appends
+// an ANSI-free markdown rendering of its whole run to that file as a SECOND sink
+// — stdout is unchanged. The markdown is a `## Flywheel doctor — <REPO>`
+// heading, the captured run body inside a fenced code block, and a verdict line
+// mirroring the local FAIL / "OK with warnings" / "OK — all checks pass" text.
+// The summary sink is pointed at a temp file OUTSIDE the doctor cwd so the
+// read-only-cwd guarantee is preserved.
+describe.skipIf(!depsAvailable)("doctor.sh — step-summary affordance (#240, WS1)", () => {
+  it("renders an ANSI-free markdown summary to $GITHUB_STEP_SUMMARY, stdout unchanged", () => {
+    // A stub that produces findings of every kind: a [config] warn
+    // (allow_auto_merge disabled) and [instance] blocks (no rulesets), so the
+    // verdict is FAIL and at least one bracketed finding line is present in both
+    // sinks.
+    const stub = setupGhStub({ allowAutoMerge: false, hasRulesets: false });
+    const cwd = mkdtempSync(join(tmpdir(), "flywheel-doctor-cwd-"));
+    const ssDir = mkdtempSync(join(tmpdir(), "flywheel-doctor-ss-"));
+    const summaryFile = join(ssDir, "summary.md");
+    try {
+      const r = runDoctor(stub.binDir, cwd, [], { summaryFile });
+      const stdoutPlain = stripAnsi(r.stdout);
+
+      // The summary file was written (outside cwd) and has the documented shape.
+      expect(existsSync(summaryFile), "expected the step-summary file to be created").toBe(true);
+      const summary = readFileSync(summaryFile, "utf8");
+
+      // Heading naming the repo.
+      expect(summary).toContain(`## Flywheel doctor — ${REPO}`);
+      // The run body lives in a fenced code block.
+      expect(summary, `summary had no fenced code block:\n${summary}`).toMatch(/```[\s\S]*```/);
+      // Verdict line mirrors the local FAIL summary (a block fired here).
+      expect(summary).toMatch(/FAIL — \d+ blocking finding\(s\), \d+ warning\(s\)/);
+
+      // The markdown is ANSI-free — no raw escape sequences leak into the file.
+      expect(summary.includes("\x1b["), "summary must not contain ANSI escapes").toBe(false);
+
+      // The findings present in stdout are also present in the summary: a
+      // bracketed finding line and the verdict both appear in both sinks.
+      expect(summary).toContain("[config]");
+      expect(summary).toContain("[instance]");
+      expect(stdoutPlain).toContain("[config]");
+      expect(stdoutPlain).toContain("[instance]");
+      // A representative finding line carries through verbatim.
+      const autoMergeLine = stdoutPlain
+        .split("\n")
+        .find((l) => l.includes("allow_auto_merge") && l.includes("disabled"))
+        ?.trim();
+      expect(autoMergeLine, "expected an allow_auto_merge finding in stdout").toBeDefined();
+      expect(summary, "the stdout finding must also appear in the summary").toContain(
+        autoMergeLine!,
+      );
+    } finally {
+      stub.cleanup();
+      rmSync(cwd, { recursive: true, force: true });
+      rmSync(ssDir, { recursive: true, force: true });
+    }
+  });
+
+  it("clean run → an 'OK — all checks pass' verdict in the summary", () => {
+    // Verdict text varies by outcome; pin the all-clear form on a clean stub.
+    const stub = setupGhStub();
+    const cwd = mkdtempSync(join(tmpdir(), "flywheel-doctor-cwd-"));
+    const ssDir = mkdtempSync(join(tmpdir(), "flywheel-doctor-ss-"));
+    const summaryFile = join(ssDir, "summary.md");
+    try {
+      const r = runDoctor(stub.binDir, cwd, [], { summaryFile });
+      expect(r.exitCode, `stderr:\n${r.stderr}`).toBe(0);
+      const summary = readFileSync(summaryFile, "utf8");
+      expect(summary).toContain(`## Flywheel doctor — ${REPO}`);
+      expect(summary).toContain("OK — all checks pass");
+      expect(summary.includes("\x1b["), "summary must not contain ANSI escapes").toBe(false);
+    } finally {
+      stub.cleanup();
+      rmSync(cwd, { recursive: true, force: true });
+      rmSync(ssDir, { recursive: true, force: true });
+    }
+  });
+
+  it("GITHUB_STEP_SUMMARY unset (local default) → no summary file, stdout unchanged", () => {
+    // Regression lock on "local default unchanged": with no summaryFile, the
+    // default runDoctor scrubs GITHUB_STEP_SUMMARY, so the affordance is a no-op
+    // and no second sink is written. We compare stdout to a baseline run to
+    // prove the local default output is byte-for-byte unaffected by the feature.
+    const stub = setupGhStub({ allowAutoMerge: false, hasRulesets: false });
+    const cwd = mkdtempSync(join(tmpdir(), "flywheel-doctor-cwd-"));
+    const probeDir = mkdtempSync(join(tmpdir(), "flywheel-doctor-ss-"));
+    try {
+      const r = runDoctor(stub.binDir, cwd);
+      // No file is created anywhere we control; the probe dir stays empty.
+      expect(
+        readdirSync(probeDir),
+        "no summary file should be written when GITHUB_STEP_SUMMARY is unset",
+      ).toEqual([]);
+      // stdout is the normal decorated local report (verdict + findings present).
+      const plain = stripAnsi(r.stdout);
+      expect(plain).toContain("[config]");
+      expect(plain).toContain("[instance]");
+      expect(plain).toMatch(/FAIL/);
+      // Heading markdown is NOT emitted to stdout — that lives only in the file.
+      expect(plain).not.toContain("## Flywheel doctor");
+    } finally {
+      stub.cleanup();
+      rmSync(cwd, { recursive: true, force: true });
+      rmSync(probeDir, { recursive: true, force: true });
+    }
+  });
+});
+

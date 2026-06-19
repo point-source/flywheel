@@ -69,9 +69,12 @@ describe("init.sh / doctor.sh — one vocabulary for the App credential", () => 
       expect(doctorSh, `doctor.sh must use severity ${sev}`).toContain(sev);
     }
     // doctor's severity wrappers map to the shared names — pin the mapping so a
-    // rename can't silently introduce a FAIL/WARN/NOTE severity vocabulary.
-    expect(doctorSh).toMatch(/fail\(\)\s*{\s*finding "\$1" block "\$2"; }/);
+    // rename can't silently introduce a FAIL/WARN/NOTE severity vocabulary. The
+    // match stops at the `finding "$1" <sev> "$2";` call; the wrappers may carry
+    // trailing statements (e.g. the $GITHUB_STEP_SUMMARY capture), which must not
+    // be allowed to break the severity-vocabulary pin.
+    expect(doctorSh).toMatch(/fail\(\)\s*{\s*finding "\$1" block "\$2";/);
     expect(doctorSh).toMatch(/warn\(\)\s*{\s*finding "\$1" warn "\$2";/);
-    expect(doctorSh).toMatch(/note\(\)\s*{\s*finding "\$1" info "\$2"; }/);
+    expect(doctorSh).toMatch(/note\(\)\s*{\s*finding "\$1" info "\$2";/);
   });
 });
