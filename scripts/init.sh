@@ -453,7 +453,7 @@ preflight_detect_version_tag_shape() {
     [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+ ]] && continue
     if [[ "$tag" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?$ ]]; then
       bare_semver+="$tag, "
-    elif [[ "$tag" =~ ^([Rr][Ee][Ll][Ee][Aa][Ss][Ee]|[Ss][Tt][Aa][Bb][Ll][Ee]|[Rr][Ee][Ll]|[Vv][Ee][Rr]|[Vv][Ee][Rr][Ss][Ii][Oo][Nn])[-_/.] ]]; then
+    elif printf '%s' "$tag" | grep -qiE '^(release|stable|rel|ver|version)[-_/.]'; then
       non_semver+="$tag, "
     fi
     # Anything else is an exotic tag — ignore (false-negative bias).
@@ -486,14 +486,27 @@ preflight_detect_version_tag_shape() {
 # only on what exists. Existence is tested with the doctor.sh idiom
 # (`gh api repos/$REPO/branches/$b`). REPO may be empty (gh unresolved); in that
 # case we can't probe the remote, so echo nothing. Read-only; errors swallowed.
+# Memoized once per run: both the bypass and signed-commit detectors call this,
+# and each probe is 3 gh API calls (develop/main/staging) — without the guard
+# that is 6 calls per run against the adopter's rate limit. preflight_run resets
+# the flag so a fresh run re-probes.
+PREFLIGHT_MANAGED_BRANCHES=""
+PREFLIGHT_MANAGED_BRANCHES_READ=0
 preflight_brownfield_managed_branches() {
-  [[ -n "${REPO:-}" ]] || return 0
-  local b
-  for b in develop main staging; do
-    if gh api "repos/$REPO/branches/$b" >/dev/null 2>&1; then
-      echo "$b"
+  if [[ $PREFLIGHT_MANAGED_BRANCHES_READ -eq 0 ]]; then
+    PREFLIGHT_MANAGED_BRANCHES_READ=1
+    if [[ -n "${REPO:-}" ]]; then
+      local b found=""
+      for b in develop main staging; do
+        if gh api "repos/$REPO/branches/$b" >/dev/null 2>&1; then
+          found+="${found:+$'\n'}$b"
+        fi
+      done
+      PREFLIGHT_MANAGED_BRANCHES="$found"
     fi
-  done
+  fi
+  [[ -n "$PREFLIGHT_MANAGED_BRANCHES" ]] && printf '%s\n' "$PREFLIGHT_MANAGED_BRANCHES"
+  return 0
 }
 
 # preflight_brownfield_read_rulesets — list the repo's branch-target rulesets and
@@ -509,6 +522,8 @@ preflight_brownfield_managed_branches() {
 # them. Read-only; all gh errors swallowed.
 PREFLIGHT_RULESET_IDS=()
 PREFLIGHT_RULESET_DETAILS=()
+PREFLIGHT_TAG_RULESET_IDS=()
+PREFLIGHT_TAG_RULESET_DETAILS=()
 PREFLIGHT_RULESET_UNREADABLE=0
 # Idempotence guard: the branch-protection-bypass and signed-commit detectors
 # each call this reader within one preflight_run, but the ruleset list/detail
@@ -517,14 +532,37 @@ PREFLIGHT_RULESET_UNREADABLE=0
 # the top so a fresh run re-reads. Without the guard the two detectors would
 # double-list rulesets every run.
 PREFLIGHT_RULESETS_READ=0
+# _preflight_read_ruleset_details <ids-newline-list> <ids-array-name> <details-array-name>
+# Read each ruleset id's detail JSON into the named parallel arrays, mirroring
+# doctor.sh's read_ruleset_detail: a denied detail read (listing allowed but
+# reading one needs repo-admin) sets PREFLIGHT_RULESET_UNREADABLE so an unread
+# ruleset never collapses into a false block (doctor.sh #239 logic).
+_preflight_read_ruleset_details() {
+  local ids="$1" ids_arr="$2" details_arr="$3" rid detail
+  while read -r rid; do
+    [[ -z "$rid" ]] && continue
+    if ! detail="$(gh api "repos/$REPO/rulesets/$rid" 2>/dev/null)"; then
+      PREFLIGHT_RULESET_UNREADABLE=1
+      continue
+    fi
+    eval "$ids_arr+=(\"\$rid\")"
+    eval "$details_arr+=(\"\$detail\")"
+  done <<< "$ids"
+}
+# Read both branch- AND tag-target rulesets in one list call: the signed-commit
+# detector needs tag rulesets (refs/tags/v* signing) and the bypass detector
+# needs branch rulesets, so collecting both here lets the signed-commit detector
+# reuse the cached tag details instead of re-listing rulesets a second time.
 preflight_brownfield_read_rulesets() {
   [[ $PREFLIGHT_RULESETS_READ -eq 1 ]] && return 0
   PREFLIGHT_RULESET_IDS=()
   PREFLIGHT_RULESET_DETAILS=()
+  PREFLIGHT_TAG_RULESET_IDS=()
+  PREFLIGHT_TAG_RULESET_DETAILS=()
   PREFLIGHT_RULESET_UNREADABLE=0
   PREFLIGHT_RULESETS_READ=1
   [[ -n "${REPO:-}" ]] || return 0
-  local rulesets_json branch_ids rid detail
+  local rulesets_json branch_ids tag_ids
   if ! rulesets_json="$(gh api "repos/$REPO/rulesets" 2>/dev/null)"; then
     # Listing failed entirely — token can't read rulesets. Mark indeterminate so
     # the caller emits could-not-verify rather than asserting "no protection".
@@ -532,17 +570,24 @@ preflight_brownfield_read_rulesets() {
     return 0
   fi
   branch_ids="$(echo "$rulesets_json" | jq -r '.[]? | select(.target == "branch") | .id' 2>/dev/null || true)"
-  while read -r rid; do
-    [[ -z "$rid" ]] && continue
-    if ! detail="$(gh api "repos/$REPO/rulesets/$rid" 2>/dev/null)"; then
-      # Listing allowed but detail read denied — a permission gap. Track it so an
-      # unread ruleset never collapses into a false block (doctor.sh #239 logic).
-      PREFLIGHT_RULESET_UNREADABLE=1
-      continue
-    fi
-    PREFLIGHT_RULESET_IDS+=("$rid")
-    PREFLIGHT_RULESET_DETAILS+=("$detail")
-  done <<< "$branch_ids"
+  _preflight_read_ruleset_details "$branch_ids" PREFLIGHT_RULESET_IDS PREFLIGHT_RULESET_DETAILS
+  tag_ids="$(echo "$rulesets_json" | jq -r '.[]? | select(.target == "tag") | .id' 2>/dev/null || true)"
+  _preflight_read_ruleset_details "$tag_ids" PREFLIGHT_TAG_RULESET_IDS PREFLIGHT_TAG_RULESET_DETAILS
+}
+
+# preflight_brownfield_ref_covered <detail-json> <ref> — print 1 if the ruleset
+# detail's conditions.ref_name.include covers <ref> (exact match, ~ALL, or
+# ~DEFAULT_BRANCH), else 0. Centralizes the coverage heuristic the bypass and
+# signed-commit detectors share. jq is guarded (2>/dev/null) so a malformed /
+# non-object detail can't abort under set -e — it simply reads as not-covered.
+preflight_brownfield_ref_covered() {
+  if echo "$1" | jq -e --arg ref "$2" \
+    '[.conditions?.ref_name?.include[]? | select(. == $ref or . == "~ALL" or . == "~DEFAULT_BRANCH")] | length > 0' \
+    >/dev/null 2>&1; then
+    printf '1\n'
+  else
+    printf '0\n'
+  fi
 }
 
 # preflight_detect_branch_protection_bypass — §spec:brownfield-detection.
@@ -573,21 +618,12 @@ preflight_detect_branch_protection_bypass() {
     ref="refs/heads/$b"
     # Scan readable branch rulesets for one whose conditions include this branch.
     local matched_blocking=0 app_bypass=0 has_integration_bypass=0
-    local i=0 detail includes inc blocking app_actors integ_count
+    local i=0 detail blocking app_actors integ_count
     while [[ $i -lt ${#PREFLIGHT_RULESET_IDS[@]} ]]; do
       detail="${PREFLIGHT_RULESET_DETAILS[$i]}"
       i=$((i+1))
-      # `?` after each step + `|| true` keep a malformed/non-object detail from
-      # aborting the run under `set -e` (jq exits non-zero on a type error).
-      includes="$(echo "$detail" | jq -r '.conditions?.ref_name?.include[]?' 2>/dev/null || true)"
-      local covers=0
-      while IFS= read -r inc; do
-        [[ -z "$inc" ]] && continue
-        if [[ "$inc" == "$ref" || "$inc" == "~ALL" || "$inc" == "~DEFAULT_BRANCH" ]]; then
-          covers=1
-        fi
-      done <<< "$includes"
-      [[ $covers -eq 1 ]] || continue
+      # Skip rulesets that don't cover this branch (shared coverage heuristic).
+      [[ "$(preflight_brownfield_ref_covered "$detail" "$ref")" == 1 ]] || continue
 
       # A "blocking" ruleset carries any rule that stops the bot's direct push:
       # pull_request (changes must go through a PR), non_fast_forward / update
@@ -685,21 +721,13 @@ preflight_detect_signed_commit_requirement() {
     [[ -n "$b" ]] || continue
     ref="refs/heads/$b"
     local requires_signing=0
-    local i=0 detail includes inc covers sig_count
+    local i=0 detail sig_count
     # Scan readable branch rulesets for one that covers this branch AND carries a
     # required_signatures rule.
     while [[ $i -lt ${#PREFLIGHT_RULESET_IDS[@]} ]]; do
       detail="${PREFLIGHT_RULESET_DETAILS[$i]}"
       i=$((i+1))
-      includes="$(echo "$detail" | jq -r '.conditions?.ref_name?.include[]?' 2>/dev/null || true)"
-      covers=0
-      while IFS= read -r inc; do
-        [[ -z "$inc" ]] && continue
-        if [[ "$inc" == "$ref" || "$inc" == "~ALL" || "$inc" == "~DEFAULT_BRANCH" ]]; then
-          covers=1
-        fi
-      done <<< "$includes"
-      [[ $covers -eq 1 ]] || continue
+      [[ "$(preflight_brownfield_ref_covered "$detail" "$ref")" == 1 ]] || continue
       # `?` + `|| true` keep a malformed/non-object detail from aborting under set -e.
       sig_count="$(echo "$detail" | jq -r \
         '[.rules[]? | select(.type == "required_signatures")] | length' 2>/dev/null || true)"
@@ -726,31 +754,23 @@ preflight_detect_signed_commit_requirement() {
 
   # Tag-target rulesets: semantic-release pushes unsigned `v*` tags, so a
   # required_signatures rule on refs/tags/v* blocks tag creation. The shared
-  # reader only collects branch-target rulesets, so read tag rulesets here
-  # (mirrors doctor.sh's tag-namespace ruleset read). Bounded: one list + one
-  # detail read per tag ruleset.
-  local tag_signing=0 tag_unreadable=0
-  local rulesets_json tag_ids tid tdetail tsig tcovers
-  if rulesets_json="$(gh api "repos/$REPO/rulesets" 2>/dev/null)"; then
-    tag_ids="$(echo "$rulesets_json" | jq -r '.[]? | select(.target == "tag") | .id' 2>/dev/null || true)"
-    while read -r tid; do
-      [[ -z "$tid" ]] && continue
-      if ! tdetail="$(gh api "repos/$REPO/rulesets/$tid" 2>/dev/null)"; then
-        tag_unreadable=1
-        continue
-      fi
-      tcovers="$(echo "$tdetail" | jq -r '[.conditions?.ref_name?.include[]? | select(. == "refs/tags/v*" or . == "~ALL")] | length' 2>/dev/null || true)"
-      [[ "${tcovers:-0}" -gt 0 ]] || continue
-      tsig="$(echo "$tdetail" | jq -r '[.rules[]? | select(.type == "required_signatures")] | length' 2>/dev/null || true)"
-      [[ "${tsig:-0}" -gt 0 ]] && tag_signing=1
-    done <<< "$tag_ids"
-  fi
+  # reader already collected tag rulesets (and routes any unreadable detail to
+  # PREFLIGHT_RULESET_UNREADABLE), so reuse the cached details — no second list.
+  local tag_signing=0 i tdetail tsig
+  i=0
+  while [[ $i -lt ${#PREFLIGHT_TAG_RULESET_IDS[@]} ]]; do
+    tdetail="${PREFLIGHT_TAG_RULESET_DETAILS[$i]}"
+    i=$((i+1))
+    [[ "$(preflight_brownfield_ref_covered "$tdetail" "refs/tags/v*")" == 1 ]] || continue
+    tsig="$(echo "$tdetail" | jq -r '[.rules[]? | select(.type == "required_signatures")] | length' 2>/dev/null || true)"
+    [[ "${tsig:-0}" -gt 0 ]] && tag_signing=1
+  done
 
   if [[ -n "$affected" || $tag_signing -eq 1 ]]; then
     local what="${affected%, }"
     [[ $tag_signing -eq 1 ]] && what="${affected:+${affected%, }, }refs/tags/v*"
     finding instance block "$what requires signed commits/tags, which flywheel's App identity (semantic-release-bot / github-actions[bot] commits) cannot satisfy — the release and back-merge commits (and v* tags) it pushes will be rejected. This is NOT auto-resolvable: disabling a signing requirement is an adopter judgment call, so setup will hard-stop to the manual guide in a later batch."
-  elif [[ $PREFLIGHT_RULESET_UNREADABLE -eq 1 || $classic_unreadable -eq 1 || $tag_unreadable -eq 1 ]]; then
+  elif [[ $PREFLIGHT_RULESET_UNREADABLE -eq 1 || $classic_unreadable -eq 1 ]]; then
     finding local-env warn "could not verify ${managed//$'\n'/, } signed-commit requirement — reading protection requires repo-admin"
   fi
   # End deterministically at 0; the gate reads FINDINGS_BLOCK_COUNT, not this return.
@@ -790,9 +810,7 @@ preflight_detect_history_and_prs() {
     while IFS= read -r subject; do
       [[ -n "$subject" ]] || continue
       # `[skip ci]` / `[ci skip]` (case-insensitive) suppresses workflow runs.
-      if [[ "$subject" == *"[skip ci]"* || "$subject" == *"[skip CI]"* \
-         || "$subject" == *"[ci skip]"* || "$subject" == *"[CI skip]"* \
-         || "$subject" == *"[Skip CI]"* || "$subject" == *"[CI Skip]"* ]]; then
+      if printf '%s' "$subject" | grep -qiF -e '[skip ci]' -e '[ci skip]'; then
         skipci_count=$((skipci_count + 1))
       fi
       # Non-conventional subject: case-insensitive CC match.
@@ -910,8 +928,10 @@ preflight_detect_gh_capability() {
 preflight_run() {
   echo
   echo "Pre-flight checks:"
-  # Reset the ruleset-read idempotence guard so this run re-reads rulesets once
-  # (then shares them across the detectors that consult protection).
+  # Reset the per-run memoization guards so this run re-probes once, then shares
+  # the managed-branch list and ruleset details across the detectors that consult
+  # them (rather than each detector re-probing the same gh endpoints).
+  PREFLIGHT_MANAGED_BRANCHES_READ=0
   PREFLIGHT_RULESETS_READ=0
   # >>> detector seam — add new detectors here >>>
   preflight_detect_gh_capability       # §spec:preflight-gh-capability
