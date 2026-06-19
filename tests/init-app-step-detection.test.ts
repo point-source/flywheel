@@ -297,10 +297,14 @@ describe("init.sh App step — detected-credentials confirm/override (source-sli
     expect(source).toContain("app_step_resolved=1");
   });
 
-  it("takes SCOPE on confirm from the pre-flight found-at levels (no cold scope prompt)", () => {
-    // The confirm branch derives SCOPE from where the present piece lives.
+  it("confirm writes a missing piece without a cold scope prompt; a missing App ID goes to repo level", () => {
+    // When the App ID is present, a missing key is written beside it (its level).
     expect(source).toContain('SCOPE="$app_id_found_at"');
-    expect(source).toContain('SCOPE="$app_key_found_at"');
+    // When the App ID is the MISSING piece, it is written at repo level: a
+    // repo-scoped variable never needs an admin:org token, so an under-scoped
+    // adopter can finish. Inheriting the key's org level would force admin:org.
+    expect(source).toContain('SCOPE="repo"');
+    expect(source).not.toContain('SCOPE="$app_key_found_at"');
   });
 });
 
@@ -314,15 +318,18 @@ describe("init.sh App step — detected-credentials confirm/override (source-sli
 // manual-finish-command + defer outcome non-interactively. These slices pin the
 // literal copy/structure of that action (immune to INTERACTIVE gating).
 describe("init.sh App step — org-App-not-installed install action (source-slice)", () => {
-  it("defines install_app_on_repo and app_install_finish_cmd", () => {
+  it("defines install_app_on_repo, app_install_finish_cmd, and the shared app_install_url", () => {
     expect(source).toContain("install_app_on_repo() {");
     expect(source).toContain("app_install_finish_cmd() {");
+    // The org-installations URL lives in exactly one place; both renderers call it.
+    expect(source).toContain("app_install_url() {");
+    expect(source).toContain(
+      'printf \'%s\' "https://github.com/organizations/$OWNER/settings/installations"',
+    );
   });
 
-  it("install_app_on_repo routes to the org installations settings URL", () => {
-    expect(source).toContain(
-      "Open: https://github.com/organizations/$OWNER/settings/installations",
-    );
+  it("install_app_on_repo routes to the org installations settings URL via app_install_url", () => {
+    expect(source).toContain('Open: $(app_install_url)');
     expect(source).toContain(
       "Find the flywheel App, click Configure, add $REPO under 'Only select repositories', and Save.",
     );
@@ -337,9 +344,9 @@ describe("init.sh App step — org-App-not-installed install action (source-slic
     );
   });
 
-  it("app_install_finish_cmd is the single-source one-line install instruction (org URL)", () => {
+  it("app_install_finish_cmd is the single-source one-line install instruction (org URL via app_install_url)", () => {
     expect(source).toContain(
-      "Install the existing flywheel App on $REPO: open https://github.com/organizations/$OWNER/settings/installations , Configure the App, and add $REPO under 'Only select repositories'.",
+      "Install the existing flywheel App on $REPO: open $(app_install_url) , Configure the App, and add $REPO under 'Only select repositories'.",
     );
   });
 
@@ -493,6 +500,45 @@ describe("init.sh App step — non-interactive runtime (reuse boundary)", () => 
       rmSync(r.work, { recursive: true, force: true });
     }
   });
+
+  it("org App not installed AND private key missing → surfaces BOTH the install and the key finish command, DEFERS, exit 0", () => {
+    // has_app_id=1 (org App ID) but NO private-key secret anywhere, and the App is
+    // not installed on the repo. The not-installed branch must not stop at the
+    // install instruction — it must also tell the adopter the key is still unset,
+    // or they install an App whose token cannot be minted (#236 review finding ①).
+    const r = runInit({
+      env: {
+        STUB_OWNER_TYPE: "Organization",
+        STUB_ORG_VARS: "FLYWHEEL_GH_APP_ID",
+        STUB_ORG_APP_ID: "12345",
+        // no STUB_ORG_SECRETS / STUB_REPO_SECRETS → private key missing
+        STUB_INSTALLED_APP_IDS: "99999",
+      },
+    });
+    try {
+      const out = stripAnsi(r.stdout);
+      expect(r.status, `stderr:\n${r.stderr}\nstdout:\n${out}`).toBe(0);
+      expect(out).toContain(
+        "non-interactive shell — the org App is not installed on acme/widget. Finish manually:",
+      );
+      // The missing-key finish command is surfaced alongside the install action.
+      expect(out).toContain(
+        "The FLYWHEEL_GH_APP_PRIVATE_KEY secret is also missing — set it too:",
+      );
+      expect(out).toContain(
+        "gh secret set FLYWHEEL_GH_APP_PRIVATE_KEY < /path/to/private-key.pem --org acme --visibility all",
+      );
+      // Deferred (warn), and the recorded command carries BOTH actions.
+      expect(out).toMatch(
+        /FLYWHEEL_SETUP_STEP outcome=deferred bucket=config severity=warn command="Install the existing flywheel App on acme\/widget:.* ; gh variable set FLYWHEEL_GH_APP_ID .*" label="App credentials"/,
+      );
+      expect(out).not.toMatch(
+        /FLYWHEEL_SETUP_STEP outcome=configured .* label="App credentials"/,
+      );
+    } finally {
+      rmSync(r.work, { recursive: true, force: true });
+    }
+  });
 });
 
 // ===========================================================================
@@ -580,7 +626,7 @@ describe("init.sh App step — interactive confirm/override (Python pty)", () =>
     expect(r.out).toContain("Pick a setup path:");
   });
 
-  it("partial (id present, key missing): confirm prompts only for the missing PEM", () => {
+  it("partial (id present, key missing): confirm prompts only for the missing PEM; skipping it DEFERS (not configured)", () => {
     const r = runInitPty({
       answers: "\n\n", // confirm, then empty PEM path (skip the write)
       stub: {
@@ -597,6 +643,10 @@ describe("init.sh App step — interactive confirm/override (Python pty)", () =>
     expect(r.out).not.toContain("GitHub App ID (numeric):");
     // Confirm path, not override → no cold menu.
     expect(r.out).not.toContain("Pick a setup path");
+    // The PEM write was skipped, so the secret is still unset — the summary must
+    // record this as DEFERRED, never a false "configured" (#236 review finding ⑤).
+    expect(r.out).toContain("App credentials — deferred");
+    expect(r.out).not.toContain("App credentials — configured");
   });
 
   it("org-level detected: summary shows org-level, confirm keeps the creds", () => {
