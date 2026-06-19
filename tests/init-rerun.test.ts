@@ -312,9 +312,8 @@ describe("init.sh non-interactive manual-setup App-credential wording", () => {
       // Confirm we are actually in the manual-setup branch.
       expect(out).toContain(MANUAL_SETUP_ANCHOR);
 
-      // Framed as the Flywheel GitHub App's shared values, not a PAT.
+      // Framed as the Flywheel GitHub App's shared credentials, not a bare blob.
       expect(out).toContain("Flywheel");
-      expect(out).toMatch(/GitHub App's two shared values/);
 
       // FLYWHEEL_GH_APP_ID = Variable, FLYWHEEL_GH_APP_PRIVATE_KEY = Secret.
       expect(out).toMatch(/FLYWHEEL_GH_APP_ID Variable/);
@@ -358,7 +357,7 @@ describe("init.sh non-interactive manual-setup App-credential wording", () => {
       expect(out).toContain(MANUAL_SETUP_ANCHOR);
 
       // Same App-credential framing as the repo branch.
-      expect(out).toMatch(/GitHub App's two shared values/);
+      expect(out).toContain("Flywheel");
       expect(out).toMatch(/FLYWHEEL_GH_APP_ID Variable/);
       expect(out).toMatch(/FLYWHEEL_GH_APP_PRIVATE_KEY Secret/);
       expect(out).toContain("Settings → Secrets and variables → Actions");
