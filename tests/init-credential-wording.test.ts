@@ -159,10 +159,15 @@ describe("init.sh interactive partial-credential-state branch", () => {
   it("prompts only for the gap via prompt_existing_app_credentials", () => {
     // The partial arm gathers the missing value through the existing
     // per-gap prompt helper, which guards each write on has_app_id==0 /
-    // has_app_key==0.
-    expect(partialBranch).toMatch(
-      /partial" -eq 1[\s\S]*prompt_existing_app_credentials/,
-    );
+    // has_app_key==0. Match the bare invocation on its own line — a leading
+    // anchor of newline + indentation immediately before the call name — so a
+    // mere mention in a comment (e.g. "# ...prompt_existing_app_credentials
+    // guards each write...") can't satisfy it. Deleting the real call now
+    // fails this test.
+    expect(partialBranch).toMatch(/\n[ \t]*prompt_existing_app_credentials[ \t]*\n/);
+    // ...and it lives inside the `partial" -eq 1` arm, not the neither-present
+    // branch (which the slice's end anchor already excludes).
+    expect(partialBranch).toMatch(/partial" -eq 1/);
   });
 
   it("suppresses the create/paste/skip menu in the partial branch", () => {

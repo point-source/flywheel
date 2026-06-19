@@ -515,7 +515,7 @@ describe("init.sh partial-credential detection adds no extra gh probing", () => 
     }
   });
 
-  it("--skip-secrets: prints the skip message, touches no credentials and runs no probes", () => {
+  it("--skip-secrets: prints the skip message, writes nothing and runs no credential-detection list-probes", () => {
     const s = setup();
     try {
       const out = runInit(
@@ -528,10 +528,15 @@ describe("init.sh partial-credential detection adds no extra gh probing", () => 
       expect(out).toContain(
         "--skip-secrets set; not touching the App's FLYWHEEL_GH_APP_ID Variable or FLYWHEEL_GH_APP_PRIVATE_KEY Secret.",
       );
-      // No credential writes and no detection probing at all.
+      // No credential writes, and the credential-detection block (the
+      // `variable list` / `secret list` probes) is skipped entirely.
       assertNoCredentialWrites(ghLog);
       expect(ghLog).not.toMatch(/^variable list/m);
       expect(ghLog).not.toMatch(/^secret list/m);
+      // NOTE: this does NOT mean the run issues zero gh calls. The rulesets
+      // section still performs the `gh variable get FLYWHEEL_GH_APP_ID`
+      // App-ID readback (for apply-rulesets.sh --app-id) — that recovery is
+      // independent of --skip-secrets and is gated only on --skip-rulesets.
     } finally {
       teardown(s);
     }
