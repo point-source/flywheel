@@ -1,3 +1,10 @@
+# [2.1.0-dev.12](https://github.com/point-source/flywheel/compare/v2.1.0-dev.11...v2.1.0-dev.12) (2026-06-19)
+
+
+### Features
+
+* optional doctor.sh CI validation workflow for adopters ([#262](https://github.com/point-source/flywheel/issues/262)) ([fda7a83](https://github.com/point-source/flywheel/commit/fda7a83f7f219effb2c6fbbcb88d826862d2d6a8)), closes [#240](https://github.com/point-source/flywheel/issues/240) [#240](https://github.com/point-source/flywheel/issues/240) [#240](https://github.com/point-source/flywheel/issues/240) [#240](https://github.com/point-source/flywheel/issues/240) [#240](https://github.com/point-source/flywheel/issues/240) [#240](https://github.com/point-source/flywheel/issues/240) [#240](https://github.com/point-source/flywheel/issues/240) [#240](https://github.com/point-source/flywheel/issues/240) [#240](https://github.com/point-source/flywheel/issues/240) [#240](https://github.com/point-source/flywheel/issues/240) [#240](https://github.com/point-source/flywheel/issues/240) [#240](https://github.com/point-source/flywheel/issues/240) [#240](https://github.com/point-source/flywheel/issues/240) [#240](https://github.com/point-source/flywheel/issues/240) [#240](https://github.com/point-source/flywheel/issues/240) [#240](https://github.com/point-source/flywheel/issues/240)
+
 # [2.1.0-dev.11](https://github.com/point-source/flywheel/compare/v2.1.0-dev.10...v2.1.0-dev.11) (2026-06-19)
 
 
