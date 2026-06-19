@@ -3032,7 +3032,7 @@ and offer to install it, closing the one gap today's create/paste menu cannot.
 
 ## doctor.sh runs in adopter CI on demand §spec:doctor-ci-workflow
 
-*Status: not started*
+*Status: in progress*
 
 An adopter whose team **cannot or chooses not to run `gh auth login` locally** has a
 path to validate their flywheel setup: an optional, manually-triggered workflow,
