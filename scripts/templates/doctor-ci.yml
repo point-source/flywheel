@@ -112,5 +112,5 @@ jobs:
           # No positional owner/repo arg: run against the checked-out repo so the
           # on-disk checks run alongside the API checks (see Checkout step).
           # FLYWHEEL_TEMPLATES_BASE is exported above so doctor's own self-fetches
-          # (findings.sh, config linter) resolve to the same pinned version.
+          # (findings.sh, config linter) resolve to the same ref (@main).
           curl -fsSL "$DOCTOR_URL" | bash -s -- $flags
