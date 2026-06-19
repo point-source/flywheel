@@ -278,9 +278,12 @@ describe("init.sh App step — detected-credentials confirm/override (source-sli
     expect(callAt).toBeGreaterThan(introAt);
   });
 
-  it("defines and CALLS the read-only missing-pieces classifier in the step", () => {
-    expect(source).toContain("app_step_missing_pieces() {");
-    expect(source).toContain('missing="$(app_step_missing_pieces)"');
+  it("keeps detected creds only when BOTH pieces are present, else fills the missing one", () => {
+    // The confirm branch decides keep-vs-fill straight off the has_app_id/has_app_key
+    // locals; the per-piece prompting lives in prompt_existing_app_credentials.
+    expect(source).toContain(
+      'if [[ "$has_app_id" -eq 1 && "$has_app_key" -eq 1 ]]; then',
+    );
   });
 
   it("override path clears the locals so the cold paste prompts for BOTH pieces", () => {
@@ -301,6 +304,16 @@ describe("init.sh App step — detected-credentials confirm/override (source-sli
   });
 });
 
+// The canonical "both credentials present at repo level, App installed" stub —
+// the scenario the reuse boundary and the confirm path both exercise.
+const BOTH_PRESENT_REPO: Record<string, string> = {
+  STUB_OWNER_TYPE: "Organization",
+  STUB_REPO_VARS: "FLYWHEEL_GH_APP_ID",
+  STUB_REPO_APP_ID: "12345",
+  STUB_REPO_SECRETS: "FLYWHEEL_GH_APP_PRIVATE_KEY",
+  STUB_INSTALLED_APP_IDS: "12345",
+};
+
 // ===========================================================================
 // B. RUNTIME NON-INTERACTIVE — stable contract & no duplicate lookups
 // ===========================================================================
@@ -320,11 +333,7 @@ describe("init.sh App step — non-interactive runtime (reuse boundary)", () => 
           FLYWHEEL_TEST_HOOKS: "1",
           FLYWHEEL_DOCTOR_OVERRIDE: doctorStub,
           STUB_CALL_LOG: callLog,
-          STUB_OWNER_TYPE: "Organization",
-          STUB_REPO_VARS: "FLYWHEEL_GH_APP_ID",
-          STUB_REPO_APP_ID: "12345",
-          STUB_REPO_SECRETS: "FLYWHEEL_GH_APP_PRIVATE_KEY",
-          STUB_INSTALLED_APP_IDS: "12345",
+          ...BOTH_PRESENT_REPO,
         },
       });
       expect(
@@ -351,15 +360,7 @@ describe("init.sh App step — non-interactive runtime (reuse boundary)", () => 
   });
 
   it("backward-compat: both present → prints the existing already-set line, configured, exit 0", () => {
-    const r = runInit({
-      env: {
-        STUB_OWNER_TYPE: "Organization",
-        STUB_REPO_VARS: "FLYWHEEL_GH_APP_ID",
-        STUB_REPO_APP_ID: "12345",
-        STUB_REPO_SECRETS: "FLYWHEEL_GH_APP_PRIVATE_KEY",
-        STUB_INSTALLED_APP_IDS: "12345",
-      },
-    });
+    const r = runInit({ env: BOTH_PRESENT_REPO });
     try {
       const out = stripAnsi(r.stdout);
       expect(r.status, `stderr:\n${r.stderr}\nstdout:\n${out}`).toBe(0);
@@ -394,16 +395,8 @@ describe("init.sh App step — non-interactive runtime (reuse boundary)", () => 
 // C. RUNTIME INTERACTIVE — confirm / override / partial / org (Python pty)
 // ===========================================================================
 describe("init.sh App step — interactive confirm/override (Python pty)", () => {
-  const bothPresentRepo = {
-    STUB_OWNER_TYPE: "Organization",
-    STUB_REPO_VARS: "FLYWHEEL_GH_APP_ID",
-    STUB_REPO_APP_ID: "12345",
-    STUB_REPO_SECRETS: "FLYWHEEL_GH_APP_PRIVATE_KEY",
-    STUB_INSTALLED_APP_IDS: "12345",
-  };
-
   it("confirm a fully-detected App (Enter) → keeps creds, no cold menu, no re-prompt", () => {
-    const r = runInitPty({ answers: "\n", stub: bothPresentRepo });
+    const r = runInitPty({ answers: "\n", stub: BOTH_PRESENT_REPO });
     expect(r.exit, r.out).toBe(0);
     expect(r.out).toContain("Use the detected credentials? [Y/n]");
     expect(r.out).toContain("Keeping the detected credentials.");
@@ -416,7 +409,7 @@ describe("init.sh App step — interactive confirm/override (Python pty)", () =>
 
   it("override (n) → falls through to the cold create/paste/skip menu", () => {
     // n = override → scope prompt (org owner) answer 1 (repo) → menu answer 3 (skip).
-    const r = runInitPty({ answers: "n\n1\n3\n", stub: bothPresentRepo });
+    const r = runInitPty({ answers: "n\n1\n3\n", stub: BOTH_PRESENT_REPO });
     expect(r.exit, r.out).toBe(0);
     expect(r.out).toContain("Use the detected credentials? [Y/n]");
     expect(r.out).toContain("Pick a setup path:");

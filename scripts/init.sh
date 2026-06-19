@@ -1088,25 +1088,6 @@ app_step_render_detected() {
   fi
 }
 
-# app_step_missing_pieces — READ-ONLY classifier echoing exactly one token for the
-# App step's "I have an App already" path to branch on (§spec:init-app-step: that
-# path "reuses detection instead of demanding a fresh paste"). Consumes the
-# PREFLIGHT_* globals directly — reuse boundary, NO gh calls, no re-probe.
-# Token contract: none (both present) | key (id present, key missing) |
-# id (key present, id missing) | both (neither present). Always returns 0.
-app_step_missing_pieces() {
-  if [[ "$PREFLIGHT_HAS_APP_ID" -eq 1 && "$PREFLIGHT_HAS_APP_KEY" -eq 1 ]]; then
-    echo "none"
-  elif [[ "$PREFLIGHT_HAS_APP_ID" -eq 1 ]]; then
-    echo "key"
-  elif [[ "$PREFLIGHT_HAS_APP_KEY" -eq 1 ]]; then
-    echo "id"
-  else
-    echo "both"
-  fi
-  return 0
-}
-
 if [[ "$SKIP_SECRETS" -eq 1 ]]; then
   echo "  --skip-secrets set; not touching App credentials."
   # SCOPE is not yet resolved this early; default to the repo form (matches the
@@ -1148,7 +1129,7 @@ else
     # fills only the missing piece; override wipes the locals and falls through
     # to the cold create/paste/skip menu.
     echo
-    echo "  Pre-flight already found App credentials for this repo:"
+    echo "  Pre-flight already found App credentials:"
     app_step_render_detected
     echo
     read -r -u 3 -p "  Use the detected credentials? [Y/n] (default Y; N to override): " app_detected_choice
@@ -1169,8 +1150,7 @@ else
           SCOPE="$app_key_found_at"
         fi
         app_step_resolved=1
-        missing="$(app_step_missing_pieces)"
-        if [[ "$missing" == "none" ]]; then
+        if [[ "$has_app_id" -eq 1 && "$has_app_key" -eq 1 ]]; then
           echo "  Keeping the detected credentials."
           record_outcome "App credentials" configured
         else
