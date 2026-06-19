@@ -48,12 +48,6 @@
 #                         is installed org-wide. Requires an admin:org gh
 #                         token. Defaults to prompting interactively when
 #                         the owner is an Organization, otherwise `repo`.
-#   --override-release-conflict
-#                         proceed past a detected existing release system
-#                         (release-please / semantic-release / a hand-rolled
-#                         tag/release step in a workflow). Opt-in and
-#                         deliberate; never the default. Interactive only — a
-#                         non-interactive run still exits non-zero on the block.
 #
 # Dependencies: git, gh. (apply-rulesets.sh additionally needs jq + python3
 # with PyYAML.)
@@ -79,10 +73,6 @@ SCOPE=""
 # rulesets this script applies, otherwise semantic-release tag pushes are
 # rejected).
 CREATED_APP_ID=""
-# Opt-in only: set solely by --override-release-conflict. When 1, preflight_block
-# demotes the release_conflict block to an advisory warn (never inferred). Read
-# via indirect expansion (${!ovar}), so export to mark it used for shellcheck.
-export PREFLIGHT_OVERRIDE_release_conflict=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -92,7 +82,6 @@ while [[ $# -gt 0 ]]; do
     --strict) STRICT=1; shift ;;
     --required-checks) REQUIRED_CHECKS="$2"; shift 2 ;;
     --force) FORCE=1; shift ;;
-    --override-release-conflict) PREFLIGHT_OVERRIDE_release_conflict=1; shift ;;
     --version) FLYWHEEL_VERSION="$2"; shift 2 ;;
     --scope)
       case "$2" in
@@ -362,7 +351,7 @@ preflight_detect_credentials_app() {
 # §spec:preflight-release-conflict). Iterates the adopter's own workflow files
 # (skipping flywheel's scaffold and anything referencing point-source/flywheel)
 # and emits an instance + block per (file, producer-kind) match via
-# preflight_block. Deliberately minimal and biased to FALSE NEGATIVES: it covers
+# brownfield_finding. Deliberately minimal and biased to FALSE NEGATIVES: it covers
 # the systems that actually race flywheel (release-please, a separate
 # semantic-release, hand-rolled gh/git/npm producers in push/dispatch workflows)
 # rather than auditing every release tool — a missed exotic system is rare and
@@ -372,8 +361,8 @@ preflight_detect_credentials_app() {
 # block for a file's detected producer(s); all matches in a file share one block,
 # since a single conflicting file is one thing for the adopter to fix.
 _release_conflict_block() {
-  preflight_block release_conflict instance \
-    "$1 detected in $2 — it races Flywheel's tag/release creation. Remove or disable it, or re-run with --override-release-conflict."
+  brownfield_finding release_conflict yes instance block \
+    "$1 detected in $2 — it races Flywheel's tag/release creation. Remove or disable the conflicting workflow (see docs/adopter/setup.md §0.2), then re-run."
 }
 preflight_detect_release_conflict() {
   local path base producers
@@ -952,9 +941,8 @@ preflight_detect_gh_capability() {
 }
 
 # preflight_run — run every detector and print the pre-flight summary. Detectors
-# emit via the shared `finding` (and the preflight_block wrapper added with the
-# gate). The summary is the first thing the adopter sees; the gate acts on it
-# next.
+# emit via the shared `finding`. The summary is the first thing the adopter sees;
+# the gate acts on it next.
 preflight_run() {
   echo
   echo "Pre-flight checks:"
@@ -980,32 +968,15 @@ preflight_run() {
   fi
 }
 
-# preflight_block <override-token> <bucket> <message>
-# Emit a block finding for <message>, UNLESS the override for <override-token> is
-# active (env/var PREFLIGHT_OVERRIDE_<token>=1), in which case demote it to an
-# advisory warn. The override is opt-in and never the default
-# (SPEC §spec:preflight-gate). The --override-release-conflict flag sets the
-# token PREFLIGHT_OVERRIDE_release_conflict. <override-token> uses underscores
-# (e.g. release_conflict → flag --override-release-conflict).
-preflight_block() {
-  local token="$1" bucket="$2" message="$3"
-  local ovar="PREFLIGHT_OVERRIDE_${token}"
-  if [[ "${!ovar:-0}" -eq 1 ]]; then
-    finding "$bucket" warn "$message (overridden via --override-${token//_/-})"
-  else
-    finding "$bucket" block "$message"
-  fi
-}
-
 # preflight_gate — severity drives control flow. A block halts setup before any
-# prompt or file is written. Interactively the adopter must resolve it (or pass
-# an offered override flag) and re-run; non-interactively the run exits non-zero
-# with the reason. warn/info are advisory and never halt. Runs immediately after
-# preflight_run, before the version resolution / first prompt / first write.
+# prompt or file is written. Interactively the adopter must resolve it and
+# re-run; non-interactively the run exits non-zero with the reason. warn/info are
+# advisory and never halt. Runs immediately after preflight_run, before the
+# version resolution / first prompt / first write.
 preflight_gate() {
   [[ "$FINDINGS_BLOCK_COUNT" -gt 0 ]] || return 0
   if [[ "$INTERACTIVE" -eq 1 ]]; then
-    printf '\n\033[31mPre-flight halted\033[0m — %d blocking problem(s) above. Resolve them (or pass an offered override flag) and re-run; no files were written.\n' "$FINDINGS_BLOCK_COUNT" >&2
+    printf '\n\033[31mPre-flight halted\033[0m — %d blocking problem(s) above. Resolve them and re-run; no files were written.\n' "$FINDINGS_BLOCK_COUNT" >&2
   else
     printf '\n\033[31mPre-flight failed\033[0m — %d blocking problem(s) above. Non-interactive run; refusing to proceed on defaults. No files were written.\n' "$FINDINGS_BLOCK_COUNT" >&2
   fi

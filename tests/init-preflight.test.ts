@@ -35,16 +35,12 @@ import { writeDoctorStub } from "./helpers/doctorStub.js";
 // real repo path, SCRIPT_DIR resolves to <repoRoot>/scripts, so findings.sh and
 // the local presets are found on disk (no curl).
 //
-// NOTE on the override hook: scripts/init.sh ships `preflight_block` +
-// PREFLIGHT_OVERRIDE_<token> in this batch, which demotes a block to an advisory
-// warn when the override is active. There is, by design, no caller yet — its
-// only caller (the --override-release-conflict flag) arrives in Batch 4
-// (§spec:preflight-release-conflict). The FLYWHEEL_PREFLIGHT_INJECT seam emits
-// raw `finding` lines, not `preflight_block`, so there is no non-brittle
-// end-to-end path to drive the override from here without duplicating the
-// function body. The override's end-to-end test therefore lands in Batch 4
-// alongside its caller; findings.sh's vocabulary (which preflight_block builds
-// on) is unit-covered in tests/findings.test.ts.
+// NOTE: the old --override-release-conflict flag and its `preflight_block` /
+// PREFLIGHT_OVERRIDE_<token> "blind proceed" demotion were removed in batch
+// #233-2. A block can no longer be silenced: the release-conflict block now
+// hard-stops via brownfield_resolve to the manual brownfield guide
+// (§spec:brownfield-resolution). This file drives the gate directly via the
+// FLYWHEEL_PREFLIGHT_INJECT seam, which emits raw `finding` lines.
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 const initSh = join(repoRoot, "scripts/init.sh");

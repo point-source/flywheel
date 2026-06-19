@@ -24,9 +24,11 @@ import { writeDoctorStub } from "./helpers/doctorStub.js";
 // detector's grep logic, its push/workflow_dispatch trigger gating, and its
 // flywheel-*/point-source/flywheel self-exclusion end to end.
 //
-// The detector emits via preflight_block, which (per token) renders an `[instance]`
-// bucketed block finding — or, when --override-release-conflict is passed, demotes
-// it to an advisory warn carrying "overridden via --override-release-conflict".
+// The detector emits via brownfield_finding, which renders an `[instance]`
+// bucketed block finding. There is NO override: the block always stands and the
+// brownfield_resolve phase hard-stops it to the manual brownfield guide
+// (docs/adopter/setup.md §0) before any scaffold write. The old
+// --override-release-conflict "blind proceed" flag was removed in batch #233-2.
 //
 // Hermetic with NO real gh/network: a PATH-shadowed `gh` stub answers the single
 // `gh repo view` call, and SCAFFOLD_ARGS make init skip the releases/latest lookup,
@@ -271,15 +273,16 @@ describe("init.sh — existing release-system detection (end-to-end)", () => {
     }
   });
 
-  // Without the flag the block stands in BOTH TTY modes — only the wording
-  // differs (non-interactive "failed" vs interactive "halted"), and neither
-  // shows the override demotion. This is the "override is never the default"
-  // guarantee.
+  // The block stands in BOTH TTY modes — only the wording differs
+  // (non-interactive "failed" vs interactive "halted"). There is no override to
+  // demote it: brownfield_resolve hard-stops it to the manual §0 guide and the
+  // gate exits non-zero. The "overridden via …" guard proves the demotion path is
+  // truly gone.
   it.each([
     ["non-interactive", {}, /pre-flight failed/i],
     ["interactive", { FLYWHEEL_ASSUME_INTERACTIVE: "1" }, /Pre-flight halted/],
   ] as const)(
-    "without --override-release-conflict, release-please blocks (%s)",
+    "release-please conflict blocks and is never demoted (%s)",
     (_label, env, haltText) => {
       const r = runInit({
         args: SCAFFOLD_ARGS,
@@ -291,29 +294,11 @@ describe("init.sh — existing release-system detection (end-to-end)", () => {
         expect(r.status, `combined:\n${combined}`).not.toBe(0);
         expect(combined).toMatch(haltText);
         expect(combined).not.toContain("overridden via --override-release-conflict");
+        expect(combined).toContain("docs/adopter/setup.md §0");
         expect(existsSync(join(r.work, ".flywheel.yml"))).toBe(false);
       } finally {
         rmSync(r.work, { recursive: true, force: true });
       }
     },
   );
-
-  it("--override-release-conflict demotes the block to a warn and proceeds (interactive)", () => {
-    const r = runInit({
-      args: [...SCAFFOLD_ARGS, "--override-release-conflict"],
-      env: { FLYWHEEL_ASSUME_INTERACTIVE: "1" },
-      files: { ".github/workflows/release.yml": RELEASE_PLEASE_WF },
-    });
-    try {
-      const out = stripAnsi(r.stdout);
-      const combined = stripAnsi(r.stdout + r.stderr);
-      expect(r.status, `combined:\n${combined}`).toBe(0);
-      expect(combined).toContain("overridden via --override-release-conflict");
-      expect(combined).not.toContain("Pre-flight halted");
-      expect(out).toContain("pre-flight: no blockers.");
-      expect(existsSync(join(r.work, ".flywheel.yml"))).toBe(true);
-    } finally {
-      rmSync(r.work, { recursive: true, force: true });
-    }
-  });
 });
