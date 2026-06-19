@@ -1477,6 +1477,12 @@ explicit override flag; the override is a deliberate action, never a
 default (per §spec:preflight-gate). Non-interactively, the block exits
 non-zero like any other.
 
+The `--override-release-conflict` "proceed anyway" path described here is
+superseded by the brownfield resolution flow: the conflict is now removed
+inline with per-step confirmation, or hard-stopped to the manual guide,
+rather than overridden to layer flywheel on top
+(§spec:brownfield-resolution, §spec:brownfield-resolvers).
+
 **Why best-effort and minimal, biased toward false negatives.** The check
 covers the systems that would actually race flywheel's releases — not an
 exhaustive audit of every release tool in existence. It is deliberately
@@ -3196,3 +3202,372 @@ broken*. §req:doctor-ci-workflow-criteria §req:doctor-ci-workflow-constraints
 - *Passing a foreign `owner/repo` to doctor in the CI run* was rejected for the
   default path: it forces doctor's remote-only mode and skips the on-disk checks,
   narrowing coverage the checkout exists to widen.
+
+## Brownfield condition detection §spec:brownfield-detection
+
+*Status: not started*
+
+`init.sh`'s pre-flight pass detects the **full set of brownfield hazards** the
+manual §0 walkthrough enumerates, not only an existing release system. On a
+populated repository the pass surfaces each condition it can observe with the
+adopter's credentials, every one classified in the shared bucket × severity
+vocabulary (§spec:preflight-classification) and reported on the same findings
+surface as the existing detectors — it extends the detection spine rather than
+forking a parallel one. §req:init-brownfield §req:init-brownfield-criteria
+§req:init-brownfield-constraints
+
+The conditions detected, beyond the existing release-system check
+(§spec:preflight-release-conflict):
+
+- **Colliding version-tag shape.** Pre-existing tags whose shape would mislead
+  semantic-release's `v`-prefixed versioning: bare-semver tags (`3.4.2`) and
+  non-semver schemes (`release-2024-q4`, `stable-v1`). Bucket `instance`,
+  severity `block` — layering on top produces a silently mis-versioned first
+  release. Bare-semver is resolvable inline (§spec:brownfield-resolvers); a
+  non-semver scheme needs an adopter's baseline choice and is not.
+- **Branch protection missing the App as a bypass actor.** A protection rule or
+  ruleset on a managed branch whose PR-required / no-force-push / no-deletion
+  rules do not list the flywheel App as a bypass actor, so the release push and
+  back-merge push fail "changes must be made through a pull request". Bucket
+  `instance`, severity `block`; resolvable inline when the adopter's token can
+  read and edit protection.
+- **Signed-commit / signed-tag requirement.** A "require signed commits/tags"
+  rule on a managed branch that the App identity cannot satisfy. Bucket
+  `instance`, severity `block`; **not** auto-resolvable — disabling a security
+  rule is an adopter judgment call (§spec:brownfield-resolution hard-stop).
+- **History and open-PR awareness.** Legacy non-conventional commits or `[skip
+  ci]` in recent history that would distort the first release or suppress the
+  first promotion's workflows, and open PRs whose titles flywheel rewrites at
+  cutover. Reported as advisory `info` findings — flywheel cannot and should not
+  mutate history or others' PRs, so these inform rather than gate.
+
+**Why detection precedes any layering.** Today init detects only the
+release-system conflict and, for everything else the manual guide covers, layers
+flywheel on regardless — the hazard surfaces a release or two later as a stranded
+or mis-versioned release that is hard to trace back to onboarding. Detecting every
+observable hazard up front, in the pass that already runs before any prompt or
+write (§spec:preflight-gate), is what lets init resolve or hard-stop instead of
+layering blind. §req:init-brownfield §req:init-brownfield-stories
+
+**Why reuse the bucket × severity vocabulary.** The rest of the setup cluster
+already taught the adopter one language for "what is wrong"
+(§spec:preflight-classification). A brownfield hazard reads as the same kind of
+thing — bucketed by who fixes it and when, scaled by how bad it is — as any other
+pre-flight finding, so the adopter meets one vocabulary, and the completion
+summary (§spec:setup-completion-summary) can report brownfield outcomes in it
+without inventing a second. §req:init-brownfield-constraints
+
+**Why best-effort, biased to false negatives.** Like the release-conflict check,
+brownfield detection covers the conditions that actually break a flywheel release,
+not an exhaustive repository audit, and tolerates missing an exotic case rather
+than blocking a clean repo on a false positive. A missed hazard is still caught by
+`doctor.sh` or by the release itself; a false block is friction every adopter
+might hit. §req:init-brownfield-criteria §req:init-brownfield-constraints
+
+**Criteria.**
+
+- When `init.sh` runs on a populated repository, the pre-flight pass shall report
+  each observable brownfield hazard — colliding version-tag shape, branch
+  protection missing the App as a bypass actor, a signed-commit/tag requirement,
+  and (as advisory awareness) non-conventional / `[skip ci]` history and open PRs
+  flywheel rewrites — as a finding carrying a bucket and a severity.
+- Each brownfield finding shall use the same bucket {`local-env`, `instance`,
+  `config`} and severity {`block`, `warn`, `info`} names the existing pre-flight
+  detectors and `doctor.sh` use; no new vocabulary is introduced.
+- Bare-semver and non-semver version tags that would collide with semantic-release
+  shall be reported as `instance` + `block`; a branch-protection rule on a managed
+  branch lacking the App as a bypass actor shall be reported as `instance` +
+  `block`; a signed-commit/tag requirement shall be reported as `instance` +
+  `block`.
+- Non-conventional / `[skip ci]` history and open PRs subject to title rewrite
+  shall be reported as advisory `info` findings that never halt setup.
+- Detection shall be read-only and request no privilege beyond what setup already
+  needs; a condition the adopter's token cannot observe is reported as a
+  could-not-verify finding rather than asserted absent
+  (§spec:preflight-gh-capability, §spec:doctor-settings-read).
+- On a clean/greenfield repository the pass shall report no brownfield findings and
+  setup shall proceed exactly as before (§spec:brownfield-resolution greenfield
+  parity).
+
+**Scope and alternatives.**
+
+- *A separate brownfield-audit pass with its own output* was rejected: it would
+  split the findings surface and force a second vocabulary; brownfield detection
+  extends the existing spine.
+- *An exhaustive repository/tooling audit* was rejected for the same reason the
+  release-conflict check is bounded: false positives that block clean repos cost
+  more than the rare missed exotic case, which is caught downstream.
+- *Auto-resolving every detected condition* is out of scope here — detection is
+  read-only; which conditions are safely resolvable, and how, is
+  §spec:brownfield-resolution and §spec:brownfield-resolvers.
+
+## Brownfield resolution flow §spec:brownfield-resolution
+
+*Status: not started*
+
+`init.sh` gains a **resolution phase** that runs after the pre-flight detection
+pass and before any scaffold file is written. For each brownfield finding it can
+resolve safely (§spec:brownfield-resolvers), interactive setup *offers* the
+resolution inline — showing exactly what it changes before changing anything,
+proceeding only on an explicit per-step yes — rather than only flagging the
+condition or letting the adopter silence it with a blanket override. This is the
+first point at which `init.sh` mutates **pre-existing** repository state; until
+now it only ever wrote new scaffold files, so the phase is governed by a strict
+safety contract. §req:init-brownfield §req:init-brownfield-criteria
+§req:init-brownfield-constraints
+
+The contract, which holds for every brownfield mutation:
+
+- **Shown before applied.** Each offer displays the specific change — the exact
+  tags to create and push, the exact files/workflows to remove, the exact bypass
+  entry to add — before init touches anything.
+- **Explicit, per-step, opt-in.** init proceeds only on an explicit yes for that
+  one step. There is no bundled "fix everything" action; each hazard is confirmed
+  on its own. Declining one offer leaves that condition exactly as it was and the
+  rest of the run continues — accept some, decline others.
+- **Nothing destructive non-interactively.** A piped (`curl … | bash`) or CI run
+  performs **zero** mutations to existing tags, release config, or branch
+  protection. It degrades to detect-and-report, the same way init degrades its
+  other interactive prompts on a non-interactive shell
+  (§spec:init-credentials-prompt), and then the pre-flight gate's existing
+  non-interactive contract applies — an unresolved `block` exits non-zero with the
+  reason (§spec:preflight-gate).
+- **Idempotent and re-runnable.** A second run detects what the first resolved and
+  does not re-offer or double-apply it — it does not re-tag tags it already
+  created, nor re-prompt to remove files already gone (§spec:brownfield-detection
+  re-reads live state each run).
+- **No new privilege.** Resolution uses only the scopes init already requires.
+  Where a resolution needs a scope the adopter's token lacks — editing branch
+  protection needs repo-admin — init reports the limit
+  (§spec:preflight-gh-capability) and routes to the manual step, never silently
+  demanding a broader token, consistent with §spec:doctor-credential-clarity.
+
+**The hard-stop fallback replaces the blind override.** When init meets a
+brownfield `block` it cannot resolve safely on its own — an unrecognized or
+ambiguous release system, a condition that needs adopter judgment (a non-semver
+tag baseline, a signed-commit rule), or any destructive resolution that would be
+required on a non-interactive run — it **stops with a non-zero exit and routes the
+adopter to the manual §0 guide** rather than offering a flag that demotes the
+block and proceeds. The previous `--override-release-conflict` "proceed anyway"
+path — which let an adopter silence the one signal protecting them and layer
+flywheel on top of a live conflict — is superseded by this: the release-system
+hazard is now either *removed* inline (§spec:brownfield-resolvers) or
+*hard-stopped*, never overridden. §req:init-brownfield-criteria
+§req:init-brownfield-constraints
+
+**The completion summary reflects the brownfield outcome.** Each detected
+condition is recorded as resolved, declined, deferred, or hard-stopped, and flows
+into the end-of-run summary (§spec:setup-completion-summary) in the shared
+vocabulary — so an adopter knows which hazards were handled and which still need
+their hand before the first release. A condition the adopter declined is a
+deliberate deferral, not a failure (§spec:setup-exit-contract); an unresolved
+`block` keeps the verdict "incomplete". §req:init-brownfield-criteria
+§req:init-brownfield-stories
+
+**Greenfield parity.** On a fresh repository the detection pass finds no
+brownfield conditions, so the resolution phase is a no-op: no new prompts, no
+offers, no behavior difference. Brownfield code paths are reached only when
+brownfield state is actually present — the greenfield blast radius is zero.
+§req:init-brownfield-criteria §req:init-brownfield-constraints
+
+**Why offer-and-confirm rather than auto-fix or flag-only.** Auto-fixing
+pre-existing state without showing it would betray the adopter's trust at the most
+consequential moment of adoption; flag-only (today's behavior) leaves the adopter
+to fork onto a long manual checklist or, worse, to override and damage their repo.
+Showing each change and asking keeps the adopter in control while still doing the
+work for them — "automate as much as possible" bounded by "safely." The override
+flag is removed precisely because it inverted that bound: it automated *silencing
+the warning*, not *resolving the condition*. §req:init-brownfield
+§req:init-brownfield-stories
+
+**Why the safety net stays.** The guard #233 originally asked for is not deleted —
+it is demoted from the primary answer to the fallback. Automation handles the
+conditions it can handle safely; everything else hard-stops to the manual guide,
+which catches exactly the cases automation shall not touch.
+§req:init-brownfield-constraints
+
+**Criteria.**
+
+- For each brownfield condition it can resolve safely, interactive `init.sh` shall
+  offer the resolution, display the exact change before applying it, and apply it
+  only on an explicit per-step confirmation.
+- Declining any one offer shall leave that condition unchanged and allow the rest
+  of the run to continue; the adopter shall be able to accept some offers and
+  decline others.
+- A non-interactive or piped run shall perform no mutation to pre-existing tags,
+  release config, or branch protection; it shall report what it found and what an
+  interactive run would offer, and exit per the pre-flight gate's non-interactive
+  contract.
+- When `init.sh` meets a brownfield `block` it cannot resolve safely — an
+  unrecognized/ambiguous release system, a condition needing adopter judgment, or
+  a destructive resolution required on a non-interactive run — it shall exit
+  non-zero and route the adopter to the manual brownfield guide, and shall not
+  offer a flag that demotes the block and proceeds.
+- The `--override-release-conflict` blind-proceed path shall no longer be the
+  recommended or available escape from the release-system block; that block is
+  resolved inline or hard-stopped.
+- A re-run shall not re-offer or double-apply a resolution the previous run
+  completed.
+- A resolution that needs a scope the adopter's token lacks shall be reported as a
+  limit and routed to manual, never satisfied by silently demanding a broader
+  token.
+- The end-of-run summary shall name which brownfield conditions were detected and,
+  for each, whether it was resolved, declined/deferred, or hard-stopped, in the
+  same bucket × severity vocabulary as the rest of the summary.
+- On a greenfield repository `init.sh` shall reach no brownfield resolution path
+  and present no new prompts.
+
+**Scope and alternatives.**
+
+- *Keeping `--override-release-conflict` alongside the new flow* was rejected: a
+  blanket "proceed anyway" reintroduces the silent-layering failure the resolution
+  flow exists to prevent; the escape hatch is now removal-or-hard-stop.
+- *A single bundled "fix all brownfield issues" confirmation* was rejected:
+  bundling destructive mutations behind one yes hides what is being changed; each
+  mutation is confirmed on its own showing its own diff.
+- *Allowing destructive resolution on non-interactive runs via a force flag* was
+  rejected: an unattended run that can mutate existing tags or protection can
+  silently damage a populated repo; non-interactive degrades to detect-and-report.
+
+## Safe brownfield resolvers §spec:brownfield-resolvers
+
+*Status: not started*
+
+The resolution flow (§spec:brownfield-resolution) offers exactly three inline
+resolvers — one per brownfield condition flywheel can change without risking the
+adopter's existing state. Each shows its change in full before applying, runs only
+on an explicit yes, and favors a reversible mechanism. Conditions outside these
+three are detected and hard-stopped to the manual guide, never auto-resolved.
+§req:init-brownfield §req:init-brownfield-criteria §req:init-brownfield-stories
+
+- **Guided retag** for colliding version tags. When bare-semver tags (`3.4.2`)
+  that would collide with the `v`-prefixed scheme are detected, init offers a
+  guided retag: it displays the exact `old → v-old` list of tags it creates
+  and push, and performs it only after explicit confirmation. The retag is
+  **non-destructive** — it creates the `v`-prefixed tags and leaves the originals
+  in place, so nothing is lost and the adopter can prune the old tags later on
+  their own terms. Declining leaves all tags untouched and points to the manual
+  procedure. A **non-semver** scheme is not retagged: choosing a baseline version
+  is an adopter judgment call, so that case hard-stops to manual.
+- **Prior release-system removal.** When a recognized prior release system is
+  detected (release-please, a separate semantic-release, goreleaser, changesets,
+  or a hand-rolled tagging workflow), init offers to remove its specific config
+  files and workflows, listing the exact paths before removing them, and removes
+  only on confirmation via a mechanism that keeps the deletion recoverable from
+  git history. Removing the conflict is what replaces the old
+  `--override-release-conflict` layer-on-top behavior: two release systems never
+  run at once, and the adopter stays in control of the deletion. An
+  **unrecognized or ambiguous** producer is not removed — init hard-stops to
+  manual rather than guess what is safe to delete.
+- **App bypass-actor addition.** When a protection rule or ruleset on a managed
+  branch omits the flywheel App as a bypass actor on the PR-required /
+  no-force-push / no-deletion rules, init offers to add it, shows the exact rule
+  and the entry it adds, and edits via `gh` only on confirmation. The edit is
+  scoped to exactly the rules flywheel's release and back-merge pushes need, and
+  is reversible. A **signed-commit/tag requirement** is *not* auto-disabled —
+  weakening a security control is an adopter judgment call that hard-stops to
+  manual.
+
+**Security rationale for the bypass-actor edit.** Adding a bypass actor changes
+*who can bypass branch protection*, a security-relevant mutation, so it is held to
+the tightest form of the contract: the exact rule and entry are shown before any
+change; the edit is scoped to only the rules the App needs to bypass to push releases
+and back-merges, not a blanket exemption; it proceeds only on an explicit yes;
+it requires the adopter's own repo-admin token (init never escalates privilege —
+absent the scope it reports the limit and routes to manual,
+§spec:preflight-gh-capability, §spec:doctor-credential-clarity); and it is
+reversible. The adjacent destructive temptation — disabling a signed-commit rule
+so the App can push — is deliberately left to the adopter, because silently
+weakening a signing requirement is exactly the kind of judgment automation shall
+not make. §req:init-brownfield-constraints
+
+**Why these three and no more.** They are the brownfield conditions whose
+resolution is mechanical and safe given a showing-before-applying confirmation:
+additive retag, recoverable file removal, scoped reversible protection edit.
+Everything else the manual guide covers — non-semver baselines, signed-commit
+rules, history rewrites, others' open PRs — requires judgment or touches state
+flywheel should not mutate, and is detected-and-routed, not resolved.
+§req:init-brownfield-constraints
+
+**Criteria.**
+
+- When colliding bare-semver tags are detected, `init.sh` shall offer a guided
+  retag, display the exact `old → v-old` tags it creates and pushes, and create
+  and push them only after explicit confirmation; declining shall leave all tags
+  untouched and point to the manual procedure.
+- The retag shall not delete the original tags; it shall add the `v`-prefixed tags
+  alongside them.
+- A non-semver tag scheme shall not be auto-retagged; it shall hard-stop to the
+  manual procedure.
+- When a recognized prior release system is detected, `init.sh` shall list the
+  exact config files and workflows it would remove and remove them only on
+  confirmation, via a mechanism that leaves the deletion recoverable from git
+  history; an unrecognized or ambiguous release producer shall hard-stop to manual
+  rather than be removed.
+- When a managed branch's protection omits the App as a bypass actor, `init.sh`
+  shall show the exact rule and the bypass entry it would add and apply it only on
+  confirmation, scoped to the PR-required / no-force-push / no-deletion rules, and
+  only when the adopter's token holds the required admin scope; absent that scope
+  it shall report the limit and route to manual.
+- A signed-commit/tag requirement shall not be auto-disabled; it shall hard-stop
+  to the manual procedure.
+
+**Scope and alternatives.**
+
+- *Retag by moving/deleting the old tags* was rejected: deletion is destructive and
+  unnecessary — adding the `v`-prefixed tags resolves the collision while leaving
+  the adopter a reversible state.
+- *Auto-disabling signed-commit rules or removing unrecognized release tooling*
+  was rejected: both either weaken a security control or guess at what is safe to
+  delete; these hard-stop to the adopter.
+- *A blanket branch-protection exemption for the App* was rejected: the bypass is
+  scoped to only the rules flywheel's pushes require, limiting the blast radius of
+  the grant.
+
+## Brownfield-safe onboarding docs §spec:brownfield-docs
+
+*Status: not started*
+
+The README and `docs/adopter/setup.md` Quick start no longer route an adopter into
+a destructive layering before any check protects them. Today both open with an
+unconditional "pipe `init.sh` into bash" and only *afterwards* warn that an
+existing repo should skip the script — a top-down reader runs init against a
+populated repo before reading the warning meant to gate it (the #233 ordering
+defect). With `init.sh` now detecting brownfield state on **every** run and
+resolving-or-hard-stopping (§spec:brownfield-detection,
+§spec:brownfield-resolution), the documented one-command path is genuinely safe on
+any repository, and the docs are reconciled to say so consistently.
+§req:init-brownfield §req:init-brownfield-criteria §req:init-brownfield-stories
+
+**Why the docs and script shall agree on "is it safe to just run it".** The
+ordering defect is harmful only because the script could silently layer on top; an
+adopter who skimmed the README and ran the one-command start had already damaged
+their repo before reaching the warning. Once init itself gates every run on the
+brownfield check, the contradiction dissolves — the Quick start and the
+existing-repo guidance no longer disagree about whether running the script on a
+populated repo is safe. The manual §0 guide remains, in its reconciled form, as
+the reference for what init offers inline and as the destination the hard-stop
+routes to (and the §0 completion check already mirrors the script's verdict per
+§spec:setup-completion-docs-parity). §req:init-brownfield-constraints
+
+**Criteria.**
+
+- An adopter who follows the README / `docs/adopter/setup.md` Quick start
+  top-down shall not reach a state where `init.sh` has silently layered flywheel
+  onto a conflicting existing setup — verifiable by reading the onboarding docs in
+  order and by running `init.sh` in a populated repo.
+- The README and `docs/adopter/setup.md` Quick start and existing-repo sections
+  shall not contradict each other about whether running `init.sh` on a populated
+  repository is safe.
+- The manual brownfield guide shall remain as the reference for the resolutions
+  `init.sh` offers and as the destination the hard-stop fallback routes to.
+
+**Scope and alternatives.**
+
+- *Fixing only the doc ordering without changing the script* was rejected: a
+  reordered warning still depends on the adopter reading it before acting, whereas
+  detecting on every run protects the adopter regardless of reading order. The
+  durable fix is in the script; the docs are reconciled to match.
+- *Removing the manual guide now that init automates the steps* was rejected: it
+  is still the fallback the hard-stop routes to and the reference for what the
+  inline resolvers do.
