@@ -342,31 +342,50 @@ org_resource_visible_to_repo() {
 }
 
 bold "App-token credentials"
+# Reassurance appended to every non-pass credential outcome (skipped and
+# could-not-verify alike), defined once so the wording cannot drift between the
+# two sites. A credential that doctor couldn't see from this machine is NOT a
+# credential that's missing — keep the two states visibly distinct.
+cred_reassurance="a skipped or unverifiable credential check does not mean flywheel won't work; it means only that doctor could not verify that area from here"
 if [[ $skip_credentials -eq 1 ]]; then
-  note config "skipped (--skip-credentials) — caller is responsible for verifying FLYWHEEL_GH_APP_ID and FLYWHEEL_GH_APP_PRIVATE_KEY out of band"
+  note config "skipped (--skip-credentials) — caller is responsible for verifying FLYWHEEL_GH_APP_ID and FLYWHEEL_GH_APP_PRIVATE_KEY out of band; $cred_reassurance"
 else
   # FLYWHEEL_GH_APP_ID — repo level first, then org level.
+  # var_could_not_verify tracks the could-not-verify state: the repo list call
+  # failed (the common local case — an ordinary `gh auth login` token or an App
+  # installation token cannot list variables). That is a limit on the local
+  # token, not a missing variable, so it must NOT collapse into a "missing"
+  # block.
   found_var_at=""
+  var_could_not_verify=0
   if vars_json="$(gh api "repos/$REPO/actions/variables" 2>/dev/null)"; then
     if echo "$vars_json" | jq -e '.variables[] | select(.name == "FLYWHEEL_GH_APP_ID")' >/dev/null; then
       found_var_at="repo"
     fi
   else
-    fail local-env "could not list repo variables — listing requires an admin PAT (App installation tokens cannot list variables); re-run with 'gh auth login' as a repo admin, or pass --skip-credentials if invoking from CI that already minted an App token"
+    var_could_not_verify=1
   fi
-  if [[ -z "$found_var_at" ]]; then
+  # Only consult org level when the repo list SUCCEEDED-but-empty. If it failed
+  # for scope, the org call would fail the same way and add a guaranteed-failing
+  # request — skip it (mirrors §spec:doctor-settings-read branching on call
+  # success).
+  if [[ -z "$found_var_at" && $var_could_not_verify -eq 0 ]]; then
     if visibility="$(org_resource_visible_to_repo variables FLYWHEEL_GH_APP_ID)"; then
       found_var_at="org ($visibility)"
     fi
   fi
   if [[ -n "$found_var_at" ]]; then
     ok "FLYWHEEL_GH_APP_ID variable set ($found_var_at)"
+  elif [[ $var_could_not_verify -eq 1 ]]; then
+    warn local-env "could not verify FLYWHEEL_GH_APP_ID variable — listing variables requires an admin PAT (App installation tokens cannot list variables); this is a limit on the local token, not a defect in the repo. Re-run with 'gh auth login' as a repo admin, or pass --skip-credentials if invoking from CI that already minted an App token. $cred_reassurance"
   else
     fail config "FLYWHEEL_GH_APP_ID variable missing — set with: gh variable set FLYWHEEL_GH_APP_ID --body <app-id> --repo $REPO  (or --org $OWNER --visibility all for org-wide)"
   fi
 
   # FLYWHEEL_GH_APP_PRIVATE_KEY — repo level first, then org level.
+  # secret_could_not_verify mirrors var_could_not_verify above.
   found_secret_at=""
+  secret_could_not_verify=0
   if secrets_json="$(gh api "repos/$REPO/actions/secrets" 2>/dev/null)"; then
     if echo "$secrets_json" | jq -e '.secrets[] | select(.name == "FLYWHEEL_GH_APP_PRIVATE_KEY")' >/dev/null; then
       found_secret_at="repo"
@@ -375,15 +394,17 @@ else
       warn config "GH_PAT secret present — Flywheel does not use it; remove if it's left over from an older setup"
     fi
   else
-    fail local-env "could not list repo secrets — listing requires an admin PAT (App installation tokens cannot list secrets); re-run with 'gh auth login' as a repo admin, or pass --skip-credentials if invoking from CI that already minted an App token"
+    secret_could_not_verify=1
   fi
-  if [[ -z "$found_secret_at" ]]; then
+  if [[ -z "$found_secret_at" && $secret_could_not_verify -eq 0 ]]; then
     if visibility="$(org_resource_visible_to_repo secrets FLYWHEEL_GH_APP_PRIVATE_KEY)"; then
       found_secret_at="org ($visibility)"
     fi
   fi
   if [[ -n "$found_secret_at" ]]; then
     ok "FLYWHEEL_GH_APP_PRIVATE_KEY secret set ($found_secret_at)"
+  elif [[ $secret_could_not_verify -eq 1 ]]; then
+    warn local-env "could not verify FLYWHEEL_GH_APP_PRIVATE_KEY secret — listing secrets requires an admin PAT (App installation tokens cannot list secrets); this is a limit on the local token, not a defect in the repo. Re-run with 'gh auth login' as a repo admin, or pass --skip-credentials if invoking from CI that already minted an App token. $cred_reassurance"
   else
     fail config "FLYWHEEL_GH_APP_PRIVATE_KEY secret missing — Flywheel requires GitHub App tokens (PATs are not supported)"
   fi
