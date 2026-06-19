@@ -139,9 +139,13 @@ describe("brownfield resolution phase", () => {
   });
 
   it("brownfield block hard-stops to §0 (interactive) ⇒ exit != 0, routed to manual guide, writes nothing", () => {
+    // A NON-semver tag is resolvable=no — no resolver, so even interactively it
+    // hard-stops to the manual guide. (A bare-semver tag now reaches WS1's guided
+    // retag resolver interactively; that path is covered in
+    // tests/init-brownfield-resolvers.test.ts.)
     const r = runInit({
       args: SCAFFOLD_ARGS,
-      tags: ["3.4.2"],
+      tags: ["release-1.0"],
       env: { FLYWHEEL_ASSUME_INTERACTIVE: "1" },
     });
     try {

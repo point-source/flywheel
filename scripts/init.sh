@@ -485,6 +485,14 @@ preflight_detect_version_tag_shape() {
     # v-prefixed semver is greenfield-compatible — ignore.
     [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+ ]] && continue
     if [[ "$tag" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?$ ]]; then
+      # Idempotency: a bare-semver tag whose `v`-prefixed twin already exists in
+      # the gathered set (local + remote) is ALREADY resolved — the guided retag
+      # (§spec:brownfield-resolvers) is non-destructive and leaves the original in
+      # place, so without this skip a re-run after a successful retag would re-flag
+      # the same tag forever. Match against the deduped `tags` list with anchors.
+      if printf '%s\n' "$tags" | grep -qxF "v$tag"; then
+        continue
+      fi
       bare_semver+="$tag, "
     elif printf '%s' "$tag" | grep -qiE '^(release|stable|rel|ver|version)[-_/.]'; then
       non_semver+="$tag, "
@@ -1008,6 +1016,91 @@ brownfield_confirm() {
   local prompt="$1" reply=""
   read -r -u 3 -p "$prompt" reply
   [[ "$reply" =~ ^(y|Y|yes)$ ]]
+}
+
+# brownfield_resolver_tag_shape_bare_semver — the GUIDED RETAG resolver
+# (SPEC.md §spec:brownfield-resolvers "Guided retag"). Implements the WS0 RESOLVER
+# CONTRACT (see brownfield_resolve below): re-derive from LIVE state, show the full
+# change, confirm via brownfield_confirm, return 0=applied / 1=declined / 2=unable.
+#
+# The change is NON-DESTRUCTIVE: for each colliding bare-semver tag X (3.4.2, 2.0)
+# it CREATES `vX` pointing at the same commit and pushes it, NEVER deleting or
+# moving X. The adopter can prune the originals later on their own terms.
+#
+# The detector already filters out any X whose `vX` exists (idempotency), but this
+# re-derives independently from live state and applies the same filter defensively,
+# so a stale registry message can never make it create a duplicate.
+brownfield_resolver_tag_shape_bare_semver() {
+  local tags tag bare pairs="" had_any=0
+  # Re-derive the tag set EXACTLY as the detector does: local tags, plus remote
+  # tags when REPO is resolved (best-effort, errors swallowed), deduped.
+  tags="$(git tag -l 2>/dev/null || true)"
+  if [[ -n "${REPO:-}" ]]; then
+    local remote_tags
+    remote_tags="$(gh api "repos/$REPO/tags" --paginate -q '.[].name' 2>/dev/null || true)"
+    tags="$(printf '%s\n%s\n' "$tags" "$remote_tags" | sort -u)"
+  fi
+
+  # Build the X → vX pair list, skipping any X whose vX already exists (resolved).
+  while IFS= read -r tag; do
+    [[ -n "$tag" ]] || continue
+    [[ "$tag" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?$ ]] || continue
+    had_any=1
+    if printf '%s\n' "$tags" | grep -qxF "v$tag"; then
+      continue   # vX already exists — already retagged.
+    fi
+    pairs+="$tag"$'\n'
+  done <<<"$tags"
+
+  # Nothing left to do (all bare tags already have their v-twin) — treat as a
+  # resolved no-op so the gate stops counting the block. The detector normally
+  # prevents reaching here, but a stale message must not be a false hard-stop.
+  if [[ -z "$pairs" ]]; then
+    if [[ "$had_any" -eq 1 ]]; then
+      printf '  Bare-semver tags already retagged with a v-prefix — nothing to do.\n'
+    fi
+    return 0
+  fi
+
+  # SHOW the exact change in full BEFORE applying (shown-before-applied contract).
+  printf '  Guided retag — these bare-semver tags collide with the v-prefixed scheme.\n'
+  printf '  This is NON-DESTRUCTIVE: the v-prefixed tags are added alongside the\n'
+  printf '  originals (which are kept); you can prune the originals later yourself.\n'
+  while IFS= read -r bare; do
+    [[ -n "$bare" ]] || continue
+    printf '    %s -> v%s\n' "$bare" "$bare"
+  done <<<"$pairs"
+
+  if ! brownfield_confirm "  Create and push these v-prefixed tags? [y/N] "; then
+    return 1   # DECLINED — dispatcher prints the manual pointer; change nothing.
+  fi
+
+  # APPLY: for each pair create vX at the same commit as X, then push it. NEVER
+  # delete or move X. A push failure (no origin / no network / no perms) routes to
+  # manual: naming what was created locally but not pushed (no false success).
+  local created="" failed=0
+  while IFS= read -r bare; do
+    [[ -n "$bare" ]] || continue
+    # git tag vX X — point the v-tag at the same commit as the bare tag.
+    if ! git tag "v$bare" "$bare" 2>/dev/null; then
+      # Already created on a prior partial run, or X resolved away — skip safely.
+      git rev-parse -q --verify "refs/tags/v$bare" >/dev/null 2>&1 || { failed=1; continue; }
+    fi
+    if git push origin "v$bare" >/dev/null 2>&1; then
+      created+="${created:+, }v$bare"
+    else
+      failed=1
+      printf '  Created v%s locally but could not push it to origin.\n' "$bare"
+    fi
+  done <<<"$pairs"
+
+  if [[ "$failed" -eq 1 ]]; then
+    printf '  Push the remaining v-prefixed tag(s) yourself (check `origin` and your push access), then re-run.\n'
+    return 2   # UNABLE — route to manual; do not claim success.
+  fi
+
+  printf '  Created and pushed v-prefixed tag(s): %s. Originals kept.\n' "$created"
+  return 0   # APPLIED.
 }
 
 # brownfield_resolve — the resolution phase (SPEC.md §spec:brownfield-resolution).
