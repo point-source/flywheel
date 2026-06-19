@@ -3205,7 +3205,7 @@ broken*. §req:doctor-ci-workflow-criteria §req:doctor-ci-workflow-constraints
 
 ## Brownfield condition detection §spec:brownfield-detection
 
-*Status: not started*
+*Status: complete*
 
 `init.sh`'s pre-flight pass detects the **full set of brownfield hazards** the
 manual §0 walkthrough enumerates, not only an existing release system. On a
