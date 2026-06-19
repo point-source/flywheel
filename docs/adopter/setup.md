@@ -106,7 +106,9 @@ This is the manual mirror of the outcome summary `init.sh` prints at the end of 
 
 ## 1. Create a GitHub App
 
-Flywheel uses a GitHub App installation token. Personal Access Tokens are not supported — they don't reliably propagate the cross-workflow trigger semantics Flywheel relies on (in particular, native auto-merge enable and downstream workflow firing on bot-created PRs).
+A GitHub App is how the flywheel workflows act on this repo as a bot: push releases and tags, open and merge promotion PRs, and apply labels. The permissions it needs follow directly from that work (the list below). The App is a **permanent dependency** — used on every workflow run for the life of the adoption, not one-time install scaffolding to delete later. Changing it later means rotating its credential or revoking the App.
+
+**Why an App and not a personal access token?** Flywheel registers the App as an *Integration*-type bypass actor in the branch/tag rulesets so the bot can push releases and tags to protected branches, and only a GitHub App can be that kind of bypass actor — a PAT cannot stand in. A PAT would also tie the automation to one person's account and rate limit, act as that person rather than a bot in the audit trail, and live as a long-lived manually rotated secret instead of a token minted fresh per run. (PATs also don't reliably propagate the cross-workflow trigger semantics Flywheel relies on — in particular, native auto-merge enable and downstream workflow firing on bot-created PRs.) Personal Access Tokens are not supported.
 
 **Fastest path: let `init.sh` do it.** The quick-start command (§Quick start) opens a browser to GitHub's App-creation page pre-populated with the required permissions, captures the credentials on a localhost callback, and writes the App ID as a repo Variable + the private key as a repo Secret — about 30 seconds end to end. The only remaining manual step is clicking "Install" on the resulting App page to scope it to your repo. If that's all you need, skip the rest of this section.
 

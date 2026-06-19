@@ -122,7 +122,7 @@ workflow_run: build completed
 
 ## Permissions
 
-Flywheel mints its own installation token from the GitHub App credentials you supply via the `app-id` / `app-private-key` inputs. The App needs these scopes:
+A GitHub App is how the flywheel workflows act on your repo as a bot — push releases and tags, open and merge promotion PRs, apply labels — and Flywheel mints its own installation token from the App credentials you supply via the `app-id` / `app-private-key` inputs. The App is a permanent dependency used on every workflow run, not install-time scaffolding to remove later. The work above maps directly onto these scopes:
 
 | Scope          | Purpose                                               |
 | -------------- | ----------------------------------------------------- |
@@ -132,7 +132,9 @@ Flywheel mints its own installation token from the GitHub App credentials you su
 | Checks: r/w    | Posting the `flywheel/conventional-commit` check      |
 | Metadata: read | Required for any token interacting with a repo        |
 
-Adopters store `FLYWHEEL_GH_APP_ID` as a repo Variable (it's not sensitive — the App ID is printed on the App's settings page) and `FLYWHEEL_GH_APP_PRIVATE_KEY` as a repo Secret, and pass them straight into the action — no separate `actions/create-github-app-token` step. Personal Access Tokens are not supported (they don't reliably propagate the cross-workflow trigger semantics Flywheel relies on); `secrets.GITHUB_TOKEN` is similarly insufficient (it cannot trigger downstream workflows from PRs it creates).
+Adopters store `FLYWHEEL_GH_APP_ID` as a repo Variable (it's not sensitive — the App ID is printed on the App's settings page) and `FLYWHEEL_GH_APP_PRIVATE_KEY` as a repo Secret, and pass them straight into the action — no separate `actions/create-github-app-token` step.
+
+Why an App and not a personal access token? Flywheel registers the App as an *Integration*-type bypass actor in the branch/tag rulesets so the bot can push releases and tags to protected branches, and only a GitHub App can be that bypass actor — a PAT cannot stand in. A PAT would also tie the automation to one person's account and rate limit and live as a long-lived manual secret rather than a token minted fresh per run, and it doesn't reliably propagate the cross-workflow trigger semantics Flywheel relies on. Personal Access Tokens are not supported; `secrets.GITHUB_TOKEN` is similarly insufficient (it cannot trigger downstream workflows from PRs it creates).
 
 ## Inputs and outputs
 

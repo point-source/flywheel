@@ -1023,6 +1023,32 @@ create_app_via_manifest() {
   return 0
 }
 
+# app_install_url — the GitHub org-installations settings page where an existing
+# org-level flywheel App is added to this repo. Single source for the URL shared
+# by the interactive guided prompt (install_app_on_repo) and the recorded finish
+# command (app_install_finish_cmd), so a GitHub URL change is a one-line edit.
+app_install_url() {
+  printf '%s' "https://github.com/organizations/$OWNER/settings/installations"
+}
+
+# install_app_on_repo — route the adopter to install an already-existing org-level
+# flywheel App onto THIS repo: the one action that lets its tokens act here
+# (§spec:init-app-step, "exists at the org level but is not installed"). Consumes
+# PREFLIGHT_* globals + OWNER/REPO; issues NO gh probes (the reuse boundary). The
+# caller (app_step_render_detected + the not-installed prompt) has already named
+# the detected App and the not-installed state, so this prints only the action.
+install_app_on_repo() {
+  echo
+  echo "  Install the existing App on this repo:"
+  echo "    Open: $(app_install_url)"
+  echo "    Find the flywheel App, click Configure, add $REPO under 'Only select repositories', and Save."
+  echo "    This is the one step that lets the App mint tokens for $REPO."
+  if [[ "$INTERACTIVE" -eq 1 ]]; then
+    read -r -u 3 -p "  Press ENTER once the App is installed on $REPO..."
+  fi
+  return 0
+}
+
 prompt_existing_app_credentials() {
   cat <<EOF
   Paste the Flywheel GitHub App's shared credentials (the App's own identity,
@@ -1034,10 +1060,19 @@ prompt_existing_app_credentials() {
   Required permissions: Contents r/w, Pull requests r/w, Issues r/w,
   Checks r/w, Metadata r. Install on $REPO.
 EOF
+  # Tri-state result so callers record an honest outcome:
+  #   0 = every requested piece was written            (configured)
+  #   1 = a gh WRITE failed                            (hard error — fail loudly)
+  #   2 = a piece was deliberately skipped/not provided (defer, warn severity)
+  # The old single "success" return reported a skip as 0, so a caller recorded
+  # `configured` while the secret was still unset — finish_existing_app_creds now
+  # maps these three states to configured / failed-block / deferred-warn.
+  local skipped=0
   if [[ "$has_app_id" -eq 0 ]]; then
     read -r -u 3 -p "  App ID (numeric, stored as the FLYWHEEL_GH_APP_ID Variable): " app_id
     if [[ -z "$app_id" ]]; then
       echo "  empty App ID — skipping FLYWHEEL_GH_APP_ID variable."
+      skipped=1
     else
       CREATED_APP_ID="$app_id"
       write_app_id_var "$app_id" || {
@@ -1051,8 +1086,10 @@ EOF
     read -r -u 3 -p "  Path to PEM private-key file (stored as the FLYWHEEL_GH_APP_PRIVATE_KEY Secret): " pem_path
     if [[ -z "$pem_path" ]]; then
       echo "  empty path — skipping FLYWHEEL_GH_APP_PRIVATE_KEY secret."
+      skipped=1
     elif [[ ! -f "$pem_path" ]]; then
       echo "  error: PEM file not found at '$pem_path' — skipping FLYWHEEL_GH_APP_PRIVATE_KEY secret." >&2
+      skipped=1
     else
       write_app_key_secret < "$pem_path" || {
         echo "  error: could not set FLYWHEEL_GH_APP_PRIVATE_KEY secret at scope=$SCOPE." >&2
@@ -1061,6 +1098,8 @@ EOF
       echo "  set FLYWHEEL_GH_APP_PRIVATE_KEY secret (scope=$SCOPE)."
     fi
   fi
+  [[ "$skipped" -eq 0 ]] && return 0
+  return 2
 }
 
 # app_creds_finish_cmd <scope> — emit the exact gh commands that set the App
@@ -1073,6 +1112,93 @@ app_creds_finish_cmd() {
     printf '%s' "gh variable set FLYWHEEL_GH_APP_ID --body '<your-app-id>' --org $OWNER --visibility all && gh secret set FLYWHEEL_GH_APP_PRIVATE_KEY < /path/to/private-key.pem --org $OWNER --visibility all"
   else
     printf '%s' "gh variable set FLYWHEEL_GH_APP_ID --body '<your-app-id>' --repo $REPO && gh secret set FLYWHEEL_GH_APP_PRIVATE_KEY < /path/to/private-key.pem --repo $REPO"
+  fi
+}
+
+# app_install_finish_cmd — single source of truth for the install-this-App
+# instruction recorded/printed when an org-level flywheel App exists but is not
+# installed on THIS repo (§spec:init-app-step, "exists at the org level but is
+# not installed"). The credentials are already set; the missing action is
+# installing the App on the repo so its tokens can act here. $REPO/$OWNER expand
+# at call time, matching app_creds_finish_cmd.
+app_install_finish_cmd() {
+  printf '%s' "Install the existing flywheel App on $REPO: open $(app_install_url) , Configure the App, and add $REPO under 'Only select repositories'."
+}
+
+# app_step_render_detected — READ-ONLY summary of what the pre-flight pass already
+# found, for showing the adopter at the App step (§spec:init-app-step: "the step
+# reflects what pre-flight already found rather than starting cold"). Consumes the
+# PREFLIGHT_* globals directly — it is the reuse boundary, so it issues NO gh
+# calls and never re-probes. Uses the same vocabulary as pre-flight/doctor
+# (FLYWHEEL_GH_APP_ID variable, FLYWHEEL_GH_APP_PRIVATE_KEY secret, repo/org
+# levels). Output is indented two spaces to match the surrounding echo style.
+app_step_render_detected() {
+  if [[ -n "$PREFLIGHT_APP_ID_VALUE" ]]; then
+    echo "  Detected App ID ${PREFLIGHT_APP_ID_VALUE} (${PREFLIGHT_APP_ID_AT}-level)."
+  fi
+  if [[ "$PREFLIGHT_HAS_APP_ID" -eq 1 ]]; then
+    echo "  FLYWHEEL_GH_APP_ID variable: found (${PREFLIGHT_APP_ID_AT}-level)"
+  else
+    echo "  FLYWHEEL_GH_APP_ID variable: missing"
+  fi
+  if [[ "$PREFLIGHT_HAS_APP_KEY" -eq 1 ]]; then
+    echo "  FLYWHEEL_GH_APP_PRIVATE_KEY secret: found (${PREFLIGHT_APP_KEY_AT}-level)"
+  else
+    echo "  FLYWHEEL_GH_APP_PRIVATE_KEY secret: missing"
+  fi
+  # Both present but at different levels: workflows read the repo-level value first,
+  # so warn here too (not only on the non-interactive path) to keep one account of
+  # the split-level precedence across every surface (§spec:init-app-step).
+  if [[ "$PREFLIGHT_HAS_APP_ID" -eq 1 && "$PREFLIGHT_HAS_APP_KEY" -eq 1 \
+        && "$PREFLIGHT_APP_ID_AT" != "$PREFLIGHT_APP_KEY_AT" ]]; then
+    echo "  Split levels — workflows will prefer the repo-level value when both exist."
+  fi
+}
+
+# finish_existing_app_creds <finish-cmd> — run prompt_existing_app_credentials for
+# whatever piece is missing and record the outcome from its tri-state result:
+#   complete    → configured
+#   skipped     → deferred (warn): the adopter chose to finish later, so the run
+#                 stays green (only --strict elevates it) and the summary carries
+#                 the finishing command instead of a false "configured"
+#   write error → failed (block): a real gh failure fails the run loudly
+# Single source for this prompt-then-record sequence, shared by the detected-creds
+# partial path and the cold create/paste menu so the three can never diverge.
+finish_existing_app_creds() {
+  local finish_cmd="$1" rc=0
+  # `&& rc=0 || rc=$?` keeps the non-zero tri-state returns from tripping `set -e`
+  # (the function sits on the left of `&&`, which errexit exempts).
+  prompt_existing_app_credentials && rc=0 || rc=$?
+  case "$rc" in
+    0) record_outcome "App credentials" configured ;;
+    2) record_outcome "App credentials" deferred config warn "$finish_cmd" ;;
+    *) record_outcome "App credentials" failed config block "$finish_cmd" ;;
+  esac
+}
+
+# app_keep_detected — keep the credentials pre-flight already found and record
+# the outcome. SCOPE is where any missing piece gets written: if the App ID is
+# present, write the key beside it; if the App ID is the missing piece, write it
+# at repo level — a repo-scoped variable never needs an admin:org token, so an
+# under-scoped adopter can still finish (inheriting the key's org level would
+# force admin:org for the id write). Shared by the confirm ("use the detected
+# credentials") path and the install-on-repo path so the record_outcome logic
+# lives in exactly one place. Sets app_step_resolved=1.
+app_keep_detected() {
+  if [[ "$has_app_id" -eq 1 ]]; then
+    SCOPE="$app_id_found_at"
+  else
+    SCOPE="repo"
+  fi
+  app_step_resolved=1
+  if [[ "$has_app_id" -eq 1 && "$has_app_key" -eq 1 ]]; then
+    echo "  Keeping the detected credentials."
+    record_outcome "App credentials" configured
+  else
+    # Partial: prompt only for the missing piece (prompt_existing_app_credentials
+    # guards each prompt on has_app_id / has_app_key, so the present piece is never
+    # re-pasted) and record honestly via the shared finisher.
+    finish_existing_app_creds "$(app_creds_finish_cmd "$SCOPE")"
   fi
 }
 
@@ -1091,40 +1217,107 @@ else
   has_app_id="$PREFLIGHT_HAS_APP_ID"; has_app_key="$PREFLIGHT_HAS_APP_KEY"
   app_id_found_at="$PREFLIGHT_APP_ID_AT"; app_key_found_at="$PREFLIGHT_APP_KEY_AT"
 
-  if [[ "$has_app_id" -eq 1 && "$has_app_key" -eq 1 ]]; then
-    if [[ "$app_id_found_at" == "$app_key_found_at" ]]; then
-      echo "  FLYWHEEL_GH_APP_ID variable + FLYWHEEL_GH_APP_PRIVATE_KEY secret already set ($app_id_found_at-level)."
-    else
-      echo "  FLYWHEEL_GH_APP_ID set at ${app_id_found_at}-level, FLYWHEEL_GH_APP_PRIVATE_KEY at ${app_key_found_at}-level — workflows will prefer the repo-level value when both exist."
-    fi
-    record_outcome "App credentials" configured
-  elif [[ "$INTERACTIVE" -eq 0 ]]; then
-    # Derive the displayed command from app_creds_finish_cmd so the command form
-    # lives in exactly one place (it is also what gets recorded below). The
-    # surrounding wording names the App's two shared values (Variable + Secret)
-    # and where they live, per §spec:init-credentials-prompt.
-    app_creds_cmd="$(app_creds_finish_cmd "$SCOPE")"
-    echo "  non-interactive shell — skipping App-credential prompts. Set the Flywheel"
-    echo "  GitHub App's two shared values manually — the FLYWHEEL_GH_APP_ID Variable and"
-    echo "  the FLYWHEEL_GH_APP_PRIVATE_KEY Secret, under Settings → Secrets and variables → Actions:"
-    echo "    $app_creds_cmd"
-    record_outcome "App credentials" deferred config warn "$app_creds_cmd"
-  else
-    # Inside this else exactly one of two cases holds: exactly one value is
-    # already present (partial — both-present was handled above), or neither
-    # is present. Distinguish them so partial state prompts only for the gap.
-    partial=0
-    if [[ "$has_app_id" -eq 1 || "$has_app_key" -eq 1 ]]; then
-      partial=1
-      # Co-location default: with no explicit --scope, write the missing value
-      # at the same scope as the present one so both creds live together. An
-      # explicit --scope still wins (only set SCOPE when empty); never relocate
-      # the already-present value.
-      if [[ -z "$SCOPE" ]]; then
-        if [[ "$has_app_id" -eq 1 ]]; then SCOPE="$app_id_found_at"; else SCOPE="$app_key_found_at"; fi
+  if [[ "$INTERACTIVE" -eq 0 ]]; then
+    # Non-interactive: no prompts, ever. A complete, installed setup reports as
+    # configured; anything missing — a credential piece or the repo install —
+    # defers with the manual finishing command(s). The not-installed case
+    # deliberately defers rather than reporting configured: an org App that is not
+    # installed on this repo cannot mint tokens here, so "configured" would be
+    # dishonest (a behavior change from the old unconditional "both set →
+    # configured"; §spec:init-app-step, "non-interactive and piped runs").
+    if [[ "$PREFLIGHT_APP_INSTALLED" == "no" ]]; then
+      # Org-level App detected but NOT installed on this repo. Non-interactively we
+      # can't run the guided install (install_app_on_repo reads from a prompt), so
+      # print the manual install action and defer. PREFLIGHT_APP_INSTALLED=="no"
+      # only occurs with has_app_id=1, but the private-key secret may still be
+      # missing — surface that finishing command too, so the adopter is not told to
+      # install an App whose key is not even set.
+      app_install_cmd="$(app_install_finish_cmd)"
+      echo "  non-interactive shell — the org App is not installed on $REPO. Finish manually:"
+      echo "    $app_install_cmd"
+      if [[ "$has_app_key" -eq 0 ]]; then
+        app_creds_cmd="$(app_creds_finish_cmd "$app_id_found_at")"
+        echo "  The FLYWHEEL_GH_APP_PRIVATE_KEY secret is also missing — set it too:"
+        echo "    $app_creds_cmd"
+        record_outcome "App credentials" deferred config warn "$app_install_cmd ; $app_creds_cmd"
+      else
+        record_outcome "App credentials" deferred config warn "$app_install_cmd"
       fi
+    elif [[ "$has_app_id" -eq 1 && "$has_app_key" -eq 1 ]]; then
+      if [[ "$app_id_found_at" == "$app_key_found_at" ]]; then
+        echo "  FLYWHEEL_GH_APP_ID variable + FLYWHEEL_GH_APP_PRIVATE_KEY secret already set ($app_id_found_at-level)."
+      else
+        echo "  FLYWHEEL_GH_APP_ID set at ${app_id_found_at}-level, FLYWHEEL_GH_APP_PRIVATE_KEY at ${app_key_found_at}-level — workflows will prefer the repo-level value when both exist."
+      fi
+      record_outcome "App credentials" configured
+    else
+      # Derive the displayed hint from app_creds_finish_cmd so the command form
+      # lives in exactly one place (it is also what gets recorded below).
+      app_creds_cmd="$(app_creds_finish_cmd "$SCOPE")"
+      echo "  non-interactive shell — skipping App-credential prompts. Set the Flywheel"
+      echo "  GitHub App's two shared values manually — the FLYWHEEL_GH_APP_ID Variable and"
+      echo "  the FLYWHEEL_GH_APP_PRIVATE_KEY Secret, under Settings → Secrets and variables → Actions:"
+      echo "    $app_creds_cmd"
+      record_outcome "App credentials" deferred config warn "$app_creds_cmd"
     fi
+  elif [[ "$has_app_id" -eq 1 || "$has_app_key" -eq 1 ]]; then
+    # Interactive AND pre-flight detected at least one credential: present the
+    # detection as a confirm-or-override default rather than silently deciding
+    # for the adopter (§spec:init-app-step). Confirm reuses what was found and
+    # fills only the missing piece; override wipes the locals and falls through
+    # to the cold create/paste/skip menu.
+    echo
+    echo "  Pre-flight already found App credentials:"
+    app_step_render_detected
+    echo
+    if [[ "$PREFLIGHT_APP_INSTALLED" == "no" ]]; then
+      # Org-level App detected but NOT installed on this repo (§spec:init-app-step,
+      # "exists at the org level but is not installed"): the creds exist yet the
+      # App cannot mint tokens for $REPO. Surface the install action as the primary
+      # recommended fix instead of the plain confirm; "use anyway" and "override"
+      # remain available. PREFLIGHT_APP_INSTALLED=="no" only occurs with
+      # has_app_id=1, so the detected-creds vocabulary above still applies.
+      echo "  This App is not installed on $REPO, so its tokens cannot act here yet."
+      echo "  Pick how to proceed:"
+      echo "    1) Install the existing App on this repo (recommended)"
+      echo "    2) Use the detected credentials anyway"
+      echo "    3) Override — create or paste different credentials"
+      read -r -u 3 -p "  Selection [1/2/3] (default 1): " app_installed_choice
+      case "${app_installed_choice:-1}" in
+        2)
+          # Use anyway: same effect as confirming the detection below.
+          app_keep_detected
+          ;;
+        3)
+          # Override: clear the locals so the cold paste path prompts for BOTH
+          # pieces, then fall through to the cold create/paste/skip menu below.
+          has_app_id=0; has_app_key=0
+          ;;
+        *)
+          # Install (recommended): route the adopter to install the existing App
+          # on this repo, then keep the already-detected credentials.
+          install_app_on_repo
+          app_keep_detected
+          ;;
+      esac
+    else
+      read -r -u 3 -p "  Use the detected credentials? [Y/n] (default Y; N to override): " app_detected_choice
+      case "${app_detected_choice:-Y}" in
+        [Nn]*)
+          # Override: adopter wants to supply credentials from scratch. Clear the
+          # locals so the cold paste path prompts for BOTH pieces, then fall
+          # through to the cold menu below (its copy is pinned by tests).
+          has_app_id=0; has_app_key=0
+          ;;
+        *)
+          # Confirm: keep what pre-flight found (shared with the install path).
+          app_keep_detected
+          ;;
+      esac
+    fi
+  fi
 
+  if [[ "$INTERACTIVE" -eq 1 && -z "${app_step_resolved:-}" ]]; then
     # Resolve SCOPE before the App-source prompt so write_app_id_var /
     # write_app_key_secret know where to write. If the owner is a User
     # account, org-level vars/secrets don't exist on GitHub at all, so
@@ -1165,68 +1358,49 @@ else
     # resolved SCOPE so it's copy-pasteable.
     app_creds_cmd="$(app_creds_finish_cmd "$SCOPE")"
 
-    if [[ "$partial" -eq 1 ]]; then
-      # Exactly one credential exists. Report what's set + where, name the gap,
-      # and prompt only for the missing value (writing it at the co-located /
-      # resolved $SCOPE). The create/paste/skip menu is suppressed: "Create the
-      # App for me" mints a NEW App and writes BOTH values unconditionally, so
-      # it can't coherently fill a single gap without splitting/overwriting the
-      # existing credential. prompt_existing_app_credentials guards each write on
-      # has_app_id==0 / has_app_key==0, so it touches only the missing value.
-      echo
-      if [[ "$has_app_id" -eq 1 ]]; then
-        echo "  FLYWHEEL_GH_APP_ID variable already set (${app_id_found_at}-level); the FLYWHEEL_GH_APP_PRIVATE_KEY secret is missing — prompting only for the private key, writing it at ${SCOPE}-level to co-locate with the App ID."
-      else
-        echo "  FLYWHEEL_GH_APP_PRIVATE_KEY secret already set (${app_key_found_at}-level); the FLYWHEEL_GH_APP_ID variable is missing — prompting only for the App ID, writing it at ${SCOPE}-level to co-locate with the private key."
-      fi
-      # A genuine write failure inside the helper returns non-zero; empty-input
-      # / skip paths return success. The gap remains, but the present value is
-      # untouched, so the outcome is the same configured/failed split as below.
-      if prompt_existing_app_credentials; then
-        record_outcome "App credentials" configured
-      else
-        record_outcome "App credentials" failed config block "$app_creds_cmd"
-      fi
-    else
-      echo
-      echo "  Flywheel needs a GitHub App for installation tokens. Pick a setup path:"
-      echo "    1) Create the App for me  — opens browser, ~30s round-trip"
-      echo "    2) I have an App already — paste its App ID (Variable) + PEM private key (Secret)"
-      echo "    3) Skip — I'll set the App's Variable + Secret later"
-      read -r -u 3 -p "  Selection [1/2/3] (default 1): " app_choice
-      case "${app_choice:-1}" in
-        1)
-          if create_app_via_manifest; then
-            record_outcome "App credentials" configured
-          else
-            echo "  Falling back to manual prompts."
-            # Only the credential-WRITE failures inside the helper return non-zero;
-            # the empty-input/skip paths return success, so a non-zero here is a
-            # genuine write failure.
-            if prompt_existing_app_credentials; then
-              record_outcome "App credentials" configured
-            else
-              record_outcome "App credentials" failed config block "$app_creds_cmd"
-            fi
-          fi
-          ;;
-        2)
-          if prompt_existing_app_credentials; then
-            record_outcome "App credentials" configured
-          else
-            record_outcome "App credentials" failed config block "$app_creds_cmd"
-          fi
-          ;;
-        3)
-          echo "  Skipped — set the App's FLYWHEEL_GH_APP_ID Variable and FLYWHEEL_GH_APP_PRIVATE_KEY Secret under Settings → Secrets and variables → Actions before any Flywheel workflow runs."
-          record_outcome "App credentials" deferred config warn "$app_creds_cmd"
-          ;;
-        *)
-          echo "  invalid selection — skipping."
-          record_outcome "App credentials" deferred config warn "$app_creds_cmd"
-          ;;
-      esac
-    fi
+    echo
+    echo "  Flywheel needs a GitHub App. The App is how the flywheel workflows act on"
+    echo "  this repo as a bot: push releases and tags, open and merge promotion PRs,"
+    echo "  and apply labels. To do that it needs these permissions: Contents"
+    echo "  (read/write), Pull requests (read/write), Issues (read/write), Checks"
+    echo "  (read/write), and Metadata (read)."
+    echo
+    echo "  The App is a permanent dependency, used on every workflow run for the life"
+    echo "  of the adoption — not one-time install scaffolding to delete later."
+    echo "  Changing it later means rotating its credential or revoking the App."
+    echo
+    echo "  Why an App and not a personal access token? Flywheel registers the App as"
+    echo "  an Integration-type bypass actor in the branch/tag rulesets so the bot can"
+    echo "  push to protected branches, and only a GitHub App can be that bypass actor."
+    echo "  A PAT would also tie the automation to one person's account and rate limit"
+    echo "  and live as a long-lived manual secret."
+    echo
+    echo "  Pick a setup path:"
+    echo "    1) Create the App for me  — opens browser, ~30s round-trip"
+    echo "    2) I have an App already — paste its App ID (Variable) + PEM private key (Secret)"
+    echo "    3) Skip — I'll set the App's Variable + Secret later"
+    read -r -u 3 -p "  Selection [1/2/3] (default 1): " app_choice
+    case "${app_choice:-1}" in
+      1)
+        if create_app_via_manifest; then
+          record_outcome "App credentials" configured
+        else
+          echo "  Falling back to manual prompts."
+          finish_existing_app_creds "$app_creds_cmd"
+        fi
+        ;;
+      2)
+        finish_existing_app_creds "$app_creds_cmd"
+        ;;
+      3)
+        echo "  Skipped — set FLYWHEEL_GH_APP_ID variable and FLYWHEEL_GH_APP_PRIVATE_KEY secret before any Flywheel workflow runs."
+        record_outcome "App credentials" deferred config warn "$app_creds_cmd"
+        ;;
+      *)
+        echo "  invalid selection — skipping."
+        record_outcome "App credentials" deferred config warn "$app_creds_cmd"
+        ;;
+    esac
   fi
 fi
 
