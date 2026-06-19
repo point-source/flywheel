@@ -2605,7 +2605,7 @@ plain-language bar. §req:init-preset-wording-constraints
 
 ## init.sh GitHub-App step §spec:init-app-step
 
-*Status: in progress — priority tier (1) done (need-before-mechanism copy: what the App does, its permissions, that it is a permanent dependency, and why an App not a PAT — in scripts/init.sh and mirrored in docs/adopter/setup.md + README.md). Tiers (2) consume-detected-App and (3) org-App-not-installed-here remain.*
+*Status: in progress — priority tiers (1) and (2) done. Tier (1): need-before-mechanism copy (what the App does, its permissions, that it is a permanent dependency, and why an App not a PAT — in scripts/init.sh and mirrored in docs/adopter/setup.md + README.md). Tier (2): the step consumes the pre-flight pass's App-ID/credential findings (PREFLIGHT_* globals, no duplicate gh lookups) and presents the detected App — by numeric ID and the repo/org level it was found at — as a confirm-or-override default, filling only genuinely-missing pieces (partial and org-level states honoured) instead of the all-or-nothing skip; in scripts/init.sh, covered by tests/init-app-step-detection.test.ts. Tier (3) org-App-not-installed-here (surface the not-installed state and offer to install the existing App on this repo) remains.*
 
 The GitHub-App step — the prompt `scripts/init.sh` shows immediately after the
 preset choice — explains the credential it is asking for in terms of **what
