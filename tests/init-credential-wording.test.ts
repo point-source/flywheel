@@ -99,3 +99,79 @@ describe("init.sh prompt_existing_app_credentials credential wording", () => {
     expect(fnBody).toMatch(/PEM private key[\s\S]*FLYWHEEL_GH_APP_PRIVATE_KEY Secret/);
   });
 });
+
+// WS2 (#235-2) adds the "Detection state is surfaced, and only the gap is
+// prompted" half of §spec:init-credentials-prompt. When the probe already
+// found exactly one of the two values (App ID Variable OR private-key
+// Secret), the interactive flow reports what's set + at which scope, names
+// the gap, co-locates the missing value's scope with the present one, and
+// prompts only for the gap via prompt_existing_app_credentials (the
+// create/paste/skip menu is suppressed).
+//
+// This whole branch is interactive-only: it lives under the
+// `else` arm reached only when INTERACTIVE=1. tests/init-rerun.test.ts runs
+// init.sh with detached:true → no controlling tty → INTERACTIVE lands on 0,
+// so the partial report strings / co-location / gap-only prompt are
+// UNREACHABLE at runtime (exactly-one-present routes to the non-interactive
+// manual-setup elif instead). As with the wording tests above, we pin this
+// branch by reading scripts/init.sh as text and slicing the partial-state
+// block, anchored on the `partial=1` / `partial" -eq 1` markers and the
+// report strings so the assertions are specific to this branch and don't
+// pass vacuously by matching look-alike text elsewhere.
+describe("init.sh interactive partial-credential-state branch", () => {
+  // Slice from the partial-state detection (`partial=0` setup) through the
+  // end of the partial `if [[ "$partial" -eq 1 ]]` arm — i.e. up to the
+  // `else` that opens the neither-present setup-path menu. This carves out
+  // both the co-location default and the gap-only report+prompt, while
+  // excluding the create/paste/skip menu so the suppression assertion is
+  // meaningful.
+  const partialBranch = sliceBetween(
+    initSh,
+    "partial=0",
+    "Flywheel needs a GitHub App for installation tokens. Pick a setup path:",
+  );
+
+  it("reports the present App ID + scope and names the missing private key (App-ID-present case)", () => {
+    expect(partialBranch).toContain(
+      "FLYWHEEL_GH_APP_ID variable already set (${app_id_found_at}-level); the FLYWHEEL_GH_APP_PRIVATE_KEY secret is missing — prompting only for the private key, writing it at ${SCOPE}-level to co-locate with the App ID.",
+    );
+  });
+
+  it("reports the present private key + scope and names the missing App ID (key-present case)", () => {
+    expect(partialBranch).toContain(
+      "FLYWHEEL_GH_APP_PRIVATE_KEY secret already set (${app_key_found_at}-level); the FLYWHEEL_GH_APP_ID variable is missing — prompting only for the App ID, writing it at ${SCOPE}-level to co-locate with the private key.",
+    );
+  });
+
+  it("defaults the missing value's scope to the present value's found-at scope, gated on empty SCOPE", () => {
+    // Co-location only fires when no explicit --scope was given.
+    expect(partialBranch).toMatch(/if \[\[ -z "\$SCOPE" \]\]; then/);
+    // App-ID-present → write the key at the App ID's scope.
+    expect(partialBranch).toContain('SCOPE="$app_id_found_at"');
+    // key-present → write the App ID at the key's scope.
+    expect(partialBranch).toContain('SCOPE="$app_key_found_at"');
+    // The default keys off has_app_id so the present value's scope wins.
+    expect(partialBranch).toMatch(
+      /if \[\[ "\$has_app_id" -eq 1 \]\]; then SCOPE="\$app_id_found_at"; else SCOPE="\$app_key_found_at"; fi/,
+    );
+  });
+
+  it("prompts only for the gap via prompt_existing_app_credentials", () => {
+    // The partial arm gathers the missing value through the existing
+    // per-gap prompt helper, which guards each write on has_app_id==0 /
+    // has_app_key==0.
+    expect(partialBranch).toMatch(
+      /partial" -eq 1[\s\S]*prompt_existing_app_credentials/,
+    );
+  });
+
+  it("suppresses the create/paste/skip menu in the partial branch", () => {
+    // The setup-path menu and the create-App-via-manifest path mint a NEW
+    // App and write BOTH values, so they must not appear inside the partial
+    // arm — they live only in the neither-present branch (excluded by the
+    // slice's end anchor).
+    expect(partialBranch).not.toContain("Pick a setup path:");
+    expect(partialBranch).not.toContain("create_app_via_manifest");
+    expect(partialBranch).not.toContain("Selection [1/2/3]");
+  });
+});

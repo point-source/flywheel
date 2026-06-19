@@ -375,3 +375,165 @@ describe("init.sh non-interactive manual-setup App-credential wording", () => {
     }
   });
 });
+
+// WS2 (#235-2) adds partial-state detection: when exactly one of the two
+// values already exists, the interactive flow reports the present value +
+// scope, co-locates the missing value's scope, and prompts only for the
+// gap. That interactive report/prompt is UNREACHABLE in this harness
+// (detached:true → INTERACTIVE=0 → exactly-one-present routes to the
+// non-interactive manual-setup elif), so the interactive report strings are
+// pinned by source-slice in tests/init-credential-wording.test.ts. Here we
+// pin the runtime CONTRACT that survives non-interactively: detection adds
+// no GitHub API calls beyond the repo/org probes init.sh already performs
+// (§req:init-credentials-prompt-criteria — "no GitHub API calls beyond the
+// repo- and org-level probes"), no credential write happens on a re-run
+// when something is already present, and the run completes (exit 0; runInit
+// throws on non-zero).
+describe("init.sh partial-credential detection adds no extra gh probing", () => {
+  // The probe writes only into existing-state lookups; a re-run must never
+  // issue `variable set` / `secret set`. Asserting their absence guards
+  // against a regression where detection accidentally re-writes a present
+  // value or over-writes during gap-fill in the non-interactive path.
+  function assertNoCredentialWrites(ghLog: string): void {
+    expect(ghLog).not.toMatch(/^variable set/m);
+    expect(ghLog).not.toMatch(/^secret set/m);
+  }
+
+  it("both present at repo (user owner): reports both, writes nothing, no org probe", () => {
+    const s = setup();
+    try {
+      const out = runInit(s, {
+        GH_REPO_VARIABLE_LIST: "FLYWHEEL_GH_APP_ID",
+        GH_REPO_SECRET_LIST: "FLYWHEEL_GH_APP_PRIVATE_KEY",
+        GH_OWNER_TYPE: "User",
+        GH_VARIABLE_VALUE: "123456",
+      });
+
+      const ghLog = readFileSync(s.ghLog, "utf8");
+      // Both-present report (same-scope wording).
+      expect(out).toContain(
+        "FLYWHEEL_GH_APP_ID variable + FLYWHEEL_GH_APP_PRIVATE_KEY secret already set (repo-level).",
+      );
+      // No writes, no org probe (both present at repo → never fans out).
+      assertNoCredentialWrites(ghLog);
+      expect(ghLog).not.toMatch(/--org/);
+      // Only the repo existence probes (one each) ran for detection.
+      expect(ghLog).toMatch(/^variable list --json name/m);
+      expect(ghLog).toMatch(/^secret list --json name/m);
+      // App-ID readback still happens (apply-rulesets --app-id recovery).
+      expect(ghLog).toMatch(
+        /^variable get FLYWHEEL_GH_APP_ID --repo test-owner\/test-repo$/m,
+      );
+    } finally {
+      teardown(s);
+    }
+  });
+
+  it("both present at org: reports org-level, writes nothing", () => {
+    const s = setup();
+    try {
+      const out = runInit(s, {
+        GH_REPO_VARIABLE_LIST: "",
+        GH_REPO_SECRET_LIST: "",
+        GH_ORG_VARIABLE_LIST: "FLYWHEEL_GH_APP_ID",
+        GH_ORG_SECRET_LIST: "FLYWHEEL_GH_APP_PRIVATE_KEY",
+        GH_OWNER_TYPE: "Organization",
+        GH_VARIABLE_VALUE: "",
+        GH_ORG_VARIABLE_VALUE: "654321",
+      });
+
+      const ghLog = readFileSync(s.ghLog, "utf8");
+      expect(out).toContain("already set (org-level)");
+      assertNoCredentialWrites(ghLog);
+    } finally {
+      teardown(s);
+    }
+  });
+
+  it("exactly one present at repo (user owner): no org probe, no extra rounds", () => {
+    const s = setup();
+    try {
+      // App ID present at repo, private key missing. User owner → no org
+      // fan-out even though a value is missing.
+      const out = runInit(s, {
+        GH_REPO_VARIABLE_LIST: "FLYWHEEL_GH_APP_ID",
+        GH_REPO_SECRET_LIST: "",
+        GH_OWNER_TYPE: "User",
+        GH_VARIABLE_VALUE: "123456",
+      });
+
+      const ghLog = readFileSync(s.ghLog, "utf8");
+      // INTERACTIVE=0 → partial state routes to the manual-setup branch.
+      expect(out).toContain(
+        "non-interactive shell — skipping App-credential prompts",
+      );
+      assertNoCredentialWrites(ghLog);
+      // No org-level probing for a user-owned repo.
+      expect(ghLog).not.toMatch(/--org/);
+      // Exactly the detection probes (repo variable+secret list) ran.
+      expect(ghLog).toMatch(/^variable list --json name/m);
+      expect(ghLog).toMatch(/^secret list --json name/m);
+      // Single repo App-ID readback for the apply-rulesets --app-id recovery.
+      const getCount = (ghLog.match(/^variable get FLYWHEEL_GH_APP_ID/gm) ?? [])
+        .length;
+      expect(getCount).toBe(1);
+    } finally {
+      teardown(s);
+    }
+  });
+
+  it("exactly one present at org: probes org level once, no writes", () => {
+    const s = setup();
+    try {
+      // Private key present at org, App ID missing everywhere. Owner is org
+      // → the missing-value probe fans out to org level exactly once each.
+      const out = runInit(s, {
+        GH_REPO_VARIABLE_LIST: "",
+        GH_REPO_SECRET_LIST: "",
+        GH_ORG_VARIABLE_LIST: "",
+        GH_ORG_SECRET_LIST: "FLYWHEEL_GH_APP_PRIVATE_KEY",
+        GH_OWNER_TYPE: "Organization",
+        GH_VARIABLE_VALUE: "",
+        GH_ORG_VARIABLE_VALUE: "",
+      });
+
+      const ghLog = readFileSync(s.ghLog, "utf8");
+      // INTERACTIVE=0 → manual-setup branch, no credential writes.
+      expect(out).toContain(
+        "non-interactive shell — skipping App-credential prompts",
+      );
+      assertNoCredentialWrites(ghLog);
+      // Org fan-out: exactly one org variable list + one org secret list.
+      expect(
+        (ghLog.match(/^variable list --org test-owner/gm) ?? []).length,
+      ).toBe(1);
+      expect(
+        (ghLog.match(/^secret list --org test-owner/gm) ?? []).length,
+      ).toBe(1);
+    } finally {
+      teardown(s);
+    }
+  });
+
+  it("--skip-secrets: prints the skip message, touches no credentials and runs no probes", () => {
+    const s = setup();
+    try {
+      const out = runInit(
+        s,
+        { GH_OWNER_TYPE: "User" },
+        ["--skip-secrets"],
+      );
+
+      const ghLog = readFileSync(s.ghLog, "utf8");
+      expect(out).toContain(
+        "--skip-secrets set; not touching the App's FLYWHEEL_GH_APP_ID Variable or FLYWHEEL_GH_APP_PRIVATE_KEY Secret.",
+      );
+      // No credential writes and no detection probing at all.
+      assertNoCredentialWrites(ghLog);
+      expect(ghLog).not.toMatch(/^variable list/m);
+      expect(ghLog).not.toMatch(/^secret list/m);
+    } finally {
+      teardown(s);
+    }
+  });
+});
