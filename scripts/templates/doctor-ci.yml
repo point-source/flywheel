@@ -1,0 +1,114 @@
+name: Flywheel doctor
+
+# Opt-in, on-demand config validation for teams whose Flywheel credentials
+# live only in CI (FLYWHEEL_GH_APP_ID variable + FLYWHEEL_GH_APP_PRIVATE_KEY
+# secret) rather than on a maintainer's laptop. Run it from the Actions tab to
+# validate this repo's Flywheel setup without a local checkout or `gh auth login`.
+#
+# workflow_dispatch-only on purpose: doctor is a point-in-time diagnostic, not a
+# gate. Wiring it to push / pull_request / schedule would burn CI minutes on
+# every change for a check that has no merge-blocking role here — the real gates
+# live in flywheel-pr.yml / flywheel-push.yml. Keep this manual and on demand.
+on:
+  workflow_dispatch:
+
+# Read-only: doctor only reads repo state and the GitHub API. Request no new
+# privilege beyond what the default token already grants.
+permissions:
+  contents: read
+
+jobs:
+  doctor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      # Check out THIS repo. doctor is then run from inside the checkout with
+      # NO owner/repo argument: it resolves the repo from the git remote, sees
+      # cwd_repo == REPO, and runs its on-disk checks (.gitattributes / merge
+      # drivers, committed .flywheel.yml) ALONGSIDE the GitHub-API checks in a
+      # single pass. Passing an explicit owner/repo would force remote-only mode
+      # and silently skip the on-disk half of the diagnosis.
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      # Prove the Flywheel App credentials by minting a short-lived installation
+      # token. continue-on-error so the run still completes (and reports honestly)
+      # when no App creds are configured at all — the workflow degrades to the
+      # built-in github.token rather than failing the job outright.
+      - name: Mint Flywheel App token
+        id: app-token
+        continue-on-error: true
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ vars.FLYWHEEL_GH_APP_ID }}
+          private-key: ${{ secrets.FLYWHEEL_GH_APP_PRIVATE_KEY }}
+
+      # doctor's runtime deps are git, gh, jq, and python3 with PyYAML. gh / jq
+      # are preinstalled on ubuntu-latest; PyYAML (which the config linter doctor
+      # fetches imports) is not guaranteed. Provision Python via setup-python so
+      # `pip install` targets that interpreter rather than the system one, whose
+      # externally-managed marker (PEP 668) rejects a bare install on newer images.
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+      - name: Ensure PyYAML
+        run: python3 -m pip install --quiet pyyaml
+
+      # Pick the best available token, then fetch + run doctor. Token policy
+      # (best-effort auth, honest reporting):
+      #   * FLYWHEEL_ADMIN_PAT present  -> use it, run WITHOUT --skip-credentials
+      #     so admin-gated reads (Variables / Secrets / settings) actually run and
+      #     report verified-present vs. genuinely-missing instead of could-not-verify.
+      #   * else App token minted        -> use it, run WITH --skip-credentials.
+      #     App installation tokens categorically cannot list Variables or Secrets,
+      #     so the successful mint above IS the credential proof; the skip is a
+      #     non-fatal note, not a missing check.
+      #   * else                         -> fall back to the automatic github.token.
+      #     Listing checks 403 -> could-not-verify (warn), never block; run completes.
+      # FLYWHEEL_ADMIN_PAT is OPTIONAL — it only raises coverage and is never
+      # required for the workflow to run.
+      #
+      # doctor is fetched from the network (this repo does not vendor it), from
+      # @main — matching every other adopter-facing doctor invocation in
+      # docs/adopter/setup.md (quick-start, §7 Verify, §8 upgrade). doctor is a
+      # point-in-time diagnostic, so running the newest checks is the intent; it
+      # is deliberately NOT version-locked to the action major. This template is
+      # opt-in and copied by hand (init never installs or version-stamps it), so
+      # a pinned __FLYWHEEL_VERSION__ token would never be substituted and would
+      # 404 — @main is the working default. Pin to a tag below if you prefer.
+      # FLYWHEEL_TEMPLATES_BASE is exported so doctor's own self-fetches
+      # (findings.sh, the config linter) resolve to the same ref.
+      #
+      # Exit contract: doctor exits 1 iff a block-severity finding fired, else 0.
+      # We do not swallow it — that exit code fails or passes this job. warn and
+      # could-not-verify findings stay green. The markdown step summary is emitted
+      # automatically because the runner sets $GITHUB_STEP_SUMMARY (no flag needed).
+      - name: Run Flywheel doctor
+        env:
+          # FLYWHEEL_TEMPLATES_BASE (…/scripts/templates) is doctor's self-fetch
+          # base; DOCTOR_URL points at doctor.sh itself, one level up. (Pinning
+          # rationale in the note above.)
+          FLYWHEEL_TEMPLATES_BASE: https://raw.githubusercontent.com/point-source/flywheel/main/scripts/templates
+          DOCTOR_URL: https://raw.githubusercontent.com/point-source/flywheel/main/scripts/doctor.sh
+          ADMIN_PAT: ${{ secrets.FLYWHEEL_ADMIN_PAT }}
+          APP_TOKEN: ${{ steps.app-token.outputs.token }}
+          DEFAULT_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if [[ -n "$ADMIN_PAT" ]]; then
+            export GH_TOKEN="$ADMIN_PAT"
+            flags=""
+            echo "Using FLYWHEEL_ADMIN_PAT — running full credential checks."
+          elif [[ -n "$APP_TOKEN" ]]; then
+            export GH_TOKEN="$APP_TOKEN"
+            flags="--skip-credentials"
+            echo "Using minted App installation token — skipping credential-listing checks (App tokens cannot list Variables/Secrets; the mint is the proof)."
+          else
+            export GH_TOKEN="$DEFAULT_TOKEN"
+            flags=""
+            echo "No App creds or admin PAT — falling back to the default GITHUB_TOKEN; credential-listing checks will report could-not-verify."
+          fi
+          # No positional owner/repo arg — validate the checked-out repo (see the
+          # Checkout step for why this widens, rather than narrows, coverage).
+          curl -fsSL "$DOCTOR_URL" | bash -s -- $flags
