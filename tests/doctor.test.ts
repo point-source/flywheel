@@ -121,6 +121,25 @@ interface StubOpts {
    * false keeps every existing test on the remote path (stub emits nothing),
    * byte-for-byte unchanged. */
   localRepo?: boolean;
+  /** Controls the `repos/<REPO>/actions/variables` LIST call that doctor's
+   * App-token credential block (§spec:doctor-credential-clarity, #237) uses to
+   * verify FLYWHEEL_GH_APP_ID. Three states:
+   *   - "present"   → list succeeds and includes FLYWHEEL_GH_APP_ID
+   *                   (→ ok "variable set (repo)").
+   *   - "absent"    → list succeeds but is empty
+   *                   (→ fail config "variable missing": a BLOCK).
+   *   - "forbidden" → list call exits non-zero, modelling an under-scoped local
+   *                   token that cannot list variables
+   *                   (→ warn local-env "could not verify …": NOT a block).
+   * Default "present" so the credential block (only reached when doctor runs
+   * WITHOUT --skip-credentials) is clean; existing tests pass --skip-credentials
+   * and never reach this arm, so any default leaves them unchanged. */
+  credVarList?: "present" | "absent" | "forbidden";
+  /** Mirror of credVarList for the `repos/<REPO>/actions/secrets` LIST call,
+   * which verifies FLYWHEEL_GH_APP_PRIVATE_KEY. The "present"/"absent" JSON
+   * deliberately omits any GH_PAT entry so the unrelated GH_PAT-leftover warn
+   * never fires and muddies credential assertions. Default "present". */
+  credSecretList?: "present" | "absent" | "forbidden";
 }
 
 /** Writes a `gh` stub into a temp bin dir and returns the dir + a cleanup.
@@ -146,7 +165,27 @@ function setupGhStub(opts: StubOpts = {}): { binDir: string; cleanup: () => void
     rulesetDetailFails = false,
     branchPrUnreadable = false,
     localRepo = false,
+    credVarList = "present",
+    credSecretList = "present",
   } = opts;
+
+  // Map each credential-list knob to the stub's case-arm body for
+  // repos/<REPO>/actions/{variables,secrets}. "forbidden" exits non-zero (the
+  // list call failed → could-not-verify), "present"/"absent" succeed with a
+  // populated/empty list. The success JSON omits GH_PAT so no unrelated warn
+  // fires (see credSecretList doc).
+  const varListArm =
+    credVarList === "forbidden"
+      ? "exit 1"
+      : credVarList === "present"
+        ? `printf '%s\\n' '{"variables":[{"name":"FLYWHEEL_GH_APP_ID"}]}'`
+        : `printf '%s\\n' '{"variables":[]}'`;
+  const secretListArm =
+    credSecretList === "forbidden"
+      ? "exit 1"
+      : credSecretList === "present"
+        ? `printf '%s\\n' '{"secrets":[{"name":"FLYWHEEL_GH_APP_PRIVATE_KEY"}]}'`
+        : `printf '%s\\n' '{"secrets":[]}'`;
 
   const binDir = mkdtempSync(join(tmpdir(), "flywheel-doctor-bin-"));
 
@@ -260,6 +299,16 @@ case "$path" in
     # rather than a false "no pull_request requirement" block (#239).
     exit 1
     ;;
+  "repos/${REPO}/actions/variables")
+    # App-token credential block (#237): FLYWHEEL_GH_APP_ID variable LIST.
+    # forbidden→exit 1 (could-not-verify warn); present→populated; absent→empty.
+    ${varListArm}
+    ;;
+  "repos/${REPO}/actions/secrets")
+    # App-token credential block (#237): FLYWHEEL_GH_APP_PRIVATE_KEY secret LIST.
+    # Same three states as variables; JSON omits GH_PAT so no leftover warn.
+    ${secretListArm}
+    ;;
   *)
     # Unknown path → behave like a 404 so doctor's "if …; then" guards take
     # their else branch.
@@ -285,6 +334,20 @@ interface RunResult {
 /** Run doctor.sh against REPO with the given stub, from a throwaway cwd. */
 function runDoctor(binDir: string, cwd: string, extraArgs: string[] = []): RunResult {
   const r = spawnSync("bash", [scriptPath, "--skip-credentials", ...extraArgs, REPO], {
+    cwd,
+    env: { ...process.env, PATH: `${binDir}:${process.env.PATH ?? ""}` },
+    encoding: "utf8",
+  });
+  return { exitCode: r.status ?? -1, stdout: r.stdout ?? "", stderr: r.stderr ?? "" };
+}
+
+/** Like runDoctor but WITHOUT --skip-credentials, so doctor's App-token
+ * credential block (§spec:doctor-credential-clarity, #237) actually runs and
+ * hits the repos/<REPO>/actions/{variables,secrets} stub arms. Kept separate so
+ * every existing call site (which must NOT exercise credentials) stays
+ * byte-identical. */
+function runDoctorCreds(binDir: string, cwd: string, extraArgs: string[] = []): RunResult {
+  const r = spawnSync("bash", [scriptPath, ...extraArgs, REPO], {
     cwd,
     env: { ...process.env, PATH: `${binDir}:${process.env.PATH ?? ""}` },
     encoding: "utf8",
@@ -846,3 +909,119 @@ describe.skipIf(!depsAvailable)(
     });
   },
 );
+
+// App-token credential clarity (§spec:doctor-credential-clarity, #237). For each
+// of FLYWHEEL_GH_APP_ID (a Variable) and FLYWHEEL_GH_APP_PRIVATE_KEY (a Secret),
+// doctor distinguishes four outcomes when run WITHOUT --skip-credentials:
+//   - verified-present → ok "… set (repo)"
+//   - skipped          → note (covered by the --skip-credentials default path)
+//   - could-not-verify → warn local-env "could not verify …" (the LIST call
+//                        exited non-zero — an under-scoped local token, NOT a
+//                        defect in the repo). This is a WARN → exit 0.
+//   - genuinely-missing→ fail config "… missing" (the LIST succeeded but the
+//                        name is absent). This is a BLOCK → exit 1.
+// These tests drive doctor through runDoctorCreds so the block actually runs,
+// and pin that could-not-verify never collapses into a false "missing" block.
+describe.skipIf(!depsAvailable)("doctor.sh — App-token credential clarity (#237)", () => {
+  it("could-not-verify → [local-env] warn, exit 0 (regression guard)", () => {
+    // Under-scoped local token: both the variable and secret LIST calls exit
+    // non-zero. doctor must surface could-not-verify warns — NOT "missing"
+    // blocks — and exit 0, proving an under-scoped run no longer falsely reports
+    // the repo broken.
+    const stub = setupGhStub({ credVarList: "forbidden", credSecretList: "forbidden" });
+    const cwd = mkdtempSync(join(tmpdir(), "flywheel-doctor-cwd-"));
+    try {
+      const r = runDoctorCreds(stub.binDir, cwd);
+      const plain = stripAnsi(r.stdout);
+
+      // Both could-not-verify lines surface, each on a [local-env] warn line.
+      const varLine = plain
+        .split("\n")
+        .find((l) => l.includes("could not verify FLYWHEEL_GH_APP_ID"));
+      expect(varLine, "expected a could-not-verify line for the App-ID variable").toBeDefined();
+      expect(varLine).toContain("[local-env]");
+      const secretLine = plain
+        .split("\n")
+        .find((l) => l.includes("could not verify FLYWHEEL_GH_APP_PRIVATE_KEY"));
+      expect(
+        secretLine,
+        "expected a could-not-verify line for the App private-key secret",
+      ).toBeDefined();
+      expect(secretLine).toContain("[local-env]");
+
+      // No false "missing" claim for either credential.
+      expect(plain).not.toContain("variable missing");
+      expect(plain).not.toContain("secret missing");
+
+      // A could-not-verify warn is not a block — the run exits 0.
+      expect(r.exitCode, `stderr:\n${r.stderr}\nstdout:\n${plain}`).toBe(0);
+    } finally {
+      stub.cleanup();
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("genuinely-missing → [config] block, exit 1", () => {
+    // Both LIST calls succeed but are empty: the credentials really are absent.
+    // doctor must emit "missing" blocks (with the gh remediation) on [config],
+    // and the block flips the exit code to 1.
+    const stub = setupGhStub({ credVarList: "absent", credSecretList: "absent" });
+    const cwd = mkdtempSync(join(tmpdir(), "flywheel-doctor-cwd-"));
+    try {
+      const r = runDoctorCreds(stub.binDir, cwd);
+      const plain = stripAnsi(r.stdout);
+
+      // The App-ID variable is reported missing, with the gh-variable-set fix.
+      const varLine = plain
+        .split("\n")
+        .find((l) => l.includes("FLYWHEEL_GH_APP_ID variable missing"));
+      expect(varLine, "expected a 'variable missing' block for the App ID").toBeDefined();
+      expect(varLine).toContain("[config]");
+      expect(varLine).toContain("gh variable set FLYWHEEL_GH_APP_ID");
+
+      // The App private-key secret is reported missing too.
+      const secretLine = plain
+        .split("\n")
+        .find((l) => l.includes("FLYWHEEL_GH_APP_PRIVATE_KEY secret missing"));
+      expect(secretLine, "expected a 'secret missing' block for the App key").toBeDefined();
+      expect(secretLine).toContain("[config]");
+
+      // Neither should masquerade as a could-not-verify warn.
+      expect(plain).not.toContain("could not verify FLYWHEEL_GH_APP_ID");
+      expect(plain).not.toContain("could not verify FLYWHEEL_GH_APP_PRIVATE_KEY");
+
+      // A real block fired → exit 1.
+      expect(r.exitCode, `stderr:\n${r.stderr}\nstdout:\n${plain}`).toBe(1);
+    } finally {
+      stub.cleanup();
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("verified-present → ok lines, no credential warn/block, exit 0", () => {
+    // Both LIST calls succeed and include the credential names: doctor verifies
+    // each at the repo level and emits ok lines, with no could-not-verify or
+    // missing finding. The rest of the default stub is clean, so the run exits 0.
+    const stub = setupGhStub({ credVarList: "present", credSecretList: "present" });
+    const cwd = mkdtempSync(join(tmpdir(), "flywheel-doctor-cwd-"));
+    try {
+      const r = runDoctorCreds(stub.binDir, cwd);
+      const plain = stripAnsi(r.stdout);
+
+      expect(plain).toContain("FLYWHEEL_GH_APP_ID variable set (repo)");
+      expect(plain).toContain("FLYWHEEL_GH_APP_PRIVATE_KEY secret set (repo)");
+
+      // No could-not-verify and no missing finding for either credential.
+      expect(plain).not.toContain("could not verify FLYWHEEL_GH_APP_ID");
+      expect(plain).not.toContain("could not verify FLYWHEEL_GH_APP_PRIVATE_KEY");
+      expect(plain).not.toContain("variable missing");
+      expect(plain).not.toContain("secret missing");
+
+      // Otherwise clean → exit 0.
+      expect(r.exitCode, `stderr:\n${r.stderr}\nstdout:\n${plain}`).toBe(0);
+    } finally {
+      stub.cleanup();
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+});
