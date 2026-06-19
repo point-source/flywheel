@@ -3526,7 +3526,7 @@ flywheel should not mutate, and is detected-and-routed, not resolved.
 
 ## Brownfield-safe onboarding docs §spec:brownfield-docs
 
-*Status: not started*
+*Status: complete*
 
 The README and `docs/adopter/setup.md` Quick start no longer route an adopter into
 a destructive layering before any check protects them. Today both open with an
