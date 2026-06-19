@@ -416,9 +416,12 @@ preflight_detect_release_conflict() {
 #
 # bash 3.2-safe: a single indexed array of tab-separated records
 #   token \t bucket \t severity \t resolvable \t message
-# `resolvable` records the spec's forward intent (#233-3 acts on it per resolver);
-# it is NOT consulted this batch. An empty array — a greenfield repo — makes the
-# resolution phase a strict no-op (zero blast radius).
+# `token` and `resolvable` are forward-compat seams for #233-3: it keys each
+# resolver on `token` and acts on `resolvable`. Neither is consulted THIS batch
+# (only bucket/severity/message are read by brownfield_resolve and the summary
+# bridge) — they are carried now so the detectors need not be re-touched when the
+# resolvers land. An empty array — a greenfield repo — makes the resolution phase
+# a strict no-op (zero blast radius).
 #
 # could-not-verify warns (a degraded read, not a confirmed condition) are NOT
 # registered: they stay plain `finding ... warn`.
