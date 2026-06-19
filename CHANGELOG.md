@@ -1,3 +1,10 @@
+# [2.1.0-dev.8](https://github.com/point-source/flywheel/compare/v2.1.0-dev.7...v2.1.0-dev.8) (2026-06-19)
+
+
+### Features
+
+* clarify init.sh preset menu wording ([#258](https://github.com/point-source/flywheel/issues/258)) ([5aee682](https://github.com/point-source/flywheel/commit/5aee6828c6ace5c1f53734762eaaba633a107251)), closes [#234](https://github.com/point-source/flywheel/issues/234) [#234](https://github.com/point-source/flywheel/issues/234) [#234](https://github.com/point-source/flywheel/issues/234) [#234](https://github.com/point-source/flywheel/issues/234) [#234](https://github.com/point-source/flywheel/issues/234)
+
 # [2.1.0-dev.7](https://github.com/point-source/flywheel/compare/v2.1.0-dev.6...v2.1.0-dev.7) (2026-06-18)
 
 
