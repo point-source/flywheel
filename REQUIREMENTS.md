@@ -914,7 +914,7 @@ post-hoc check only after the mistakes are already committed to the repo.
 Two classes of problem are entirely undetected today and bite hardest.
 First, **the local environment**: whether `gh` is installed,
 authenticated, and — critically — carries the *specific* scopes and
-permissions the path the adopter chose will need (repo-admin to write the
+permissions the path the adopter chose requires (repo-admin to write the
 App-ID variable and private-key secret and to apply rulesets; `admin:org`
 when credentials are scoped org-wide; the ability to create a GitHub App
 when the adopter asks init to create one). Setup proceeds optimistically
@@ -932,7 +932,7 @@ reports a problem, is it **theirs to fix on their own machine**
 install** (instance — an install-time concern), or **an ongoing
 configuration matter that lives on** (config — a long-term concern)?
 Without that classification the adopter cannot tell who owns a fix or
-whether it will recur, and the same finding reads differently coming out
+whether it recurs, and the same finding reads differently coming out
 of init than out of doctor.
 
 The users are the adopter wiring flywheel into a repo — greenfield or
@@ -1071,7 +1071,7 @@ the prompts and messaging that consume it.
 `scripts/apply-rulesets.sh` is the one-shot setup step an adopter runs once
 per repository — `docs/adopter/setup.md` §5 documents it as a
 `curl … | bash -s -- …` one-liner — to apply Flywheel's branch- and
-tag-protection rulesets. To enumerate the managed branches it must read
+tag-protection rulesets. To enumerate the managed branches it needs to read
 `.flywheel.yml`, which it does with two small Python parses (a managed-branch
 list and a production-release-branch list) that depend on **PyYAML**.
 
@@ -1094,7 +1094,7 @@ the script about why.
 The users are two: the adopter onboarding a repository, for whom this is the
 first thing they run and therefore a first-impression adoption barrier; and the
 flywheel maintainer, who owns a script whose documented dependencies no longer
-match reality. The problem is mandatory (the script will not run without the
+match reality. The problem is mandatory (the script does not run without the
 parse), frequent on macOS (the default interpreter lacks the package), and
 self-inflicted by a stale assumption. It blocks no *existing* adopter mid-flow —
 it bites at setup time — but it taxes exactly the moment flywheel most wants to
@@ -1168,6 +1168,7 @@ feel frictionless.
   sequenced ahead of the functional defects in this document (e.g.
   §req:composite-action-path), but it is low-cost polish that removes a
   first-impression barrier.
+
 ## apply-rulesets.sh stdin invocation §req:apply-rulesets-stdin
 
 `docs/adopter/setup.md` §5 documents applying Flywheel's branch and tag
@@ -1496,6 +1497,7 @@ matches the language of the first.
   the adopter gets a green/red confirmation without a second command; (3) the
   non-interactive exit-code contract and strict-mode flag; (4) aligning the
   §0 manual walkthrough's completion check with the script's.
+
 ## doctor.sh repo-settings read §req:doctor-settings-read
 
 `scripts/doctor.sh` is the read-only validator an adopter runs to confirm a
@@ -1642,8 +1644,8 @@ present on a Dependabot-triggered run, so it arrives empty. Flywheel's
 conductor cannot mint an app token without it, so it skips the run entirely —
 and skipping means the required `flywheel/conventional-commit` check is never
 posted. The PR sits at `BLOCKED` with that check showing **Expected**
-indefinitely: it is waiting on a check that, by construction, will never
-arrive. A routine `build(deps)` bump is stranded with no obvious cause.
+indefinitely: it is waiting on a check that, by construction, never
+arrives. A routine `build(deps)` bump is stranded with no obvious cause.
 
 The skip notice makes this worse by being wrong. It says the PR "can still be
 merged manually" — language written for the era before the check was required.
@@ -1676,7 +1678,7 @@ This requirement covers the **Dependabot** trigger only. Fork PRs are the
 sibling instance of the same empty-key root cause and remain tracked separately
 by #162; a fix here shares a seam with that case and may relieve it, but
 fork-specific behaviour, documentation, and verification are out of scope and
-#162 stays open.
+issue #162 stays open.
 
 ## Dependabot PR deadlock success criteria §req:dependabot-deadlock-criteria
 
@@ -1932,3 +1934,161 @@ form it shall emit is the one whose own invocation is constrained by
   decreasing order of user impact: (1) make every remediation runnable in the
   curl mode adopters actually use; (2) keep the local-checkout form correct for
   maintainers; (3) complete the suggested commands so a paste applies the fix.
+
+## init.sh preset wording §req:init-preset-wording
+
+The very first decision `scripts/init.sh` asks an adopter to make is the
+one it explains worst. Interactive setup prints a three-line preset menu and
+waits for a 1/2/3 choice:
+
+```text
+1) minimal       — single stream, single branch (releases on every push to main)
+2) three-stage   — develop → staging → main with promotion PRs
+3) multi-stream  — main-line + a customer-acme variant
+```
+
+Option 3's description is written for someone who already knows the answer.
+"main-line + a customer-acme variant" names two things — `main-line` and
+`customer-acme` — that mean nothing to a first-time adopter. `customer-acme`
+is a placeholder branch name lifted straight out of the bundled
+`flywheel.multi-stream.yml` template; it has leaked from an internal example
+into user-facing copy, so the menu reads as if "acme" were a flywheel
+concept the adopter is expected to recognise. Worse, the line never says
+what the preset is *for*: nothing on it explains that `multi-stream` stands
+up two independent release lines that each cut their own prereleases with
+their own version suffix and auto-merge rules. An adopter staring at the
+menu cannot tell whether option 3 is what they want, because the words on it
+describe a shape ("main-line + a variant") rather than a purpose ("you ship
+more than one release line in parallel").
+
+The friction is sharpest exactly where it is least recoverable: at the menu,
+before the adopter has read any docs, with a default of 1 one keystroke away.
+Faced with a choice they cannot parse, an adopter either picks `minimal` to
+be safe — and discovers later they needed parallel streams — or picks
+`multi-stream` on a guess and gets a second `customer-acme` branch they did
+not ask for and now have to rename or tear out. Options 1 and 2 are clearer
+but not immune: "single stream, single branch" and "promotion PRs" still lean
+on flywheel vocabulary the adopter is meeting for the first time on this very
+screen.
+
+The same `customer-acme` placeholder and the same unexplained framing recur
+beyond the interactive menu — in the `--preset` validation/usage text that
+lists the same three names, and in the adopter-facing docs (`README.md`,
+`docs/adopter/setup.md`) that describe the presets. An adopter who pipes
+`init.sh` non-interactively and has to pass `--preset` by hand, or who reads
+the docs before running anything, meets the same opaque vocabulary in every
+place the presets are named.
+
+The users are first-time adopters choosing a preset — interactively at the
+menu, or by hand via `--preset` — plus anyone reading the setup docs to
+decide before they run. The multi-stream preset itself originated for
+**per-customer forks** (a vendor maintaining a client-specific release line
+beside the main product), but it serves any case that needs two or more
+independent release lines: long-term-support branches, region-specific
+builds, white-label variants. The menu hides all of that behind one
+customer's example name.
+
+This is the opening item of the setup-onboarding cluster (#234–242): the
+literal first prompt of the first-run experience. It is pure first-run
+friction, not a release-correctness fault — every preset still works once
+chosen — but it is frequent (every adoption hits it), mandatory (no adopter
+skips the preset choice), and it sets the tone for everything the
+§req:preflight-detection and §req:setup-completion-summary work later in the
+run tries to make clear. If the adopter's *first* screen speaks insider
+jargon, the polish downstream starts from a deficit.
+
+## init.sh preset wording success criteria §req:init-preset-wording-criteria
+
+- A **first-time adopter can pick the right preset from the menu line
+  alone**, without opening docs or reading the template files. Each option's
+  one-liner states what the preset is *for* in plain terms, so the choice is
+  self-evident at the prompt.
+- **Option 3 says what a multi-stream setup does**: that it maintains two (or
+  more) independent release lines in parallel, each shipping its own
+  prereleases — not just "main-line + a variant." A reader who has never seen
+  flywheel can tell from the line what they would get and when they would want
+  it.
+- The menu line for option 3 carries **no undefined jargon** — in particular,
+  `customer-acme` no longer appears in the menu as if it were a flywheel
+  concept. The concept is described generically (a second, independent release
+  line); the concrete per-customer "acme" example survives only where it has
+  room to be explained — in the bundled template and the adopter docs.
+- The **preset identifiers are unchanged**: `minimal`, `three-stage`, and
+  `multi-stream` remain the exact strings `--preset` accepts. Only the
+  human-readable descriptions are reworded, so existing `--preset` invocations,
+  scripts, docs, and muscle memory keep working.
+- The clarified wording is **consistent everywhere the presets are named** —
+  the interactive menu, the `--preset` validation/usage text, and the
+  adopter-facing docs (`README.md`, `docs/adopter/setup.md`) tell the same
+  story about each preset, so an adopter meets one explanation no matter which
+  surface they hit first.
+- Options 1 and 2 are **reviewed for the same plain-language bar** and reworded
+  where they lean on unexplained flywheel vocabulary, so the clarity is not
+  limited to option 3 while the rest of the menu stays opaque.
+- The concrete **per-customer / LTS / regional use cases** that motivate
+  multi-stream are findable by an adopter who wants more than the menu line —
+  surfaced in the docs where the preset is described — so "when would I choose
+  this?" has an answer beyond the one-liner.
+
+## init.sh preset wording user stories §req:init-preset-wording-stories
+
+- As a first-time adopter at the preset menu, I want each option to tell me
+  what it is *for* in plain words, so I can choose the right one without
+  leaving the prompt to go read documentation.
+- As an adopter who needs parallel release lines, I want option 3 to say it
+  maintains two independent release streams, so I recognise it as what I want
+  instead of guessing or defaulting to `minimal` and finding out too late.
+- As a first-time adopter, I do not want to see `customer-acme` presented as a
+  flywheel concept I am supposed to understand, so I am not left wondering who
+  "acme" is or whether it applies to me.
+- As an adopter passing `--preset` non-interactively, I want the usage/help
+  text to explain the presets the same way the menu does, so I am not handed a
+  bare list of names with no guidance on which to pick.
+- As an adopter reading `docs/adopter/setup.md` or the README before I run
+  anything, I want the preset descriptions there to match the menu and to give
+  me a concrete example of when multi-stream applies (a customer fork, an LTS
+  line, a regional build), so I can decide before I start.
+- As an existing adopter with `--preset multi-stream` already wired into a
+  script, I want that flag to keep working unchanged, so clarifying the wording
+  does not break my setup.
+
+## init.sh preset wording quality attributes and constraints §req:init-preset-wording-constraints
+
+- **Self-evident at the prompt.** The bar is that the menu line alone is
+  enough to choose correctly — clarity is measured at the point of decision,
+  not in docs the adopter may never open. Copy that is only clear *after*
+  reading the spec does not meet it.
+- **Concept over example.** The menu describes multi-stream by its purpose (two
+  independent release lines in parallel), not by one customer's branch name.
+  The concrete "acme" example is retained only where there is space to frame it
+  as an example — the template and the docs — never as bare, unexplained menu
+  text.
+- **Identifiers are a stable contract.** `minimal`, `three-stage`, and
+  `multi-stream` are the strings `--preset` accepts and are referenced across
+  docs, scripts, and adopters' own automation; the rewrite touches descriptions
+  only and must not rename them.
+- **One explanation, every surface.** The menu, the `--preset` help/validation
+  text, and the adopter docs must not drift into three different descriptions
+  of the same preset. The cluster's "one vocabulary, end to end" principle
+  (§req:setup-completion-summary) applies here too: the adopter meets a single,
+  consistent account of each preset.
+- **Documentation must still parse.** Any `.flywheel.yml` example shown while
+  clarifying the preset docs remains a valid config an adopter can copy
+  verbatim — the documented snippets stay loadable, per the repo's
+  docs-examples guarantee.
+- **Copy-only, behaviour-unchanged.** Reword the descriptions; do not change
+  which `.flywheel.yml` each preset writes or how `init.sh` behaves. A run that
+  chose a given preset before the change produces the same configuration after
+  it.
+- **Priority.** Adopter-facing and on the documented onboarding path, and
+  literally the first decision of the first run — but pure wording, with no
+  release or correctness consequence, so it ranks below every requirement that
+  protects releases or the v2 major (§req:release-safety-gate,
+  §req:composite-action-path) and below the detection spine the rest of the
+  setup cluster depends on (§req:preflight-detection). It is a low-risk,
+  high-visibility polish item: cheap to land, disproportionately shaping the
+  adopter's first impression. In decreasing order of user impact: (1) rewrite
+  option 3 so multi-stream's purpose is plain and `customer-acme` no longer
+  reads as jargon; (2) extend the same clarity to the `--preset` help text and
+  the adopter docs so every surface agrees; (3) review options 1 and 2 to the
+  same plain-language bar.

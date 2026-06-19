@@ -1491,7 +1491,7 @@ workaround the reporter of #245 performed by hand: stand up a disposable
 PyYAML, use it, tear it down. §req:apply-rulesets-pyyaml
 §req:apply-rulesets-pyyaml-stories
 
-**Why keep PyYAML rather than drop it.** The two reads must stay byte-for-byte
+**Why keep PyYAML rather than drop it.** The two reads shall stay byte-for-byte
 equivalent to today's output — the same complete list of managed branch refs
 and the same `release: production` subset, feeding the same ruleset behavior.
 PyYAML is what computes that result now; continuing to parse `.flywheel.yml`
@@ -1576,6 +1576,7 @@ index but no persistent footprint and no new credential surface.
   assumption of local project tooling.
 
 §req:apply-rulesets-pyyaml-constraints §req:apply-rulesets-pyyaml-stories
+
 ## Stdin-safe ruleset application §spec:apply-rulesets-stdin
 
 *Status: complete*
@@ -1999,6 +2000,7 @@ reach one definition of finished. §req:setup-completion-summary-stories
   was rejected: it leaves the manual adopter without the confirmation the
   scripted adopter gets, and lets the two paths diverge on what "done"
   means.
+
 ## doctor repo-field reads are three-state §spec:doctor-settings-read
 
 *Status: complete*
@@ -2050,7 +2052,7 @@ under-scoped token is a condition on the adopter's own account, not a
 misconfiguration of their repo — the same shape as doctor's existing
 "could not list repo secrets — listing requires an admin PAT" finding,
 which is already `local-env`. It is `warn`, not `block`: doctor cannot
-confirm the setting either way, and a visibility limit must not halt a
+confirm the setting either way, and a visibility limit shall not halt a
 read-only validator. This reuses the bucket × severity vocabulary of
 §spec:preflight-classification (§req:preflight-detection) without inventing
 a new severity or bucket name. §req:doctor-settings-read-criteria
@@ -2468,3 +2470,135 @@ complete the suggested commands so a paste applies the fix.
 - *Modifying `apply-rulesets.sh`/`init.sh` or the adopter docs* is out of scope:
   the curl forms are already documented; the defect is solely in doctor's
   printed guidance.
+
+## init.sh preset wording §spec:init-preset-wording
+
+*Status: complete*
+
+The preset descriptions `init.sh` shows an adopter — at the interactive
+menu, in the `--preset` validation/usage text, and in the adopter docs —
+state what each preset is **for**, in plain language an adopter meets for
+the first time and can act on without opening docs or reading the bundled
+template files. The choice is self-evident at the point of decision: the
+menu line alone is enough to pick the right preset. §req:init-preset-wording
+§req:init-preset-wording-criteria
+
+The interactive menu offers three options, each described by its purpose
+rather than its branch shape:
+
+- **minimal** — a single release line on one branch that cuts a release on
+  every qualifying push.
+- **three-stage** — one release line that flows through staged branches
+  (`develop` → `staging` → `main`) with promotion PRs between them.
+- **multi-stream** — two or more **independent release lines in parallel**,
+  each cutting its own prereleases with its own version suffix and
+  auto-merge rules. A reader who has never seen Flywheel can tell from the
+  line what they would get and when they would want it.
+
+Option 3's line carries **no undefined jargon**: `customer-acme` does not
+appear in the menu as though it were a Flywheel concept. The preset is
+described generically as a second, independent release line; the concrete
+per-customer "acme" example survives only where there is room to frame it
+as an example — the bundled `flywheel.multi-stream.yml` template and the
+adopter docs (`docs/adopter/setup.md`, `README.md`).
+§req:init-preset-wording-criteria §req:init-preset-wording-stories
+
+The reworded copy is **consistent across every surface that names the
+presets** — the interactive menu (`scripts/init.sh`), the `--preset`
+validation/usage text in the same script, and the adopter-facing docs.
+An adopter meets one account of each preset no matter which surface they
+hit first, extending the cluster's "one vocabulary, end to end" principle
+(§spec:setup-completion-summary) from problem-classification to preset
+description. The docs additionally surface the concrete use cases that
+motivate multi-stream — a per-customer fork, a long-term-support line, a
+region-specific or white-label build — so an adopter who wants more than
+the menu line can answer "when would I choose this?" where there is space
+to explain it. §req:init-preset-wording-criteria
+§req:init-preset-wording-stories §req:init-preset-wording-constraints
+
+**Identifiers are a stable contract.** `minimal`, `three-stage`, and
+`multi-stream` remain the exact strings `--preset` accepts; the rewrite
+touches human-readable descriptions only. A run that chose a given preset
+before the change writes the byte-identical `.flywheel.yml` after it, and
+existing `--preset` invocations, scripts, and adopter automation keep
+working. The change is **copy-only and behaviour-unchanged**: which
+template each preset fetches and how `init.sh` behaves are untouched.
+§req:init-preset-wording-criteria §req:init-preset-wording-constraints
+
+Any `.flywheel.yml` example shown while clarifying the preset docs remains
+a config an adopter can copy verbatim — the documented snippets stay
+loadable under the repo's docs-examples guarantee (`tests/docs-examples.test.ts`).
+§req:init-preset-wording-constraints
+
+**Why describe by purpose, not by shape.** The menu is the first decision
+of the first run, with a default one keystroke away and no docs read yet —
+the least recoverable point at which to be unclear. A line that names a
+shape ("main-line + a customer-acme variant") tells an adopter what the
+preset *is* but not whether it is what they *want*; faced with a choice
+they cannot parse, they default to `minimal` and discover the gap later, or
+guess `multi-stream` and inherit a `customer-acme` branch they have to rename
+or tear out. Describing each preset by what it is for lets the adopter
+decide correctly at the prompt. This is pure first-run friction, not a
+release-correctness fault — every preset still works once chosen — but it
+is frequent (every adoption hits it) and mandatory (no adopter skips the
+preset choice), and it sets the tone for the §spec:preflight-classification
+and §spec:setup-completion-summary work later in the same run.
+§req:init-preset-wording §req:init-preset-wording-constraints
+
+**Why keep "acme" in the template and docs but not the menu.** The
+per-customer example is genuinely useful where it can be framed — the
+template is a working `.flywheel.yml` an adopter reads in full, and the
+docs have room to explain the customer-fork motivation. The menu does not:
+a bare branch name on a one-line option reads as vocabulary the adopter is
+expected to recognise. Concept over example at the prompt; the example
+where there is space to introduce it. §req:init-preset-wording-constraints
+
+**Priority.** Adopter-facing, on the documented onboarding path, and
+literally the first decision of the first run — but pure wording, with no
+release or correctness consequence, so it ranks below every requirement
+that protects releases or the v2 major (§spec:release-gate,
+§spec:composite-self-reference) and below the detection spine the rest of
+the setup cluster depends on (§spec:preflight-classification). In
+decreasing order of user impact: (1) rewrite option 3 so multi-stream's
+purpose is plain and `customer-acme` no longer reads as jargon; (2) extend
+the same clarity to the `--preset` help/validation text and the adopter
+docs so every surface agrees; (3) review options 1 and 2 to the same
+plain-language bar. §req:init-preset-wording-constraints
+
+**Criteria.**
+
+- The interactive preset menu shall describe each option by what it is for,
+  such that the menu line alone is sufficient to choose correctly without
+  opening docs or reading the template files.
+- Option 3's line shall state that multi-stream maintains two or more
+  independent release lines in parallel, each shipping its own prereleases —
+  not merely "main-line + a variant".
+- The menu line for option 3 shall contain no `customer-acme` token and no
+  other undefined Flywheel-internal term; the concept shall be described
+  generically.
+- `minimal`, `three-stage`, and `multi-stream` shall remain the exact
+  strings `--preset` accepts, and a run that selects a given preset shall
+  write the same `.flywheel.yml` as before the change.
+- The interactive menu, the `--preset` validation/usage text, and the
+  adopter docs (`README.md`, `docs/adopter/setup.md`) shall give the same
+  account of each preset.
+- Options 1 and 2 shall be reviewed to the same plain-language bar and
+  reworded wherever they lean on unexplained Flywheel vocabulary.
+- The adopter docs shall surface at least one concrete use case for
+  multi-stream (per-customer fork, LTS line, or regional/white-label build).
+- Every `.flywheel.yml` example shown in the clarified preset docs shall
+  remain a valid, loadable config.
+
+**Scope and alternatives.**
+
+- *Renaming the presets to self-describing identifiers* (e.g.
+  `parallel-streams` for `multi-stream`) is rejected: the identifiers are a
+  contract referenced by `--preset` across docs, scripts, and adopters' own
+  automation; the fix is descriptions, not names.
+- *Clarifying only the menu and leaving `--preset` help and the docs as they
+  are* is rejected: an adopter who passes `--preset` by hand or reads the
+  docs first would meet the old opaque framing, breaking the
+  one-explanation-every-surface bar.
+- *Dropping the "acme" example entirely* is rejected: it is useful where it
+  can be explained; the problem is its appearance as bare menu text, not its
+  existence in the template and docs.

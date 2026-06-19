@@ -151,7 +151,7 @@ Miss either gate and the PR waits for a human. Flywheel adds no list of "trusted
 
 Place at the root of your repo. Start from one of these.
 
-**Minimal viable** — single stream, single branch, immediate releases:
+**Minimal** — a single release line on one branch that cuts a release on every qualifying push:
 
 ```yaml
 flywheel:
@@ -165,7 +165,7 @@ flywheel:
 
 A single-branch stream releases on every qualifying push and creates no promotion PRs. This is the simplest valid configuration.
 
-**Three-stage promotion** — `develop` → `staging` → `main`:
+**Three-stage** — one release line through staged branches (`develop` → `staging` → `main`) with promotion PRs between them:
 
 ```yaml
 flywheel:
@@ -185,7 +185,7 @@ flywheel:
           auto_merge: []   # all PRs require human approval
 ```
 
-A multi-stream example with a customer variant:
+**Multi-stream** — two or more independent release lines in parallel, each cutting its own prereleases with its own version suffix and auto-merge rules. Reach for this when you need to ship a divergent build alongside your mainline: a per-customer fork, a long-term-support (LTS) line, or a region-specific / white-label build. For instance, a per-customer fork:
 
 ```yaml
 flywheel:
