@@ -757,6 +757,84 @@ preflight_detect_signed_commit_requirement() {
   return 0
 }
 
+# preflight_detect_history_and_prs — §spec:brownfield-detection.
+# READ-ONLY, ADVISORY-ONLY detector: surfaces conditions in existing history and
+# open PRs that will affect — but not break — flywheel's first release/promotion.
+# Unlike the other brownfield detectors, flywheel cannot and should not mutate
+# history or others' PRs, so EVERYTHING here is `info` (or a could-not-verify
+# `warn` for the token-gated PR read). It emits NO `block` under any circumstance.
+#
+# History scan (no token; local `git log`):
+#   * commits whose subject carries `[skip ci]` / `[ci skip]` — these suppress
+#     workflow runs, so legacy occurrences would suppress the first promotion's
+#     workflows. One summary info naming the count.
+#   * commit subjects that are NOT Conventional Commits — they distort the first
+#     semantic-release version computation. ONE summary info (not one per commit);
+#     ANY non-conventional subject in the window is enough. Biased to FALSE
+#     NEGATIVES: a clean conventional window emits nothing.
+# Open-PR scan (token-gated; gh api):
+#   * open PRs whose title is NOT Conventional Commits — flywheel rewrites these
+#     at cutover. ONE summary info naming the count. When the list can't be read
+#     (token gap) a could-not-verify `warn`; when REPO is unresolved, skip the PR
+#     read silently (gh-capability already covers an unusable token).
+# Bounded window (-n 50) keeps the log scan cheap on large repos.
+preflight_detect_history_and_prs() {
+  # Conventional Commits shape (case-insensitive): type(optional-scope)!: subject.
+  local cc_re='^(feat|fix|chore|docs|refactor|test|ci|build|perf|style|revert)(\([^)]*\))?!?: '
+
+  # --- History scan (local; no token). Swallow errors: a repo with no commits or
+  # a non-git dir yields an empty list and emits nothing.
+  local subjects skipci_count=0 nonconv_count=0 subject
+  subjects="$(git log --format='%s' -n 50 2>/dev/null || true)"
+  if [[ -n "$subjects" ]]; then
+    while IFS= read -r subject; do
+      [[ -n "$subject" ]] || continue
+      # `[skip ci]` / `[ci skip]` (case-insensitive) suppresses workflow runs.
+      if [[ "$subject" == *"[skip ci]"* || "$subject" == *"[skip CI]"* \
+         || "$subject" == *"[ci skip]"* || "$subject" == *"[CI skip]"* \
+         || "$subject" == *"[Skip CI]"* || "$subject" == *"[CI Skip]"* ]]; then
+        skipci_count=$((skipci_count + 1))
+      fi
+      # Non-conventional subject: case-insensitive CC match.
+      if ! printf '%s' "$subject" | grep -qiE "$cc_re"; then
+        nonconv_count=$((nonconv_count + 1))
+      fi
+    done <<< "$subjects"
+  fi
+
+  if [[ $skipci_count -gt 0 ]]; then
+    finding instance info "$skipci_count recent commit(s) carry [skip ci]/[ci skip] — these suppress workflow runs, so they could suppress the first promotion's workflows. Advisory only: flywheel does not rewrite history."
+  fi
+  if [[ $nonconv_count -gt 0 ]]; then
+    finding instance info "$nonconv_count of the recent commit(s) are not Conventional Commits — legacy non-conventional history may distort the first semantic-release version computation. Advisory only: flywheel does not rewrite history."
+  fi
+
+  # --- Open-PR scan (token-gated). When REPO is unresolved, skip silently:
+  # gh-capability already flags an unusable token, and the could-not-verify warn
+  # is reserved for a real read failure under a resolved REPO.
+  if [[ -n "${REPO:-}" ]]; then
+    local pulls titles rewrite_count=0 title
+    if pulls="$(gh api "repos/$REPO/pulls?state=open&per_page=100" 2>/dev/null)"; then
+      # `?` + `|| true` keep a malformed/empty body from aborting under set -e.
+      titles="$(echo "$pulls" | jq -r '.[]?.title // empty' 2>/dev/null || true)"
+      while IFS= read -r title; do
+        [[ -n "$title" ]] || continue
+        if ! printf '%s' "$title" | grep -qiE "$cc_re"; then
+          rewrite_count=$((rewrite_count + 1))
+        fi
+      done <<< "$titles"
+      if [[ $rewrite_count -gt 0 ]]; then
+        finding instance info "$rewrite_count open PR(s) have non-conventional titles that flywheel will rewrite to Conventional Commits at cutover. Advisory only: review the rewritten titles after setup."
+      fi
+    else
+      finding local-env warn "could not verify open PRs — listing pull requests requires repo access"
+    fi
+  fi
+
+  # Advisory-only: never emits a block. End deterministically at 0.
+  return 0
+}
+
 # preflight_detect_gh_capability — §spec:preflight-gh-capability.
 # READ-ONLY probe of gh install + auth state, then the path-specific scope checks
 # (which parse the captured `auth_status`). Grants/requests nothing.
@@ -842,6 +920,7 @@ preflight_run() {
   preflight_detect_credentials_app     # §spec:preflight-credentials-app
   preflight_detect_branch_protection_bypass # §spec:brownfield-detection
   preflight_detect_signed_commit_requirement # §spec:brownfield-detection
+  preflight_detect_history_and_prs     # §spec:brownfield-detection
   preflight_inject                     # test-only hook (inert unless FLYWHEEL_TEST_HOOKS=1)
   # <<< detector seam <<<
   if [[ "$FINDINGS_BLOCK_COUNT" -gt 0 ]]; then

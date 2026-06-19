@@ -491,3 +491,173 @@ describe("init.sh — brownfield signed-commit requirement detection", () => {
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// preflight_detect_history_and_prs (§spec:brownfield-detection).
+//
+// ADVISORY-ONLY detector: legacy non-conventional / [skip ci] commits in recent
+// history, and open PRs whose titles flywheel rewrites at cutover, are reported
+// as `info` (with a could-not-verify `warn` for the token-gated PR read). Flywheel
+// cannot/should not mutate history or others' PRs, so these NEVER halt setup — in
+// every case the run proceeds (exit 0) and writes .flywheel.yml. The history scan
+// reads REAL git commits in the work dir; the PR scan is driven by a `gh api …
+// pulls` stub returning a JSON array of PR objects with `title` fields.
+// ---------------------------------------------------------------------------
+
+const GIT_IDENT = {
+  GIT_AUTHOR_NAME: "t",
+  GIT_AUTHOR_EMAIL: "t@example.com",
+  GIT_COMMITTER_NAME: "t",
+  GIT_COMMITTER_EMAIL: "t@example.com",
+};
+
+/** Run init with REAL commits in the work-dir git repo and a `gh` stub whose
+ * `gh api …/pulls…` response is scripted by `pulls` ([exitCode, stdout]); all
+ * other `gh api …` calls (auth/repo-view aside) echo `[]` exit 0 so the OTHER
+ * brownfield detectors stay quiet. `commits` are made (oldest→newest) as
+ * `git commit --allow-empty` with a committer identity so they succeed in CI. */
+function runInitHist(opts: {
+  commits: string[];
+  pulls?: [number, string];
+}): RunResult {
+  const work = mkdtempSync(join(tmpdir(), "flywheel-hist-"));
+  const binDir = join(work, "bin");
+  mkdirSync(binDir);
+  const gh = join(binDir, "gh");
+  const [pullsCode, pullsOut] = opts.pulls ?? [0, "[]"];
+  writeFileSync(
+    gh,
+    `#!/usr/bin/env bash\n` +
+      `if [[ "$1" == "auth" && "$2" == "status" ]]; then echo "  - Token scopes: 'repo', 'read:org'"; exit 0; fi\n` +
+      `if [[ "$1" == "repo" && "$2" == "view" ]]; then echo "acme/widget"; exit 0; fi\n` +
+      `if [[ "$1" == "variable" || "$1" == "secret" ]]; then echo ""; exit 0; fi\n` +
+      `if [[ "$1" == "api" ]]; then\n` +
+      `  shift\n` +
+      `  args="$*"\n` +
+      `  if [[ "$args" == *"pulls?state=open"* ]]; then printf '%s' ${JSON.stringify(
+        pullsOut,
+      )}; exit ${pullsCode}; fi\n` +
+      `  echo "[]"; exit 0\n` +
+      `fi\n` +
+      `echo "stub gh: unhandled: $*" >&2; exit 1\n`,
+  );
+  chmodSync(gh, 0o755);
+  const doctorStub = writeDoctorStub(binDir, { blocks: 0, warns: 0 });
+  execFileSync("git", ["init", "-q"], { cwd: work });
+  const gitEnv = { ...process.env, ...GIT_IDENT };
+  for (const subject of opts.commits) {
+    execFileSync("git", ["commit", "-q", "--allow-empty", "-m", subject], {
+      cwd: work,
+      env: gitEnv,
+    });
+  }
+  const r = spawnSync("bash", [initSh, ...SCAFFOLD_ARGS], {
+    cwd: work,
+    encoding: "utf8",
+    input: "",
+    timeout: 30000,
+    env: {
+      ...process.env,
+      PATH: `${binDir}:${process.env.PATH}`,
+      FLYWHEEL_TEST_HOOKS: "1",
+      FLYWHEEL_DOCTOR_OVERRIDE: doctorStub,
+    },
+  });
+  return { status: r.status, stdout: r.stdout ?? "", stderr: r.stderr ?? "", work };
+}
+
+describe("init.sh — brownfield history & open-PR awareness", () => {
+  it("a [skip ci] commit in history ⇒ info advisory mentions skip-ci; still exits 0 and writes .flywheel.yml", () => {
+    const r = runInitHist({
+      commits: ["feat: real work", "chore: tweak [skip ci]"],
+    });
+    try {
+      const out = stripAnsi(r.stdout);
+      const combined = stripAnsi(r.stdout + r.stderr);
+      expect(r.status, `combined:\n${combined}`).toBe(0);
+      expect(out).toContain("[instance]");
+      expect(out).toMatch(/skip ci/i);
+      expect(existsSync(join(r.work, ".flywheel.yml"))).toBe(true);
+    } finally {
+      rmSync(r.work, { recursive: true, force: true });
+    }
+  });
+
+  it("a non-conventional commit subject ⇒ info advisory about non-conventional history; exits 0", () => {
+    const r = runInitHist({
+      commits: ["feat: real work", "WIP fixing stuff"],
+    });
+    try {
+      const out = stripAnsi(r.stdout);
+      const combined = stripAnsi(r.stdout + r.stderr);
+      expect(r.status, `combined:\n${combined}`).toBe(0);
+      expect(out).toContain("[instance]");
+      expect(out).toMatch(/not Conventional Commits/i);
+      expect(out).toMatch(/distort the first/i);
+      expect(existsSync(join(r.work, ".flywheel.yml"))).toBe(true);
+    } finally {
+      rmSync(r.work, { recursive: true, force: true });
+    }
+  });
+
+  it("open PRs with non-conventional titles ⇒ info advisory naming the count; exits 0", () => {
+    const r = runInitHist({
+      commits: ["feat: real work"],
+      pulls: [
+        0,
+        JSON.stringify([
+          { title: "WIP make it go" },
+          { title: "Random title" },
+          { title: "feat: already good" },
+        ]),
+      ],
+    });
+    try {
+      const out = stripAnsi(r.stdout);
+      const combined = stripAnsi(r.stdout + r.stderr);
+      expect(r.status, `combined:\n${combined}`).toBe(0);
+      expect(out).toContain("[instance]");
+      expect(out).toMatch(/2 open PR\(s\)/);
+      expect(out).toMatch(/rewrite/i);
+      expect(existsSync(join(r.work, ".flywheel.yml"))).toBe(true);
+    } finally {
+      rmSync(r.work, { recursive: true, force: true });
+    }
+  });
+
+  it("clean: only conventional commits + empty PR list ⇒ NO history/PR advisory; exits 0; no blockers", () => {
+    const r = runInitHist({
+      commits: ["feat: alpha", "fix: beta", "chore(deps): bump"],
+      pulls: [0, "[]"],
+    });
+    try {
+      const out = stripAnsi(r.stdout);
+      const combined = stripAnsi(r.stdout + r.stderr);
+      expect(r.status, `combined:\n${combined}`).toBe(0);
+      expect(out).toContain("pre-flight: no blockers.");
+      expect(out).not.toMatch(/skip ci/i);
+      expect(out).not.toMatch(/not Conventional Commits/i);
+      expect(out).not.toMatch(/open PR\(s\)/);
+      expect(existsSync(join(r.work, ".flywheel.yml"))).toBe(true);
+    } finally {
+      rmSync(r.work, { recursive: true, force: true });
+    }
+  });
+
+  it("PR list unreadable (pulls call fails) but REPO resolves ⇒ could-not-verify local-env warn; exits 0", () => {
+    const r = runInitHist({
+      commits: ["feat: real work"],
+      pulls: [1, ""],
+    });
+    try {
+      const out = stripAnsi(r.stdout);
+      const combined = stripAnsi(r.stdout + r.stderr);
+      expect(r.status, `combined:\n${combined}`).toBe(0);
+      expect(out).toContain("[local-env]");
+      expect(out).toMatch(/could not verify open PRs/i);
+      expect(existsSync(join(r.work, ".flywheel.yml"))).toBe(true);
+    } finally {
+      rmSync(r.work, { recursive: true, force: true });
+    }
+  });
+});
