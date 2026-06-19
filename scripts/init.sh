@@ -428,6 +428,17 @@ preflight_detect_release_conflict() {
 # ---------------------------------------------------------------------------
 BROWNFIELD_CONDITIONS=()
 
+# BROWNFIELD_OUTCOMES — what the resolution phase DID with each block condition,
+# appended by brownfield_resolve and replayed into the completion summary later by
+# brownfield_emit_summary_records. bash 3.2-safe: a single indexed array of
+# tab-separated records `token \t outcome \t bucket \t severity \t message`, where
+# outcome ∈ resolved|declined|hardstop. It exists separately from
+# BROWNFIELD_CONDITIONS because brownfield_resolve runs BEFORE record_outcome is
+# defined (see the call seam ~"preflight_run / brownfield_resolve / preflight_gate"),
+# so the resolution phase may not call record_outcome directly — it stashes the
+# verdict here and the summary bridge translates it once record_outcome exists.
+BROWNFIELD_OUTCOMES=()
+
 # brownfield_finding <token> <resolvable> <bucket> <severity> <message>
 # Emit a brownfield finding through the shared `finding` vocabulary AND record it
 # in BROWNFIELD_CONDITIONS, keeping the registry in lockstep with what the adopter
@@ -986,26 +997,59 @@ preflight_gate() {
   exit 1
 }
 
+# brownfield_confirm <prompt> — the SINGLE confirm primitive shared by every
+# brownfield resolver (§spec:brownfield-resolution "explicit, per-step, opt-in").
+# Prints the prompt and reads a y/N answer from fd 3 — the interactive descriptor
+# every other init prompt reads (`read -r -u 3`). Default is No: returns 0 only on
+# an explicit yes (y/Y/yes), non-zero otherwise. Interactive-only by construction —
+# the dispatcher never reaches a resolver on a non-interactive run, so this is never
+# asked there; if it somehow were, the empty read degrades to No (no mutation).
+brownfield_confirm() {
+  local prompt="$1" reply=""
+  read -r -u 3 -p "$prompt" reply
+  [[ "$reply" =~ ^(y|Y|yes)$ ]]
+}
+
 # brownfield_resolve — the resolution phase (SPEC.md §spec:brownfield-resolution).
 # Runs AFTER the detection pass and BEFORE the gate / any scaffold write — the
 # first point init could mutate PRE-EXISTING repo state, so it is governed by the
 # safety contract: shown-before-applied, explicit per-step opt-in, NOTHING
 # destructive non-interactively, idempotent, no new privilege.
 #
-# This batch is the FRAMEWORK only: the concrete resolvers (#233-3) do not exist
-# yet, so every condition takes the no-resolver path —
-#   * block  -> HARD-STOPPED: named here in the shared bucket x severity
-#               vocabulary and routed to the manual §0 guide. The gate (next) owns
-#               the single non-zero exit, so this never overrides the gate's
-#               contract (§spec:setup-exit-contract).
-#   * info   -> DEFERRED (advisory): the adopter is informed; a later step folds
-#               these into the completion summary.
+# PER-CONDITION DISPATCH. For each `block` condition this looks for a resolver
+# function named `brownfield_resolver_<token>` (e.g. brownfield_resolver_tag_shape_bare_semver)
+# and dispatches to it ONLY when the condition is marked resolvable, the run is
+# interactive, AND the function is actually defined. Everything else degrades to
+# the hard-stop print (named in the shared bucket x severity vocabulary, routed to
+# the manual §0 guide). The gate (next) owns the single non-zero exit, so this
+# never overrides the gate's contract (§spec:setup-exit-contract).
 #
-# NON-INTERACTIVE (curl|bash, CI): performs ZERO mutation. True trivially now (no
-# resolver mutates); when #233-3 adds resolvers, each mutation MUST be gated
-# behind `INTERACTIVE -eq 1` here, degrading to detect-and-report exactly like the
-# credential prompts (§spec:init-credentials-prompt). Reporting/routing happens in
-# both modes — only mutation is interactive-only.
+# RESOLVER CONTRACT (#233-3 WS1–WS3 implement to this). A resolver is invoked as:
+#       brownfield_resolver_<token> "<message>"
+# It re-derives its exact change from LIVE state, shows the full change, asks via
+# `brownfield_confirm`, then returns:
+#   0 = APPLIED   — the change was made. The dispatcher records `resolved` and
+#                   decrements FINDINGS_BLOCK_COUNT so the gate stops counting it.
+#   1 = DECLINED  — adopter said no; nothing changed. The dispatcher records
+#                   `declined`, decrements FINDINGS_BLOCK_COUNT (a deliberate
+#                   deferral, not a blocker — the run continues), and prints a
+#                   one-line pointer to the manual procedure (§spec:brownfield-resolution
+#                   "accept some, decline others").
+#   2 = UNABLE    — a capability/scope limit or anything the resolver will not do
+#                   safely; route to manual. The dispatcher records `hardstop`,
+#                   leaves the block counted, and falls through to the hard-stop
+#                   print, exactly like a condition with no resolver.
+#
+# OUTCOMES are stashed in BROWNFIELD_OUTCOMES (NOT record_outcome — that is defined
+# AFTER this runs); brownfield_emit_summary_records replays them into the summary.
+#
+# NON-INTERACTIVE (curl|bash, CI): INTERACTIVE -ne 1, so NO resolver is dispatched
+# and NO mutation happens — every resolvable block degrades to hard-stop
+# (detect-and-report), satisfying the spec's "nothing destructive non-interactively"
+# rule. Reporting/routing happens in both modes — only mutation is interactive-only.
+#
+#   * info   -> DEFERRED (advisory): skipped here; a later step folds these into
+#               the completion summary.
 #
 # GREENFIELD: BROWNFIELD_CONDITIONS is empty -> strict no-op, no output.
 brownfield_resolve() {
@@ -1013,11 +1057,37 @@ brownfield_resolve() {
   local rec token bucket severity resolvable message printed_header=0
   for rec in "${BROWNFIELD_CONDITIONS[@]}"; do
     IFS=$'\t' read -r token bucket severity resolvable message <<< "$rec"
-    # No resolver exists yet (#233-3 adds them, keyed on $token). A future
-    # interactive resolver would offer its change here — shown-before-applied, on
-    # an explicit per-step yes. Until then there is nothing to offer or mutate;
-    # blocks hard-stop, infos are advisory (folded into the completion summary).
+    # Advisory infos are folded into the completion summary later — not here.
     [[ "$severity" == "block" ]] || continue
+
+    # Dispatch to a resolver only when the condition is resolvable, the run is
+    # interactive (no mutation otherwise), and the resolver function exists.
+    if [[ "$resolvable" == "yes" && "$INTERACTIVE" -eq 1 ]] \
+       && declare -F "brownfield_resolver_${token}" >/dev/null 2>&1; then
+      # `|| rc=$?` keeps a non-zero resolver return (declined/unable) from tripping
+      # `set -e` before we can branch on it.
+      local rc=0
+      "brownfield_resolver_${token}" "$message" || rc=$?
+      case "$rc" in
+        0) # APPLIED — change made; stop the gate counting this block.
+          BROWNFIELD_OUTCOMES+=("${token}"$'\t'resolved$'\t'"${bucket}"$'\t'"${severity}"$'\t'"${message}")
+          [[ "$FINDINGS_BLOCK_COUNT" -gt 0 ]] && FINDINGS_BLOCK_COUNT=$((FINDINGS_BLOCK_COUNT - 1))
+          continue ;;
+        1) # DECLINED — unchanged, but a deliberate deferral: uncount + point to manual.
+          BROWNFIELD_OUTCOMES+=("${token}"$'\t'declined$'\t'"${bucket}"$'\t'"${severity}"$'\t'"${message}")
+          [[ "$FINDINGS_BLOCK_COUNT" -gt 0 ]] && FINDINGS_BLOCK_COUNT=$((FINDINGS_BLOCK_COUNT - 1))
+          printf '  Declined — resolve this later with the manual brownfield guide: docs/adopter/setup.md §0.\n'
+          continue ;;
+        *) # UNABLE (2, or any non-0/1) — route to manual; fall through to hard-stop.
+          BROWNFIELD_OUTCOMES+=("${token}"$'\t'hardstop$'\t'"${bucket}"$'\t'"${severity}"$'\t'"${message}")
+          ;;
+      esac
+    else
+      # resolvable=no, OR non-interactive, OR no resolver function -> hard-stop.
+      BROWNFIELD_OUTCOMES+=("${token}"$'\t'hardstop$'\t'"${bucket}"$'\t'"${severity}"$'\t'"${message}")
+    fi
+
+    # Hard-stop print: name the still-counted block in the shared vocabulary.
     if [[ "$printed_header" -eq 0 ]]; then
       printf '\nBrownfield conditions need your hand before adoption:\n'
       printed_header=1
@@ -1062,23 +1132,39 @@ record_outcome() {
 
 # brownfield_emit_summary_records — fold the run's brownfield conditions into the
 # completion summary (SPEC.md §spec:brownfield-resolution, §spec:setup-completion-summary).
-# Only NON-blocking conditions reach here: a brownfield `block` hard-stops at the
-# gate (brownfield_resolve + preflight_gate) before any scaffold step, so on a run
-# that proceeds the registry holds advisory `info` conditions (legacy [skip ci] /
-# non-conventional history, open-PR title rewrites). Each is recorded as a
-# `deferred` outcome in the SAME bucket x severity vocabulary as the rest of the
-# summary — a deliberate deferral the adopter has been shown, never a failure, so
-# it never moves the complete/incomplete verdict (§spec:setup-exit-contract).
-# Empty registry (greenfield) -> no-op, zero blast radius.
+# This runs on a run that PROCEEDED past the gate, so the only `block` conditions
+# that reach it are ones the resolution phase cleared the gate of: resolved (applied)
+# or declined (a deliberate deferral). A hard-stopped block never reaches here — the
+# gate exits first. Two sources, no double-recording:
+#   * BROWNFIELD_OUTCOMES drives the block verdicts the dispatcher reached:
+#       resolved -> `configured`, declined -> `deferred`.
+#   * BROWNFIELD_CONDITIONS drives the advisory `info` conditions (legacy [skip ci] /
+#     non-conventional history, open-PR title rewrites), recorded `deferred` as before.
+# Both land in the SAME bucket x severity vocabulary as the rest of the summary;
+# a deferral the adopter has been shown is never a failure, so it never moves the
+# complete/incomplete verdict (§spec:setup-exit-contract). Empty -> no-op.
 brownfield_emit_summary_records() {
-  [[ "${#BROWNFIELD_CONDITIONS[@]}" -gt 0 ]] || return 0
-  local rec token bucket severity resolvable message
-  for rec in "${BROWNFIELD_CONDITIONS[@]}"; do
-    IFS=$'\t' read -r token bucket severity resolvable message <<< "$rec"
-    # A block hard-stopped earlier; never record one as a completed-run outcome.
-    [[ "$severity" == "block" ]] && continue
-    record_outcome "brownfield: ${message}" deferred "$bucket" "$severity"
-  done
+  local rec token outcome bucket severity resolvable message
+  # Block verdicts from the resolution phase. Guard the empty case so an unset
+  # array expansion does not abort under `set -u` (bash 3.2-safe, as elsewhere).
+  if [[ "${#BROWNFIELD_OUTCOMES[@]}" -gt 0 ]]; then
+    for rec in "${BROWNFIELD_OUTCOMES[@]}"; do
+      IFS=$'\t' read -r token outcome bucket severity message <<< "$rec"
+      case "$outcome" in
+        resolved) record_outcome "brownfield: ${message}" configured "$bucket" "$severity" ;;
+        declined) record_outcome "brownfield: ${message}" deferred "$bucket" "$severity" ;;
+        # hardstop never reaches here (the gate exits first) — defensive skip.
+      esac
+    done
+  fi
+  # Advisory info conditions (severity != block) fold in as deliberate deferrals.
+  if [[ "${#BROWNFIELD_CONDITIONS[@]}" -gt 0 ]]; then
+    for rec in "${BROWNFIELD_CONDITIONS[@]}"; do
+      IFS=$'\t' read -r token bucket severity resolvable message <<< "$rec"
+      [[ "$severity" == "block" ]] && continue
+      record_outcome "brownfield: ${message}" deferred "$bucket" "$severity"
+    done
+  fi
 }
 brownfield_emit_summary_records
 
