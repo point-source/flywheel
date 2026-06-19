@@ -83,6 +83,13 @@
 <!--     summary, failing only on a block (#240) -->
 <!--     (§req:doctor-ci-workflow, §req:doctor-ci-workflow-criteria, -->
 <!--     §req:doctor-ci-workflow-stories, §req:doctor-ci-workflow-constraints) -->
+<!--   - init.sh brownfield adoption — init.sh routes adopters to run it before -->
+<!--     the existing-repo warning appears and only detects (never resolves) the -->
+<!--     conflicts of a populated repo; make init safely automate the brownfield -->
+<!--     adoption guide with per-step confirmation, hard-stopping when it cannot -->
+<!--     resolve a condition safely (#233) -->
+<!--     (§req:init-brownfield, §req:init-brownfield-criteria, -->
+<!--     §req:init-brownfield-stories, §req:init-brownfield-constraints) -->
 
 ## Problem statement §req:problem-statement
 
@@ -2743,3 +2750,222 @@ than introducing anything new.
   the setup-onboarding cluster (§req:doctor-settings-read,
   §req:doctor-credential-clarity, §req:doctor-curl-script-refs) as the path that
   lets credential-constrained teams reach the validator at all.
+
+## init.sh brownfield adoption §req:init-brownfield
+
+`scripts/init.sh` is flywheel's one-command onboarding script. The adopter docs
+present it as the happy path — `docs/adopter/setup.md` and `README.md` both open
+with a **Quick start** that says, unconditionally, to pipe `init.sh` into bash —
+and only *afterwards* does a later section warn that a repository with existing
+state (prior version tags, a release pipeline, branch protection, many open PRs)
+should **skip** `init.sh` and work through a manual brownfield audit instead. An
+adopter reads top-down, so the warning arrives after the action it was meant to
+gate: the adopter has already run `init.sh` against a populated repo before
+being told not to. This is the ordering defect #233 names.
+
+The deeper problem is what `init.sh` does once it is running there. Today it does
+not *resolve* brownfield state — it only *detects* a subset of it. Its pre-flight
+pass (§req:preflight-detection) scans for an existing release system in
+`.github/workflows/` and raises a block, but the only thing an adopter can do
+with that block is pass `--override-release-conflict` to demote it to a warning
+and proceed — layering flywheel **on top of** the conflict. The other brownfield
+hazards the manual guide enumerates are not even detected: pre-existing version
+tags whose shape (bare `3.4.2` vs. `v3.4.2`) collides with how semantic-release
+computes the next version; branch protection or rulesets that do not list the
+flywheel App as a bypass actor, so semantic-release's release push and the
+back-merge push fail the protected-branch rule that requires a pull request; a
+"require signed commits/tags" rule the App cannot satisfy; legacy non-conventional
+commits, and `[skip ci]` in the history that suppresses every workflow on the
+first promotion merge; and open PRs whose titles flywheel rewrites at cutover.
+The manual guide carries these as five hand-run audit-and-cleanup steps; `init.sh`
+automates none of them, and as the setup guide itself warns, the script happily
+layers flywheel on top of conflicts that surface later as failed releases.
+
+The resolution #233 explores is to stop treating brownfield as a path that has to
+fork away from `init.sh`, and instead make `init.sh` itself **safely adopt an
+existing repository** — detect each brownfield condition and, where it can be
+resolved safely, *offer to resolve it inline* rather than only flagging it or
+blinding the adopter with an override. "Safely" is the whole point and bounds the
+behavior on both ends. On the automation end, every action that mutates
+pre-existing repository state — retagging releases, removing a previous release
+system's config and workflows, editing branch protection to add the App as a
+bypass actor — is **opt-in and per-step confirmed**: `init.sh` shows exactly what
+it is about to change before it changes anything, performs nothing without an explicit
+yes, and performs nothing destructive on a non-interactive (`curl … | bash`,
+CI) run. On the safety-net end, the old guard does not disappear — it becomes the
+fallback. When `init.sh` meets a brownfield condition it cannot resolve safely on
+its own (an unrecognized or ambiguous release system, a state that needs adopter
+judgment, or any destructive resolution offered to a non-interactive run), it
+**hard-stops** and routes the adopter to the manual guide rather than layering on
+top. The blind `--override-release-conflict` "proceed anyway" path — which let an
+adopter silence the one signal protecting them — is what this supersedes.
+
+The users are the brownfield adopter, who today either is routed past the warning
+and damages their repo, or is forked onto a long manual checklist that `init.sh`
+could have walked them through; and the flywheel maintainer, who owns the
+onboarding scripts and the promise that the documented one-command path is safe to
+follow. The problem is mandatory for any adopter with an existing repository (most
+real adoptions are brownfield, not greenfield), it is hit at the single most
+consequential moment of adoption, and its failure mode is silent — nothing breaks
+at `init.sh` time; the layered-on conflict surfaces a release or two later as a
+stranded or failed release that is hard to trace back to the onboarding run. It
+sits in the setup-onboarding cluster (#234–242) and builds directly on the
+detection spine and shared bucket × severity vocabulary of §req:preflight-detection,
+the credential clarity of §req:init-credentials-prompt, and the completion verdict
+of §req:setup-completion-summary.
+
+## init.sh brownfield adoption success criteria §req:init-brownfield-criteria
+
+- **The documented path cannot route an adopter into a destructive layering
+  before init protects them.** An adopter who follows the README / setup.md happy
+  path top-down does not reach a state where `init.sh` has silently layered
+  flywheel onto a conflicting existing setup. Either the docs gate the one-command
+  start on the brownfield check, or `init.sh` itself detects the brownfield state
+  on every run — verifiable by reading the onboarding docs in order and by running
+  `init.sh` in a populated repo. The Quick start and the existing-repo guidance no
+  longer contradict each other about whether it is safe to just run the script.
+- **Brownfield state is detected, not just release conflicts.** On a populated
+  repo, `init.sh` surfaces each hazard the manual guide covers that it can observe
+  with the adopter's credentials: an existing release system, version tags whose
+  shape collides with semantic-release, branch protection/rulesets missing the App
+  as a bypass actor, a signed-commit requirement the App cannot meet, and (as
+  awareness) non-conventional / `[skip ci]` history and open PRs that will be
+  rewritten. Each is reported in the pre-flight bucket × severity vocabulary, not
+  as an opaque failure.
+- **Safe resolutions are offered inline, with per-step confirmation.** For each
+  condition `init.sh` can resolve safely, it offers to do so and shows exactly what
+  it will change before changing it — the specific tags it will create and push,
+  the specific files/workflows it will remove, the specific bypass entry it will
+  add — and proceeds only on an explicit per-step yes. An adopter can accept some
+  offers and decline others; declining any one leaves that condition exactly as it
+  was and the rest of the run continues.
+- **Guided retag for colliding version tags.** When `init.sh` detects bare version
+  tags that would collide with semantic-release's `v`-prefixed scheme, it offers a
+  guided retag, displays the exact `old → v-old` tags it will create and push, and
+  performs it only after explicit confirmation. Declining leaves all tags
+  untouched and points the adopter to the manual procedure.
+- **Nothing destructive happens silently or non-interactively.** No run mutates
+  pre-existing repository state — tags, others' release config/workflows, branch
+  protection — without an explicit confirmation. On a non-interactive or piped
+  (`curl … | bash`) invocation, `init.sh` performs no destructive resolution at
+  all: it reports what it found and what an interactive run would offer, and
+  exits without layering on top.
+- **Hard-stop fallback replaces blind override.** When `init.sh` meets a
+  brownfield condition it cannot resolve safely — an unrecognized/ambiguous
+  release system, a condition needing adopter judgment, or a destructive
+  resolution that would be required on a non-interactive run — it stops with a
+  non-zero exit and routes the adopter to the manual brownfield guide, rather than
+  offering a flag that demotes the block and proceeds. The previous
+  "proceed-anyway" override of the release-conflict block is gone or no longer the
+  recommended escape.
+- **Greenfield is unchanged.** On an empty/fresh repository — no prior tags, no
+  release system, no conflicting protection — `init.sh` runs exactly as it does
+  today: it detects no brownfield conditions, offers no destructive resolutions,
+  and completes its scaffolding without new prompts. A greenfield adopter notices
+  no change.
+- **The completion verdict reflects what brownfield work was done or deferred.**
+  The end-of-run summary (§req:setup-completion-summary) names which brownfield
+  conditions were detected, which the adopter resolved, and which were declined or
+  deferred to manual follow-up — so an adopter knows what still needs their hand
+  before their first release.
+- **Cheap coverage.** Fast local tests exercise the brownfield paths — detection
+  of each condition, the offer/confirm/decline branches, the non-interactive
+  no-mutation guarantee, and the hard-stop fallback — using fixture repos and a
+  stubbed `gh`, adding no load to the rate-limited e2e sandbox
+  (§req:sandbox-ci-budget).
+
+## init.sh brownfield adoption user stories §req:init-brownfield-stories
+
+- As an adopter onboarding an existing repository, I want `init.sh` to detect that
+  my repo already has releases, tags, or branch protection and walk me through
+  adopting flywheel safely, so I do not have to fork onto a long manual checklist
+  or discover the conflict as a failed release weeks later.
+- As an adopter who skimmed the README and ran the one-command start, I want the
+  documented path to not have sent me into a destructive layering before any check
+  ran, so following the happy path cannot quietly break my repo.
+- As an adopter with bare `3.4.2`-style tags, I want `init.sh` to spot that they
+  will collide with flywheel's versioning and offer to retag them to `v3.4.2`
+  after showing me exactly which tags it will create and push, so I fix the
+  collision deliberately rather than discovering a mis-versioned release later.
+- As an adopter with a previous release system (release-please, semantic-release,
+  goreleaser, hand-rolled tagging), I want `init.sh` to show me exactly which
+  config files and workflows it would remove and remove them only if I confirm, so
+  two release systems never run against my repo at once and I stay in control of
+  the deletion.
+- As an adopter whose branch protection does not list the flywheel App as a bypass
+  actor, I want `init.sh` to detect that and offer to add the App as a bypass after
+  showing me the change, so my first release's push and back-merge don't fail with
+  "changes must be made through a pull request."
+- As an adopter running `init.sh` non-interactively in CI or via `curl … | bash`,
+  I want it to never silently mutate my existing tags, release config, or branch
+  protection — only report what it found and stop — so an unattended run can never
+  damage a populated repo.
+- As an adopter whose repo is in a state `init.sh` can't safely resolve on its own,
+  I want it to stop and point me at the manual brownfield guide rather than offer
+  me a flag to bull through, so the safety net catches exactly the cases automation
+  shouldn't touch.
+- As a greenfield adopter, I want `init.sh` to behave exactly as it does today with
+  no new prompts, so the brownfield support costs me nothing.
+- As a flywheel maintainer, I want the documented one-command onboarding to be
+  genuinely safe to run on any repository, so I can keep recommending it without a
+  caveat that adopters read too late.
+
+## init.sh brownfield adoption quality attributes and constraints §req:init-brownfield-constraints
+
+- **Safe by construction; the safety net stays.** "Automate as much as possible"
+  is bounded by "safely." `init.sh` automates a brownfield step only when it can do
+  so without risking the adopter's existing state; everything else it detects and
+  explains, and anything it cannot resolve safely it hard-stops on. The guard
+  #233 originally asked for is not removed — it is demoted from the primary answer
+  to the fallback that catches the cases automation must not handle.
+- **Explicit, per-step, reversible-minded confirmation for every mutation.** Any
+  action that changes pre-existing repository state is opt-in and shown in full
+  before it runs: the exact tags, files, workflows, or protection entries
+  affected. `init.sh` favors resolutions an adopter can undo (git keeps deleted
+  files and old tags recoverable; a bypass-actor edit is reversible) and states the
+  consequence of each before asking. No bundled "fix everything" action — each
+  hazard is confirmed on its own.
+- **No destructive action on a non-interactive run.** A piped or CI invocation
+  performs zero mutations to existing tags, release config, or branch protection.
+  It degrades to detect-and-report, the same way the rest of `init.sh` degrades its
+  interactive prompts on a non-interactive shell (§req:init-credentials-prompt-constraints).
+- **Builds on the detection spine, doesn't fork it.** Brownfield detection extends
+  the pre-flight pass and reuses its bucket × severity vocabulary and findings
+  surface (§req:preflight-detection); it does not introduce a parallel detection or
+  reporting mechanism. The completion summary (§req:setup-completion-summary)
+  reports the brownfield outcomes in that same vocabulary.
+- **Idempotent and re-runnable.** `init.sh` is explicitly re-runnable; the
+  brownfield logic preserves that. A second run detects what the first run already
+  resolved and does not re-offer it or double-apply (e.g. it does not re-tag tags
+  it already created, nor re-prompt to remove files already gone).
+- **No new privilege.** Detecting and resolving brownfield conditions uses only the
+  scopes `init.sh` already requires; where a resolution needs a scope the adopter's
+  token lacks (e.g. editing branch protection), `init.sh` reports the limit and
+  routes to manual steps rather than demanding a broader token silently — consistent
+  with how §req:doctor-credential-clarity treats an under-scoped local token.
+- **Greenfield blast radius is zero.** The change adds no prompts, no detections
+  that fire, and no behavior difference on a fresh repository. Brownfield code paths
+  are reached only when brownfield state is actually present.
+- **Docs and script agree.** The README and `docs/adopter/setup.md` Quick start and
+  existing-repo sections are reconciled so they no longer contradict each other on
+  whether running `init.sh` on a populated repo is safe; the manual brownfield guide
+  remains as the reference for what `init.sh` offers and as the fallback the
+  hard-stop routes to.
+- **Cheap coverage only.** The brownfield paths are covered by the fast local/CI
+  suite with fixture repos and a stubbed `gh`; they add no load to the e2e
+  sandbox's rate-limited installation (§req:sandbox-ci-budget).
+- **Priority.** Adopter-facing and on the documented onboarding path, and the
+  failure is silent and consequential — a brownfield adopter routed past the warning
+  damages their repo and finds out a release later. It therefore ranks among the
+  more impactful items in the setup-onboarding cluster, above the pure-wording polish
+  (§req:init-preset-wording) and alongside the other init-safety work
+  (§req:init-credentials-prompt, §req:setup-completion-summary), while still sitting
+  below the requirements that protect releases or the v2 major
+  (§req:release-safety-gate, §req:composite-action-path) and below the detection
+  spine it depends on (§req:preflight-detection). In decreasing order of user
+  impact: (1) detect brownfield state on every run and stop the documented path from
+  layering on top before any check; (2) offer safe, per-step-confirmed inline
+  resolutions (retag, remove prior release system, add App bypass) for the
+  conditions automation can handle; (3) replace the blind release-conflict override
+  with a hard-stop fallback to the manual guide for everything it cannot resolve
+  safely.
