@@ -1032,7 +1032,6 @@ install_app_on_repo() {
   echo "    Open: https://github.com/organizations/$OWNER/settings/installations"
   echo "    Find the flywheel App, click Configure, add $REPO under 'Only select repositories', and Save."
   echo "    This is the one step that lets the App mint tokens for $REPO."
-  echo "  $(app_install_finish_cmd)"
   if [[ "$INTERACTIVE" -eq 1 ]]; then
     read -r -u 3 -p "  Press ENTER once the App is installed on $REPO..."
   fi
