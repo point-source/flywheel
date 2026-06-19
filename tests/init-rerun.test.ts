@@ -144,7 +144,11 @@ function teardown(s: Sandbox): void {
   rmSync(s.adopter, { recursive: true, force: true });
 }
 
-function runInit(s: Sandbox, env: Record<string, string>): string {
+function runInit(
+  s: Sandbox,
+  env: Record<string, string>,
+  extraArgs: string[] = [],
+): string {
   // @types/node doesn't expose `detached` on SpawnSyncOptions, but Node
   // honors it at runtime (calls setsid → child in new session without an
   // inherited controlling tty → init.sh's `exec 3</dev/tty` fails →
@@ -167,6 +171,7 @@ function runInit(s: Sandbox, env: Record<string, string>): string {
       join(s.scriptDir, "init.sh"),
       "--preset", "minimal",
       "--version", TEST_VERSION,
+      ...extraArgs,
     ],
     opts,
   );
@@ -268,6 +273,104 @@ describe("init.sh re-run resolves App ID via repo variable", () => {
 
       expect(out).toContain("scripts/apply-rulesets.sh test-owner/test-repo");
       expect(out).not.toContain("--app-id");
+    } finally {
+      teardown(s);
+    }
+  });
+});
+
+// WS1 reworded the App-credential prompts so both values are named as the
+// Flywheel GitHub App's *shared* credentials — FLYWHEEL_GH_APP_ID as an
+// Actions Variable, FLYWHEEL_GH_APP_PRIVATE_KEY as an Actions Secret — and
+// explicitly NOT a personal access token / per-user secret. The harness
+// forces INTERACTIVE=0, so the only reachable runtime surface is the
+// non-interactive manual-setup branch (init.sh ~441-451): the
+// `elif [[ "$INTERACTIVE" -eq 0 ]]` arm that prints the manual `gh
+// variable set` / `gh secret set` commands. These tests drive that branch
+// with neither credential present and pin the wording so a cosmetic
+// rewording can't silently regress. The interactive prompt strings (scope
+// menu, setup-path menu, prompt_existing_app_credentials) are unreachable
+// here and are pinned separately by tests/init-credential-wording.test.ts.
+describe("init.sh non-interactive manual-setup App-credential wording", () => {
+  // Anchor unique to the manual-setup branch — if a refactor stops routing
+  // through `elif [[ "$INTERACTIVE" -eq 0 ]]`, every assertion keyed off
+  // this string fails loudly rather than the test passing vacuously.
+  const MANUAL_SETUP_ANCHOR =
+    "non-interactive shell — skipping App-credential prompts";
+
+  it("repo branch names the Variable + Secret as the App's shared credentials", () => {
+    const s = setup();
+    try {
+      // Neither credential present at repo level → manual-setup branch.
+      // User-owned so no org probe, SCOPE unset → repo-scoped commands.
+      const out = runInit(s, {
+        GH_REPO_VARIABLE_LIST: "",
+        GH_REPO_SECRET_LIST: "",
+        GH_OWNER_TYPE: "User",
+      });
+
+      // Confirm we are actually in the manual-setup branch.
+      expect(out).toContain(MANUAL_SETUP_ANCHOR);
+
+      // Framed as the Flywheel GitHub App's shared values, not a PAT.
+      expect(out).toContain("Flywheel");
+      expect(out).toMatch(/GitHub App's two shared values/);
+
+      // FLYWHEEL_GH_APP_ID = Variable, FLYWHEEL_GH_APP_PRIVATE_KEY = Secret.
+      expect(out).toMatch(/FLYWHEEL_GH_APP_ID Variable/);
+      expect(out).toMatch(/FLYWHEEL_GH_APP_PRIVATE_KEY Secret/);
+
+      // Storage location surfaced to the adopter.
+      expect(out).toContain("Settings → Secrets and variables → Actions");
+
+      // Exact repo-scoped gh commands still emitted.
+      expect(out).toContain(
+        "gh variable set FLYWHEEL_GH_APP_ID --body '<your-app-id>' --repo test-owner/test-repo",
+      );
+      expect(out).toContain(
+        "gh secret set FLYWHEEL_GH_APP_PRIVATE_KEY < /path/to/private-key.pem --repo test-owner/test-repo",
+      );
+
+      // Repo branch must not leak the org flags.
+      expect(out).not.toContain("--visibility all");
+    } finally {
+      teardown(s);
+    }
+  });
+
+  it("org branch (--scope org) emits org-wide Variable + Secret commands with visibility all", () => {
+    const s = setup();
+    try {
+      // Neither credential present + --scope org + org owner → manual-setup
+      // org branch (init.sh ~445-447).
+      const out = runInit(
+        s,
+        {
+          GH_REPO_VARIABLE_LIST: "",
+          GH_REPO_SECRET_LIST: "",
+          GH_ORG_VARIABLE_LIST: "",
+          GH_ORG_SECRET_LIST: "",
+          GH_OWNER_TYPE: "Organization",
+        },
+        ["--scope", "org"],
+      );
+
+      expect(out).toContain(MANUAL_SETUP_ANCHOR);
+
+      // Same App-credential framing as the repo branch.
+      expect(out).toMatch(/GitHub App's two shared values/);
+      expect(out).toMatch(/FLYWHEEL_GH_APP_ID Variable/);
+      expect(out).toMatch(/FLYWHEEL_GH_APP_PRIVATE_KEY Secret/);
+      expect(out).toContain("Settings → Secrets and variables → Actions");
+
+      // Org-scoped gh commands with visibility=all so every repo in the
+      // org shares the one App's credentials.
+      expect(out).toContain(
+        "gh variable set FLYWHEEL_GH_APP_ID --body '<your-app-id>' --org test-owner --visibility all",
+      );
+      expect(out).toContain(
+        "gh secret set FLYWHEEL_GH_APP_PRIVATE_KEY < /path/to/private-key.pem --org test-owner --visibility all",
+      );
     } finally {
       teardown(s);
     }
