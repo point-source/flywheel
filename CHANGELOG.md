@@ -1,3 +1,10 @@
+# [2.1.0-dev.13](https://github.com/point-source/flywheel/compare/v2.1.0-dev.12...v2.1.0-dev.13) (2026-06-20)
+
+
+### Features
+
+* brownfield-safe init.sh adoption (detect, resolve, or hard-stop) ([#264](https://github.com/point-source/flywheel/issues/264)) ([e9ebd9c](https://github.com/point-source/flywheel/commit/e9ebd9c79fefbbc7b35c4fea51eb06f7cb4780c2)), closes [#233](https://github.com/point-source/flywheel/issues/233) [#233](https://github.com/point-source/flywheel/issues/233) [#233-3](https://github.com/point-source/flywheel/issues/233-3) [#233-3](https://github.com/point-source/flywheel/issues/233-3) [#233-3](https://github.com/point-source/flywheel/issues/233-3) [#233](https://github.com/point-source/flywheel/issues/233) [#2](https://github.com/point-source/flywheel/issues/2) [#1](https://github.com/point-source/flywheel/issues/1) [#4](https://github.com/point-source/flywheel/issues/4) [#6](https://github.com/point-source/flywheel/issues/6) [#3](https://github.com/point-source/flywheel/issues/3) [#5](https://github.com/point-source/flywheel/issues/5) [#8](https://github.com/point-source/flywheel/issues/8) [#233](https://github.com/point-source/flywheel/issues/233) [#6](https://github.com/point-source/flywheel/issues/6) [#2](https://github.com/point-source/flywheel/issues/2) [#4](https://github.com/point-source/flywheel/issues/4) [#233](https://github.com/point-source/flywheel/issues/233) [#233](https://github.com/point-source/flywheel/issues/233)
+
 # [2.1.0-dev.12](https://github.com/point-source/flywheel/compare/v2.1.0-dev.11...v2.1.0-dev.12) (2026-06-19)
 
 
