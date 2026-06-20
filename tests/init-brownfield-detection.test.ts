@@ -157,6 +157,34 @@ describe("init.sh — brownfield version-tag-shape detection", () => {
     }
   });
 
+  it("prerelease bare-semver 3.4.2-rc1 ⇒ instance+block, retag-resolvable (incl. prerelease)", () => {
+    const r = runInit({ args: SCAFFOLD_ARGS, tags: ["3.4.2-rc1"] });
+    try {
+      const combined = stripAnsi(r.stdout + r.stderr);
+      expect(r.status, `combined:\n${combined}`).not.toBe(0);
+      expect(combined).toContain("[instance]");
+      expect(combined).toContain("3.4.2-rc1");
+      expect(combined).toMatch(/re-tagging with a 'v'|v.?prefix/i);
+      expect(existsSync(join(r.work, ".flywheel.yml"))).toBe(false);
+    } finally {
+      rmSync(r.work, { recursive: true, force: true });
+    }
+  });
+
+  it("4-component 3.4.2.5 (not semver) ⇒ no block (exotic-ignore, false-negative bias)", () => {
+    const r = runInit({ args: SCAFFOLD_ARGS, tags: ["3.4.2.5"] });
+    try {
+      const out = stripAnsi(r.stdout);
+      const combined = stripAnsi(r.stdout + r.stderr);
+      expect(r.status, `combined:\n${combined}`).toBe(0);
+      expect(out).toContain("pre-flight: no blockers.");
+      expect(combined).not.toMatch(/collide with Flywheel's v-prefixed scheme/);
+      expect(existsSync(join(r.work, ".flywheel.yml"))).toBe(true);
+    } finally {
+      rmSync(r.work, { recursive: true, force: true });
+    }
+  });
+
   it("clean repo with only v1.2.3 ⇒ no block, proceeds and writes .flywheel.yml", () => {
     const r = runInit({ args: SCAFFOLD_ARGS, tags: ["v1.2.3"] });
     try {
@@ -264,6 +292,17 @@ const rulesetDetail = (bypass: string) =>
     bypass_actors: JSON.parse(bypass),
   });
 
+// Ruleset scoped to ~DEFAULT_BRANCH (the repo's default branch only), PR-required,
+// no bypass actors — exercises that ~DEFAULT_BRANCH coverage is evaluated against
+// the ACTUAL default branch, not treated as covering every managed branch.
+const rulesetDefaultBranch = JSON.stringify({
+  id: 2,
+  target: "branch",
+  conditions: { ref_name: { include: ["~DEFAULT_BRANCH"], exclude: [] } },
+  rules: [{ type: "pull_request" }],
+  bypass_actors: [],
+});
+
 describe("init.sh — brownfield branch-protection bypass detection", () => {
   it("main protected (PR-required) with EMPTY bypass_actors ⇒ [instance] block; exits non-zero; no .flywheel.yml", () => {
     const r = runInitBP([
@@ -303,6 +342,31 @@ describe("init.sh — brownfield branch-protection bypass detection", () => {
       expect(out).toContain("pre-flight: no blockers.");
       expect(combined).not.toMatch(/omits the Flywheel App as a bypass actor/);
       expect(existsSync(join(r.work, ".flywheel.yml"))).toBe(true);
+    } finally {
+      rmSync(r.work, { recursive: true, force: true });
+    }
+  });
+
+  it("ruleset scoped to ~DEFAULT_BRANCH (default=main), no App bypass ⇒ flags ONLY main, NOT develop/staging (no false positive)", () => {
+    const r = runInitBP([
+      // The default-branch read (`gh api repos/$REPO -q .default_branch`); the stub
+      // can't apply -q, so it returns the already-extracted value directly.
+      [".default_branch", 0, "main"],
+      ["repos/acme/widget/rulesets/2", 0, rulesetDefaultBranch],
+      ["repos/acme/widget/rulesets", 0, JSON.stringify([{ id: 2, target: "branch" }])],
+    ]);
+    try {
+      const combined = stripAnsi(r.stdout + r.stderr);
+      // main IS the default branch, so the ~DEFAULT_BRANCH rule genuinely applies.
+      expect(r.status, `combined:\n${combined}`).not.toBe(0);
+      expect(combined).toContain("[instance]");
+      expect(combined).toMatch(/bypass actor/i);
+      expect(combined).toContain("main");
+      // The fix: develop/staging are NOT the default branch, so the ~DEFAULT_BRANCH
+      // rule must not falsely flag them.
+      expect(combined).not.toMatch(/\bdevelop\b/);
+      expect(combined).not.toMatch(/\bstaging\b/);
+      expect(existsSync(join(r.work, ".flywheel.yml"))).toBe(false);
     } finally {
       rmSync(r.work, { recursive: true, force: true });
     }

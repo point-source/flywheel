@@ -283,6 +283,23 @@ describe("guided retag resolver — interactive (Python pty)", () => {
     }
   });
 
+  it("capitalized 'Yes' ⇒ treated as consent (case-insensitive confirm), retag applied", () => {
+    const r = runInitPty({
+      answers: "Yes\n",
+      tags: ["3.4.2"],
+      withOrigin: true,
+    });
+    try {
+      expect(r.out).toContain("Create and push these v-prefixed tags?");
+      const local = localTags(r.work);
+      expect(local).toContain("v3.4.2");
+      expect(local).toContain("3.4.2");
+      expect(originTags(r.work)).toContain("v3.4.2");
+    } finally {
+      rmSync(r.work, { recursive: true, force: true });
+    }
+  });
+
   it("decline (n) ⇒ no v* tags created, originals intact, manual pointer shown", () => {
     const r = runInitPty({
       answers: "n\n",
