@@ -1,11 +1,45 @@
 import { describe, expect, it } from "vitest";
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { stripAnsi } from "./helpers/ansi.js";
 import { writeDoctorStub } from "./helpers/doctorStub.js";
+
+// Write a hermetic `gh` stub into <binDir>/gh that resolves $REPO and returns a
+// CLEAN (greenfield) remote: no rulesets, no protection, no set variables/secrets.
+// These suites run init.sh end-to-end against a real `origin` only to resolve
+// $REPO, but init's pre-flight now inspects the live remote (brownfield detection,
+// §spec:brownfield-detection) and credential state — so without a stub the result
+// depends on the live ruleset/variable state of point-source/flywheel and on the
+// caller's token scopes (e.g. its managed-branches ruleset legitimately has no App
+// bypass actor, which makes the bypass detector hard-stop in CI). The stub keeps
+// pre-flight clean so these tests stay focused on file emission / the exit
+// contract; brownfield detection has its own hermetic suites. Mirrors how the
+// doctor is already pinned via FLYWHEEL_DOCTOR_OVERRIDE.
+function writeGhStub(binDir: string, repo = "point-source/flywheel"): void {
+  mkdirSync(binDir, { recursive: true });
+  const gh = join(binDir, "gh");
+  writeFileSync(
+    gh,
+    `#!/usr/bin/env bash\n` +
+      `if [[ "$1" == "auth" && "$2" == "status" ]]; then echo "  - Token scopes: 'repo', 'read:org'"; exit 0; fi\n` +
+      `if [[ "$1" == "repo" && "$2" == "view" ]]; then echo ${JSON.stringify(repo)}; exit 0; fi\n` +
+      `if [[ "$1" == "variable" || "$1" == "secret" ]]; then echo ""; exit 0; fi\n` +
+      `if [[ "$1" == "api" ]]; then echo "[]"; exit 0; fi\n` +
+      `echo "stub gh: unhandled: $*" >&2; exit 1\n`,
+  );
+  chmodSync(gh, 0o755);
+}
 
 // scripts/init.sh's deterministic file-emission slice: given a preset and
 // --version, it should write the matching template to the adopter repo
@@ -56,6 +90,13 @@ describe.skipIf(!ghAuthenticated())("init.sh deterministic file emission", () =>
           { cwd: work },
         );
 
+        // Keep pre-flight hermetic: a gh stub resolves $REPO and reports a clean
+        // remote, so brownfield detection / credential reads don't hard-stop on the
+        // live state of point-source/flywheel (which would block before any file is
+        // written). This suite tests file EMISSION, not pre-flight.
+        const binDir = join(work, "bin");
+        writeGhStub(binDir);
+
         // Pin end-of-run validation to a green doctor stub via the
         // FLYWHEEL_TEST_HOOKS seam. Without it the real doctor inspects the
         // live remote and reports genuine block-severity findings for preset
@@ -79,6 +120,7 @@ describe.skipIf(!ghAuthenticated())("init.sh deterministic file emission", () =>
             stdio: "pipe",
             env: {
               ...process.env,
+              PATH: `${binDir}:${process.env.PATH ?? ""}`,
               FLYWHEEL_TEST_HOOKS: "1",
               FLYWHEEL_DOCTOR_OVERRIDE: doctorStub,
             },
@@ -156,6 +198,11 @@ describe.skipIf(!ghAuthenticated())("init.sh completion summary", () => {
       ["remote", "add", "origin", "git@github.com:point-source/flywheel.git"],
       { cwd: work },
     );
+    // Hermetic pre-flight: a gh stub resolves $REPO and reports a clean remote so
+    // brownfield detection / credential reads don't hard-stop on the live state of
+    // point-source/flywheel (it would block before the completion summary). These
+    // tests exercise the exit/completion contract, not pre-flight detection.
+    writeGhStub(join(work, "bin"));
     return work;
   }
 
@@ -193,6 +240,7 @@ describe.skipIf(!ghAuthenticated())("init.sh completion summary", () => {
         stdio: "pipe",
         env: {
           ...process.env,
+          PATH: `${join(work, "bin")}:${process.env.PATH ?? ""}`,
           FLYWHEEL_TEST_HOOKS: "1",
           FLYWHEEL_DOCTOR_OVERRIDE: doctorStub,
           ...(opts.interactive ? { FLYWHEEL_ASSUME_INTERACTIVE: "1" } : {}),
