@@ -3,6 +3,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import {
   chmodSync,
   copyFileSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -554,6 +555,236 @@ describe("init.sh partial-credential detection adds no extra gh probing", () => 
       // extra credential probing to assert the absence of here.
     } finally {
       teardown(s);
+    }
+  });
+});
+
+// ===========================================================================
+// WS4 (#233-3) — BROWNFIELD RE-RUN IDEMPOTENCY (SPEC.md §spec:brownfield-resolvers,
+// §spec:brownfield-resolution: "idempotent — a second run re-reads live state").
+//
+// A resolver mutates pre-existing repo state once; a SECOND run must re-derive
+// from the now-mutated LIVE state and neither re-offer the block nor re-apply the
+// change. These cases stand up the post-resolution live state for each resolver
+// and assert the re-run is quiet: no block named, no mutation re-attempted.
+//
+// This uses its OWN self-contained harness (separate from the credential-focused
+// setup() above) because brownfield detection keys off local git tags + ruleset
+// API responses + on-disk files, not the App-credential variable/secret probes.
+// It ships a GREEN doctor stub via FLYWHEEL_DOCTOR_OVERRIDE so a resolved/quiet
+// run reaches a clean exit under the end-of-run exit contract, and runs
+// non-interactively (input "") — the resolved live state emits no block, so no
+// interactive prompt is reachable and the run completes without one.
+// ===========================================================================
+
+const brownfieldGitEnv = {
+  ...process.env,
+  GIT_AUTHOR_NAME: "t",
+  GIT_AUTHOR_EMAIL: "t@example.com",
+  GIT_COMMITTER_NAME: "t",
+  GIT_COMMITTER_EMAIL: "t@example.com",
+};
+
+/** A gh stub that answers auth/repo-view + the credential probes, and dispatches
+ * `gh api …` over an ordered [needle, exit, stdout] ladder (default `[]`). Records
+ * every `gh api -X PUT …rulesets/…` to $PUT_LOG so a re-run can assert NO PUT. */
+function brownfieldGhStub(apiCases: Array<[string, number, string]>): string {
+  const ladder = apiCases
+    .map(
+      ([needle, code, out]) =>
+        `  if [[ "$args" == *${JSON.stringify(needle)}* ]]; then ` +
+        `printf '%s' ${JSON.stringify(out)}; exit ${code}; fi`,
+    )
+    .join("\n");
+  return (
+    `#!/usr/bin/env bash\n` +
+    `if [[ "$1" == "auth" && "$2" == "status" ]]; then echo "  - Token scopes: 'repo', 'admin:org', 'read:org'"; exit 0; fi\n` +
+    `if [[ "$1" == "repo" && "$2" == "view" ]]; then echo "acme/widget"; exit 0; fi\n` +
+    `if [[ "$1" == "variable" && "$2" == "list" ]]; then echo "FLYWHEEL_GH_APP_ID"; exit 0; fi\n` +
+    `if [[ "$1" == "variable" && "$2" == "get" ]]; then echo "123"; exit 0; fi\n` +
+    `if [[ "$1" == "variable" || "$1" == "secret" ]]; then echo ""; exit 0; fi\n` +
+    `if [[ "$1" == "api" ]]; then\n` +
+    `  shift\n` +
+    `  args="$*"\n` +
+    `  if [[ "$args" == *"-X PUT"*"rulesets/"* ]]; then printf 'PUT %s\\n' "$args" >> "$PUT_LOG"; exit 0; fi\n` +
+    ladder +
+    `\n  echo "[]"; exit 0\n` +
+    `fi\n` +
+    `echo "stub gh: unhandled: $*" >&2; exit 1\n`
+  );
+}
+
+interface BrownfieldSandbox {
+  work: string;
+  binDir: string;
+  doctorStub: string;
+  putLog: string;
+}
+
+/** Stand up a git-init'd work dir with the brownfield gh + green doctor stubs,
+ * the given pre-existing `tags`, and optional on-disk `files` (committed). */
+function brownfieldSetup(opts: {
+  apiCases?: Array<[string, number, string]>;
+  tags?: string[];
+  files?: Record<string, string>;
+}): BrownfieldSandbox {
+  const work = mkdtempSync(join(tmpdir(), "fw-bf-rerun-"));
+  const binDir = join(work, "bin");
+  mkdirSync(binDir);
+  writeFileSync(join(binDir, "gh"), brownfieldGhStub(opts.apiCases ?? []));
+  chmodSync(join(binDir, "gh"), 0o755);
+  // Green doctor stub so a quiet re-run reaches a clean exit (exit contract).
+  const doctorStub = join(binDir, "doctor-stub.sh");
+  writeFileSync(
+    doctorStub,
+    "#!/usr/bin/env bash\nset -euo pipefail\nprintf 'DOCTOR_RESULT blocks=0 warns=0\\n'\nexit 0\n",
+  );
+  chmodSync(doctorStub, 0o755);
+  const putLog = join(work, "put.log");
+  writeFileSync(putLog, "");
+
+  execFileSync("git", ["init", "-q"], { cwd: work });
+  for (const [rel, contents] of Object.entries(opts.files ?? {})) {
+    const dest = join(work, rel);
+    mkdirSync(dirname(dest), { recursive: true });
+    writeFileSync(dest, contents);
+  }
+  execFileSync("git", ["add", "-A"], { cwd: work, env: brownfieldGitEnv });
+  execFileSync("git", ["commit", "-q", "--allow-empty", "-m", "init"], {
+    cwd: work,
+    env: brownfieldGitEnv,
+  });
+  for (const tag of opts.tags ?? []) {
+    execFileSync("git", ["tag", tag], { cwd: work, env: brownfieldGitEnv });
+  }
+  return { work, binDir, doctorStub, putLog };
+}
+
+function runBrownfield(s: BrownfieldSandbox): {
+  status: number | null;
+  out: string;
+} {
+  const res = spawnSync(
+    "bash",
+    [
+      realInitSh,
+      "--preset",
+      "minimal",
+      "--version",
+      TEST_VERSION,
+      "--skip-secrets",
+      "--skip-rulesets",
+    ],
+    {
+      cwd: s.work,
+      encoding: "utf8",
+      input: "",
+      timeout: 30000,
+      env: {
+        ...process.env,
+        PATH: `${s.binDir}:${process.env.PATH}`,
+        FLYWHEEL_TEST_HOOKS: "1",
+        FLYWHEEL_DOCTOR_OVERRIDE: s.doctorStub,
+        FLYWHEEL_ASSUME_INTERACTIVE: "1",
+        PUT_LOG: s.putLog,
+      },
+    },
+  );
+  return { status: res.status, out: (res.stdout ?? "") + (res.stderr ?? "") };
+}
+
+function bfLocalTags(work: string): string[] {
+  return execFileSync("git", ["tag", "-l"], { cwd: work, encoding: "utf8" })
+    .split("\n")
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+function bfPutLines(putLog: string): string[] {
+  return readFileSync(putLog, "utf8").split("\n").filter(Boolean);
+}
+
+/** A branch ruleset on refs/heads/main with a pull_request rule + given bypass. */
+const bfRuleset = (id: number, bypass: unknown[] = []) =>
+  JSON.stringify({
+    id,
+    name: `protect-main-${id}`,
+    target: "branch",
+    enforcement: "active",
+    conditions: { ref_name: { include: ["refs/heads/main"], exclude: [] } },
+    rules: [{ type: "pull_request" }, { type: "non_fast_forward" }],
+    bypass_actors: bypass,
+  });
+
+describe("brownfield resolver re-run idempotency", () => {
+  it("retag: repo already has 3.4.2 AND v3.4.2 ⇒ re-run emits no bare-semver block, no re-tag", () => {
+    // Post-retag live state: both the bare tag and its v-twin exist.
+    const s = brownfieldSetup({ tags: ["3.4.2", "v3.4.2"] });
+    try {
+      const r = runBrownfield(s);
+      // Clean re-run: no collision block, no brownfield hard-stop, exit 0.
+      expect(r.status, `out:\n${r.out}`).toBe(0);
+      expect(r.out).not.toMatch(/collide with Flywheel's v-prefixed scheme/);
+      expect(r.out).not.toContain("Brownfield conditions need your hand");
+      expect(r.out).not.toContain("Create and push these v-prefixed tags?");
+      // No new tag created (v3.4.2 already present, none added; no other v* tags).
+      const tags = bfLocalTags(s.work);
+      expect(tags.filter((t) => t.startsWith("v"))).toEqual(["v3.4.2"]);
+      expect(tags).toContain("3.4.2");
+      expect(existsSync(join(s.work, ".flywheel.yml"))).toBe(true);
+    } finally {
+      rmSync(s.work, { recursive: true, force: true });
+    }
+  });
+
+  it("release removal: prior release file already gone ⇒ re-run detects no release conflict", () => {
+    // Post-removal live state: the prior release-system file is gone (committed
+    // removal), so the working tree has no release-system file → detector flags
+    // nothing. Only a benign CI workflow remains.
+    const s = brownfieldSetup({
+      files: {
+        ".github/workflows/ci.yml":
+          "name: ci\non:\n  pull_request:\njobs:\n  t:\n    runs-on: ubuntu-latest\n    steps:\n      - run: true\n",
+      },
+    });
+    try {
+      const r = runBrownfield(s);
+      expect(r.status, `out:\n${r.out}`).toBe(0);
+      expect(r.out).not.toMatch(/races Flywheel's tag\/release creation/);
+      expect(r.out).not.toContain("Remove these prior release-system files?");
+      expect(r.out).not.toContain("Brownfield conditions need your hand");
+      expect(existsSync(join(s.work, ".flywheel.yml"))).toBe(true);
+    } finally {
+      rmSync(s.work, { recursive: true, force: true });
+    }
+  });
+
+  it("bypass: ruleset already lists the App as Integration bypass ⇒ re-run emits no block, no ruleset PUT", () => {
+    // Post-resolution live state: ruleset 1 already carries the App's Integration
+    // bypass entry, so the detector does not flag a branch_protection_bypass block.
+    const s = brownfieldSetup({
+      apiCases: [
+        ["repos/acme/widget/branches/main/protection", 1, ""],
+        ["repos/acme/widget/branches/main", 0, ""],
+        [
+          "repos/acme/widget/rulesets/1",
+          0,
+          bfRuleset(1, [{ actor_id: 123, actor_type: "Integration", bypass_mode: "always" }]),
+        ],
+        ["repos/acme/widget/rulesets", 0, JSON.stringify([{ id: 1, target: "branch" }])],
+      ],
+    });
+    try {
+      const r = runBrownfield(s);
+      expect(r.status, `out:\n${r.out}`).toBe(0);
+      expect(r.out).not.toMatch(/omits the Flywheel App as a bypass actor/);
+      expect(r.out).not.toContain("Add the Flywheel App as a bypass actor");
+      expect(r.out).not.toContain("Brownfield conditions need your hand");
+      // No ruleset PUT issued on the re-run.
+      expect(bfPutLines(s.putLog)).toEqual([]);
+      expect(existsSync(join(s.work, ".flywheel.yml"))).toBe(true);
+    } finally {
+      rmSync(s.work, { recursive: true, force: true });
     }
   });
 });

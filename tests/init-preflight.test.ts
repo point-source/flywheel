@@ -35,16 +35,12 @@ import { writeDoctorStub } from "./helpers/doctorStub.js";
 // real repo path, SCRIPT_DIR resolves to <repoRoot>/scripts, so findings.sh and
 // the local presets are found on disk (no curl).
 //
-// NOTE on the override hook: scripts/init.sh ships `preflight_block` +
-// PREFLIGHT_OVERRIDE_<token> in this batch, which demotes a block to an advisory
-// warn when the override is active. There is, by design, no caller yet — its
-// only caller (the --override-release-conflict flag) arrives in Batch 4
-// (§spec:preflight-release-conflict). The FLYWHEEL_PREFLIGHT_INJECT seam emits
-// raw `finding` lines, not `preflight_block`, so there is no non-brittle
-// end-to-end path to drive the override from here without duplicating the
-// function body. The override's end-to-end test therefore lands in Batch 4
-// alongside its caller; findings.sh's vocabulary (which preflight_block builds
-// on) is unit-covered in tests/findings.test.ts.
+// NOTE: the old --override-release-conflict flag and its `preflight_block` /
+// PREFLIGHT_OVERRIDE_<token> "blind proceed" demotion were removed in batch
+// #233-2. A block can no longer be silenced: the release-conflict block now
+// hard-stops via brownfield_resolve to the manual brownfield guide
+// (§spec:brownfield-resolution). This file drives the gate directly via the
+// FLYWHEEL_PREFLIGHT_INJECT seam, which emits raw `finding` lines.
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 const initSh = join(repoRoot, "scripts/init.sh");
@@ -213,6 +209,137 @@ describe("init.sh — pre-flight gate (end-to-end)", () => {
       expect(out).toContain("allow_auto_merge disabled (test)");
       expect(out).toContain("gh up to date (test)");
       expect(existsSync(join(r.work, ".flywheel.yml"))).toBe(true);
+    } finally {
+      rmSync(r.work, { recursive: true, force: true });
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Greenfield parity for the FULL brownfield detector set
+// (SPEC.md §spec:brownfield-detection, criterion "greenfield parity": on a
+// clean/greenfield repository the pass reports NO brownfield findings and setup
+// proceeds exactly as before). This is the batch's headline acceptance check:
+// with all four brownfield detectors (version-tag shape, branch-protection
+// bypass, signed-commit requirement, history/open-PRs) wired at the seam, a repo
+// that is "populated but clean" — and a truly empty greenfield repo — must
+// behave EXACTLY like the clean pre-flight pass above: exit 0, print
+// "pre-flight: no blockers.", write .flywheel.yml, and surface NONE of the
+// brownfield advisory/block strings.
+//
+// The default runInit gh stub only answers `gh auth status` + `gh repo view`, so
+// a `gh api …` call (the remote-tag/ruleset/PR probes) would hit its unhandled
+// branch. This helper layers a `gh api … ⇒ []` answer over that stub and seeds
+// the work-dir git repo with REAL conventional commits + a v-prefixed tag, so
+// every detector actually runs against clean inputs rather than being skipped.
+const GIT_IDENT = {
+  GIT_AUTHOR_NAME: "t",
+  GIT_AUTHOR_EMAIL: "t@example.com",
+  GIT_COMMITTER_NAME: "t",
+  GIT_COMMITTER_EMAIL: "t@example.com",
+};
+
+/** A gh stub that answers auth/repo-view AND every `gh api …` call with `[]`
+ * (exit 0) — so the remote-tag cross-check, ruleset list, and open-PR scan all
+ * observe a clean remote and stay quiet. */
+const CLEAN_API_GH_STUB =
+  `#!/usr/bin/env bash\n` +
+  `if [[ "$1" == "auth" && "$2" == "status" ]]; then echo "  - Token scopes: 'repo', 'read:org'"; exit 0; fi\n` +
+  `if [[ "$1" == "repo" && "$2" == "view" ]]; then echo "acme/widget"; exit 0; fi\n` +
+  `if [[ "$1" == "variable" || "$1" == "secret" ]]; then echo ""; exit 0; fi\n` +
+  `if [[ "$1" == "api" ]]; then echo "[]"; exit 0; fi\n` +
+  `echo "stub gh: unhandled: $*" >&2; exit 1\n`;
+
+/** Build a work dir, seed REAL git commits + tags, and run init with the clean
+ * `gh api ⇒ []` stub. Used to prove greenfield parity across all four brownfield
+ * detectors (they must observe clean inputs and stay silent). */
+function rerunSeeded(opts: { commits?: string[]; tags?: string[] }): RunResult {
+  const work = mkdtempSync(join(tmpdir(), "flywheel-greenfield-"));
+  const binDir = join(work, "bin");
+  mkdirSync(binDir);
+  const gh = join(binDir, "gh");
+  writeFileSync(gh, CLEAN_API_GH_STUB);
+  chmodSync(gh, 0o755);
+  const doctorStub = writeDoctorStub(binDir, { blocks: 0, warns: 0 });
+  execFileSync("git", ["init", "-q"], { cwd: work });
+  const gitEnv = { ...process.env, ...GIT_IDENT };
+  for (const subject of opts.commits ?? []) {
+    execFileSync("git", ["commit", "-q", "--allow-empty", "-m", subject], { cwd: work, env: gitEnv });
+  }
+  for (const tag of opts.tags ?? []) {
+    execFileSync("git", ["tag", tag], { cwd: work, env: gitEnv });
+  }
+  const r = spawnSync("bash", [initSh, ...SCAFFOLD_ARGS], {
+    cwd: work,
+    encoding: "utf8",
+    input: "",
+    timeout: 30000,
+    env: {
+      ...process.env,
+      PATH: `${binDir}:${process.env.PATH}`,
+      FLYWHEEL_TEST_HOOKS: "1",
+      FLYWHEEL_DOCTOR_OVERRIDE: doctorStub,
+    },
+  });
+  return { status: r.status, stdout: r.stdout ?? "", stderr: r.stderr ?? "", work };
+}
+
+// Brownfield advisory/block strings that MUST NOT appear on a clean repo. Each
+// is a fragment uniquely emitted by one of the four detectors (see
+// tests/init-brownfield-detection.test.ts for their positive cases).
+const BROWNFIELD_FINDING_FRAGMENTS = [
+  /collide with Flywheel's v-prefixed scheme/i, // version-tag shape
+  /not auto-resolvable/i, // version-tag (non-semver) + signed-commit
+  /omits the Flywheel App as a bypass actor/i, // branch-protection bypass
+  /signed commits\/tags/i, // signed-commit requirement
+  /skip ci/i, // history awareness
+  /not Conventional Commits/i, // history awareness
+  /open PR\(s\)/i, // open-PR awareness
+];
+
+describe("init.sh — brownfield greenfield parity (§spec:brownfield-detection)", () => {
+  it("populated-but-clean repo (conventional commits + v-prefixed tag, empty remote) ⇒ no brownfield findings; proceeds exactly as before", () => {
+    const r = rerunSeeded({
+      commits: ["feat: alpha", "fix: beta"],
+      tags: ["v1.2.3"],
+    });
+    try {
+      const out = stripAnsi(r.stdout);
+      const combined = stripAnsi(r.stdout + r.stderr);
+      expect(r.status, `combined:\n${combined}`).toBe(0);
+      // Identical observable contract to the clean pre-flight pass above.
+      expect(out).toContain("Pre-flight checks:");
+      expect(out).toContain("pre-flight: no blockers.");
+      const summaryAt = out.indexOf("Pre-flight checks:");
+      const writeAt = out.indexOf("wrote .flywheel.yml");
+      expect(summaryAt).toBeGreaterThanOrEqual(0);
+      expect(writeAt).toBeGreaterThanOrEqual(0);
+      expect(summaryAt).toBeLessThan(writeAt);
+      expect(existsSync(join(r.work, ".flywheel.yml"))).toBe(true);
+      // No brownfield finding (block OR advisory) appears anywhere. We match on
+      // each detector's UNIQUE message fragment rather than the shared
+      // `[instance]` bucket tag — the credentials-app detector legitimately
+      // emits an `[instance]` advisory ("no App ID configured yet") on every
+      // clean run, so bucket-tag presence is not evidence of a brownfield find.
+      for (const re of BROWNFIELD_FINDING_FRAGMENTS) {
+        expect(combined, `unexpected brownfield finding ${re}`).not.toMatch(re);
+      }
+    } finally {
+      rmSync(r.work, { recursive: true, force: true });
+    }
+  });
+
+  it("truly greenfield repo (fresh git init, no tags, only an initial commit, empty remote) ⇒ no blockers; proceeds", () => {
+    const r = rerunSeeded({ commits: ["chore: initial"], tags: [] });
+    try {
+      const out = stripAnsi(r.stdout);
+      const combined = stripAnsi(r.stdout + r.stderr);
+      expect(r.status, `combined:\n${combined}`).toBe(0);
+      expect(out).toContain("pre-flight: no blockers.");
+      expect(existsSync(join(r.work, ".flywheel.yml"))).toBe(true);
+      for (const re of BROWNFIELD_FINDING_FRAGMENTS) {
+        expect(combined, `unexpected brownfield finding ${re}`).not.toMatch(re);
+      }
     } finally {
       rmSync(r.work, { recursive: true, force: true });
     }

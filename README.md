@@ -23,7 +23,7 @@ Run from your repo, with `gh auth login` already done:
 curl -fsSL https://raw.githubusercontent.com/point-source/flywheel/main/scripts/init.sh | bash
 ```
 
-`init.sh` picks a `.flywheel.yml` preset, writes both Flywheel workflow files, prompts for the GitHub App credentials, and (optionally) applies the recommended branch + tag rulesets. The three presets differ by purpose:
+`init.sh` picks a `.flywheel.yml` preset, writes both Flywheel workflow files, prompts for the GitHub App credentials, and (optionally) applies the recommended branch + tag rulesets. It is safe to run on **any** repository, greenfield or populated: before it writes anything, every run checks for brownfield conditions — prior version tags, an existing release pipeline, branch protection that omits the App — and either resolves them inline after showing you the exact change and asking, or stops with a non-zero exit and routes you to the manual guide when a condition needs a judgment call. Running the one command above top-down never silently layers Flywheel onto a conflicting setup. The three presets differ by purpose:
 
 - **`minimal`** — a single release line on one branch that cuts a release on every qualifying push.
 - **`three-stage`** — one release line through staged branches (develop → staging → main) with promotion PRs between them.
@@ -35,7 +35,7 @@ See [docs/adopter/setup.md §2](./docs/adopter/setup.md#2-add-flywheelyml) for t
 curl -fsSL https://raw.githubusercontent.com/point-source/flywheel/main/scripts/doctor.sh | bash
 ```
 
-> **Adopting into an existing repo** with prior version tags, release automation, or branch protection? Skip `init.sh` and start with [docs/adopter/setup.md §0](./docs/adopter/setup.md#0-adopting-flywheel-into-an-existing-project) — it covers the audit and cleanup steps the script doesn't.
+> **Adopting into an existing repo** with prior version tags, release automation, or branch protection? Run the one command above — `init.sh` detects those conditions on every run, offers to resolve the safe ones inline (with your confirmation), and stops with a pointer to [docs/adopter/setup.md §0](./docs/adopter/setup.md#0-adopting-flywheel-into-an-existing-project) when a condition needs a judgment call. §0 is the reference for what the inline resolvers do and the guide the hard stop routes you to.
 
 The hand-rolled equivalent — four files in your repo:
 

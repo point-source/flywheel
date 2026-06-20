@@ -48,12 +48,6 @@
 #                         is installed org-wide. Requires an admin:org gh
 #                         token. Defaults to prompting interactively when
 #                         the owner is an Organization, otherwise `repo`.
-#   --override-release-conflict
-#                         proceed past a detected existing release system
-#                         (release-please / semantic-release / a hand-rolled
-#                         tag/release step in a workflow). Opt-in and
-#                         deliberate; never the default. Interactive only — a
-#                         non-interactive run still exits non-zero on the block.
 #
 # Dependencies: git, gh. (apply-rulesets.sh additionally needs jq + python3
 # with PyYAML.)
@@ -79,10 +73,6 @@ SCOPE=""
 # rulesets this script applies, otherwise semantic-release tag pushes are
 # rejected).
 CREATED_APP_ID=""
-# Opt-in only: set solely by --override-release-conflict. When 1, preflight_block
-# demotes the release_conflict block to an advisory warn (never inferred). Read
-# via indirect expansion (${!ovar}), so export to mark it used for shellcheck.
-export PREFLIGHT_OVERRIDE_release_conflict=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -92,7 +82,6 @@ while [[ $# -gt 0 ]]; do
     --strict) STRICT=1; shift ;;
     --required-checks) REQUIRED_CHECKS="$2"; shift 2 ;;
     --force) FORCE=1; shift ;;
-    --override-release-conflict) PREFLIGHT_OVERRIDE_release_conflict=1; shift ;;
     --version) FLYWHEEL_VERSION="$2"; shift 2 ;;
     --scope)
       case "$2" in
@@ -362,7 +351,7 @@ preflight_detect_credentials_app() {
 # §spec:preflight-release-conflict). Iterates the adopter's own workflow files
 # (skipping flywheel's scaffold and anything referencing point-source/flywheel)
 # and emits an instance + block per (file, producer-kind) match via
-# preflight_block. Deliberately minimal and biased to FALSE NEGATIVES: it covers
+# brownfield_finding. Deliberately minimal and biased to FALSE NEGATIVES: it covers
 # the systems that actually race flywheel (release-please, a separate
 # semantic-release, hand-rolled gh/git/npm producers in push/dispatch workflows)
 # rather than auditing every release tool — a missed exotic system is rare and
@@ -370,10 +359,14 @@ preflight_detect_credentials_app() {
 #
 # _release_conflict_block <producers> <path> — emit the one standard instance +
 # block for a file's detected producer(s); all matches in a file share one block,
-# since a single conflicting file is one thing for the adopter to fix.
+# since a single conflicting file is one thing for the adopter to fix. ALSO stash
+# <path> in RELEASE_CONFLICT_PATHS so the resolver (brownfield_resolver_release_conflict)
+# can offer to remove exactly the flagged files/dirs — detection runs immediately
+# before resolution, so the array is fresh.
 _release_conflict_block() {
-  preflight_block release_conflict instance \
-    "$1 detected in $2 — it races Flywheel's tag/release creation. Remove or disable it, or re-run with --override-release-conflict."
+  brownfield_finding release_conflict yes instance block \
+    "$1 detected in $2 — it races Flywheel's tag/release creation. Remove or disable the conflicting workflow (see docs/adopter/setup.md §0.2), then re-run."
+  RELEASE_CONFLICT_PATHS+=("$2")
 }
 preflight_detect_release_conflict() {
   local path base producers
@@ -395,6 +388,10 @@ preflight_detect_release_conflict() {
     # A separate semantic-release (cycjimmy/semantic-release-action or
     # npx semantic-release). flywheel's own files are already excluded above.
     grep -qi 'semantic-release' "$path" && producers+="semantic-release, "
+    # goreleaser — goreleaser/goreleaser-action or a bare `goreleaser` invocation.
+    grep -qi 'goreleaser' "$path" && producers+="goreleaser, "
+    # changesets — the changesets/action release step.
+    grep -qi 'changesets/action' "$path" && producers+="changesets, "
     # Hand-rolled producers only count when the workflow runs on push or
     # workflow_dispatch — the triggers that publish releases on merge/manual run.
     if grep -qE '^[[:space:]]*push:' "$path" || grep -qE '^[[:space:]]*workflow_dispatch:' "$path"; then
@@ -411,8 +408,629 @@ preflight_detect_release_conflict() {
 
     [[ -n "$producers" ]] && _release_conflict_block "${producers%, }" "$path"
   done
+
+  # Config-file producers at repo root — a goreleaser config or a changesets dir
+  # is a positively-attributable prior release system even with no workflow yet.
+  for path in .goreleaser.yml .goreleaser.yaml; do
+    [[ -f "$path" ]] && _release_conflict_block "goreleaser" "$path"
+  done
+  # changesets keeps its state in .changeset/config.json; flag the directory as the
+  # removable unit (the resolver `git rm -r`s it).
+  if [[ -f .changeset/config.json ]]; then
+    _release_conflict_block "changesets" ".changeset"
+  fi
   # A trailing unmatched `grep ... &&` would leave a non-zero status; the gate
   # reads FINDINGS_BLOCK_COUNT, not this return, so end deterministically at 0.
+  return 0
+}
+
+# ---------------------------------------------------------------------------
+# Brownfield-condition registry (SPEC.md §spec:brownfield-resolution).
+#
+# Every brownfield hazard a detector CONFIRMS is recorded here so the resolution
+# phase (brownfield_resolve, below) can iterate the conditions: enumerate them,
+# hard-stop the blocks to the manual §0 guide, and — once #233-3 lands the
+# resolvers — offer each a shown-before-applied, per-step opt-in fix. Until then
+# every entry hard-stops (block) or is deferred (info).
+#
+# bash 3.2-safe: a single indexed array of tab-separated records
+#   token \t bucket \t severity \t resolvable \t message
+# `token` and `resolvable` are forward-compat seams for #233-3: it keys each
+# resolver on `token` and acts on `resolvable`. Neither is consulted THIS batch
+# (only bucket/severity/message are read by brownfield_resolve and the summary
+# bridge) — they are carried now so the detectors need not be re-touched when the
+# resolvers land. An empty array — a greenfield repo — makes the resolution phase
+# a strict no-op (zero blast radius).
+#
+# could-not-verify warns (a degraded read, not a confirmed condition) are NOT
+# registered: they stay plain `finding ... warn`.
+# ---------------------------------------------------------------------------
+BROWNFIELD_CONDITIONS=()
+
+# BROWNFIELD_OUTCOMES — what the resolution phase DID with each block condition,
+# appended by brownfield_resolve and replayed into the completion summary later by
+# brownfield_emit_summary_records. bash 3.2-safe: a single indexed array of
+# tab-separated records `token \t outcome \t bucket \t severity \t message`, where
+# outcome ∈ resolved|declined|hardstop. It exists separately from
+# BROWNFIELD_CONDITIONS because brownfield_resolve runs BEFORE record_outcome is
+# defined (see the call seam ~"preflight_run / brownfield_resolve / preflight_gate"),
+# so the resolution phase may not call record_outcome directly — it stashes the
+# verdict here and the summary bridge translates it once record_outcome exists.
+BROWNFIELD_OUTCOMES=()
+
+# RELEASE_CONFLICT_PATHS — the config files / workflow files / dirs the
+# release-conflict detector flagged, in flag order. This is the exact removable
+# set brownfield_resolver_release_conflict offers to delete (one consolidated
+# offer for the whole prior release system). Populated by _release_conflict_block;
+# read once by the resolver. Detection runs immediately before resolution, so the
+# array is always fresh for the resolver.
+RELEASE_CONFLICT_PATHS=()
+
+# brownfield_finding <token> <resolvable> <bucket> <severity> <message>
+# Emit a brownfield finding through the shared `finding` vocabulary AND record it
+# in BROWNFIELD_CONDITIONS, keeping the registry in lockstep with what the adopter
+# sees. Use this — not bare `finding` — for every CONFIRMED brownfield hazard.
+brownfield_finding() {
+  local token="$1" resolvable="$2" bucket="$3" severity="$4" message="$5"
+  finding "$bucket" "$severity" "$message" || return 1
+  BROWNFIELD_CONDITIONS+=("${token}"$'\t'"${bucket}"$'\t'"${severity}"$'\t'"${resolvable}"$'\t'"${message}")
+}
+
+# preflight_detect_version_tag_shape — read-only scan for pre-existing tags whose
+# shape would mislead semantic-release's `v`-prefixed versioning (SPEC.md
+# §spec:brownfield-detection). `git tag -l` is the authoritative local source: it
+# needs no token (an adopter's clone carries the remote tags), so there is no
+# could-not-verify path here — local tags are always observable. When REPO is
+# resolved we ALSO fold in remote tags (best-effort, errors swallowed) so a tag
+# created on the remote after the local fetch is still seen; the merge is deduped.
+#
+# Classification (biased to FALSE NEGATIVES — never block a clean repo on an
+# exotic tag):
+#   ^v[0-9]+\.[0-9]+\.[0-9]+  flywheel/semantic-release v-prefixed -> IGNORE.
+#   ^[0-9]+\.[0-9]+(\.[0-9]+)? bare-semver (3.4.2, 2.0)            -> instance+block,
+#                             resolvable inline later by re-tagging with a `v`.
+#   ^(release|stable|rel|ver|version)[-_/.] (case-insensitive)    -> instance+block,
+#                             a named release scheme that needs an adopter baseline
+#                             choice and is NOT auto-resolvable.
+#   anything else (nightly, latest, feature tags)                 -> IGNORE.
+# One block finding per category, listing the offending tag(s) — one thing to fix
+# per category, mirroring the release-conflict detector's style.
+#
+# PREFLIGHT_REMOTE_TAGS memoizes the paginated remote-tag read so the guided-retag
+# resolver can reuse it instead of re-issuing `gh api repos/$REPO/tags` — nothing
+# mutates remote tags between detection and the resolver (the resolver is what
+# pushes them), so the remote set cannot change within a run. The resolver still
+# re-reads LOCAL `git tag -l` live (cheap, no token) for idempotency. Mirrors the
+# PREFLIGHT_RULESET_* / PREFLIGHT_MANAGED_BRANCHES memoization that conserves the
+# adopter's rate limit.
+PREFLIGHT_REMOTE_TAGS=""
+preflight_detect_version_tag_shape() {
+  local tags tag bare_semver="" non_semver=""
+  # git tag -l always works in a git repo (no token); never errors the run.
+  tags="$(git tag -l 2>/dev/null || true)"
+  # Best-effort cross-check of remote tags; merge + dedupe. Swallow all errors so
+  # a missing token / network leaves the local-tag result untouched. Stash the
+  # remote set for the retag resolver (see PREFLIGHT_REMOTE_TAGS above).
+  if [[ -n "${REPO:-}" ]]; then
+    PREFLIGHT_REMOTE_TAGS="$(gh api "repos/$REPO/tags" --paginate -q '.[].name' 2>/dev/null || true)"
+    tags="$(printf '%s\n%s\n' "$tags" "$PREFLIGHT_REMOTE_TAGS" | sort -u)"
+  fi
+
+  while IFS= read -r tag; do
+    [[ -n "$tag" ]] || continue
+    # v-prefixed semver is greenfield-compatible — ignore. Anchored, with optional
+    # prerelease/build-metadata suffix, so v3.4.2 / v3.4.2-rc1 / v2.0.0+build7 are
+    # skipped but a 4-component vX.Y.Z.W (not semver) falls through to exotic-ignore.
+    [[ "$tag" =~ ^v[0-9]+\.[0-9]+(\.[0-9]+)?([-+][0-9A-Za-z.-]+)?$ ]] && continue
+    # Bare semver, including prerelease/build-metadata (3.4.2, 3.4.2-rc1, 2.0.0+build7)
+    # — all collide with the v-prefixed scheme and are retag-resolvable.
+    if [[ "$tag" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?([-+][0-9A-Za-z.-]+)?$ ]]; then
+      # Idempotency: a bare-semver tag whose `v`-prefixed twin already exists in
+      # the gathered set (local + remote) is ALREADY resolved — the guided retag
+      # (§spec:brownfield-resolvers) is non-destructive and leaves the original in
+      # place, so without this skip a re-run after a successful retag would re-flag
+      # the same tag forever. Match against the deduped `tags` list with anchors.
+      if printf '%s\n' "$tags" | grep -qxF "v$tag"; then
+        continue
+      fi
+      bare_semver+="$tag, "
+    elif printf '%s' "$tag" | grep -qiE '^(release|stable|rel|ver|version)[-_/.]'; then
+      non_semver+="$tag, "
+    fi
+    # Anything else is an exotic tag — ignore (false-negative bias).
+  done <<<"$tags"
+
+  if [[ -n "$bare_semver" ]]; then
+    brownfield_finding tag_shape_bare_semver yes instance block "bare-semver tag(s) ${bare_semver%, } collide with Flywheel's v-prefixed scheme — semantic-release would silently mis-version the first release. Resolvable inline later by re-tagging with a 'v' prefix."
+  fi
+  if [[ -n "$non_semver" ]]; then
+    brownfield_finding tag_shape_non_semver no instance block "non-semver release tag(s) ${non_semver%, } collide with Flywheel's v-prefixed scheme. This needs an adopter baseline choice and is NOT auto-resolvable — pick a starting version before layering Flywheel on."
+  fi
+  # See preflight_detect_release_conflict: end deterministically at 0; the gate
+  # reads FINDINGS_BLOCK_COUNT, not this return.
+  return 0
+}
+
+# ---------------------------------------------------------------------------
+# Brownfield branch-protection helpers (§spec:brownfield-detection).
+#
+# These two helpers are SHARED reuse boundaries: the branch-protection-bypass
+# detector below uses them, and the sibling signed-commit/tag workstream reuses
+# the same managed-branch enumeration + parsed ruleset details rather than
+# re-probing gh. Keep them standalone, read-only, and error-swallowing.
+# ---------------------------------------------------------------------------
+
+# preflight_brownfield_managed_branches — echo (newline-separated) the candidate
+# managed branches that EXIST on the remote. The candidate set is flywheel's
+# standard topology (develop main staging) because at pre-flight the preset /
+# .flywheel.yml is not yet known — we probe the superset and let the caller act
+# only on what exists. KNOWN LIMITATION (point-source/flywheel#263): a renamed /
+# multi-stream topology whose managed branch is none of develop/main/staging is not
+# probed by the branch-scoped detectors, so those checks silently no-op there (a
+# false negative caught later by doctor.sh or the first release). Existence is
+# tested with the doctor.sh idiom
+# (`gh api repos/$REPO/branches/$b`). REPO may be empty (gh unresolved); in that
+# case we can't probe the remote, so echo nothing. Read-only; errors swallowed.
+# Memoized once per run: both the bypass and signed-commit detectors call this,
+# and each probe is 3 gh API calls (develop/main/staging) — without the guard
+# that is 6 calls per run against the adopter's rate limit. preflight_run resets
+# the flag so a fresh run re-probes.
+PREFLIGHT_MANAGED_BRANCHES=""
+PREFLIGHT_MANAGED_BRANCHES_READ=0
+preflight_brownfield_managed_branches() {
+  if [[ $PREFLIGHT_MANAGED_BRANCHES_READ -eq 0 ]]; then
+    PREFLIGHT_MANAGED_BRANCHES_READ=1
+    if [[ -n "${REPO:-}" ]]; then
+      local b found=""
+      for b in develop main staging; do
+        if gh api "repos/$REPO/branches/$b" >/dev/null 2>&1; then
+          found+="${found:+$'\n'}$b"
+        fi
+      done
+      PREFLIGHT_MANAGED_BRANCHES="$found"
+    fi
+  fi
+  [[ -n "$PREFLIGHT_MANAGED_BRANCHES" ]] && printf '%s\n' "$PREFLIGHT_MANAGED_BRANCHES"
+  return 0
+}
+
+# preflight_brownfield_read_rulesets — list the repo's branch-target rulesets and
+# read each one's detail, mirroring doctor.sh's read_ruleset_detail pattern.
+# Populates parallel arrays (bash 3.2 compatible — no associative arrays):
+#   PREFLIGHT_RULESET_IDS[]     — ruleset id
+#   PREFLIGHT_RULESET_DETAILS[] — the ruleset detail JSON (same index as the id)
+# and the flag PREFLIGHT_RULESET_UNREADABLE (0|1): set when listing rulesets
+# fails (token lacks repo-admin) OR any single ruleset's DETAIL read fails. As in
+# doctor.sh, an unreadable ruleset must NEVER collapse into a false "absent"
+# verdict — the caller routes the unreadable flag to a could-not-verify warn. The
+# parsed details are exposed as globals so the signed-commit workstream can reuse
+# them. Read-only; all gh errors swallowed.
+PREFLIGHT_RULESET_IDS=()
+PREFLIGHT_RULESET_DETAILS=()
+PREFLIGHT_TAG_RULESET_IDS=()
+PREFLIGHT_TAG_RULESET_DETAILS=()
+PREFLIGHT_RULESET_UNREADABLE=0
+# Idempotence guard: the branch-protection-bypass and signed-commit detectors
+# each call this reader within one preflight_run, but the ruleset list/detail
+# reads are identical between them. Once populated this run, skip the (paged) gh
+# API calls and reuse the parallel arrays. preflight_run resets the flag to 0 at
+# the top so a fresh run re-reads. Without the guard the two detectors would
+# double-list rulesets every run.
+PREFLIGHT_RULESETS_READ=0
+# BYPASS_RULESET_IDS / BYPASS_CLASSIC_BRANCHES — the EXACT edit targets the
+# branch-protection-bypass resolver (brownfield_resolver_branch_protection_bypass,
+# §spec:brownfield-resolvers) acts on, stashed by the detector below alongside the
+# aggregated finding so the resolver never has to re-derive which ruleset to edit:
+#   BYPASS_RULESET_IDS[]      — ruleset id(s) that cover an affected branch with a
+#                               blocking rule but no App bypass actor (deduped).
+#                               These are the ruleset(s) the resolver PUT-edits.
+#   BYPASS_CLASSIC_BRANCHES[] — affected branches whose hazard comes from CLASSIC
+#                               branch protection (no editable ruleset). Apps can't
+#                               be added as classic-protection bypass actors, so the
+#                               resolver names these and routes them to manual.
+# Reset at the top of the detector each run so a re-run re-derives from live state.
+BYPASS_RULESET_IDS=()
+BYPASS_CLASSIC_BRANCHES=()
+# _preflight_read_ruleset_details <ids-newline-list> <ids-array-name> <details-array-name>
+# Read each ruleset id's detail JSON into the named parallel arrays, mirroring
+# doctor.sh's read_ruleset_detail: a denied detail read (listing allowed but
+# reading one needs repo-admin) sets PREFLIGHT_RULESET_UNREADABLE so an unread
+# ruleset never collapses into a false block (doctor.sh #239 logic).
+_preflight_read_ruleset_details() {
+  local ids="$1" ids_arr="$2" details_arr="$3" rid detail
+  while read -r rid; do
+    [[ -z "$rid" ]] && continue
+    if ! detail="$(gh api "repos/$REPO/rulesets/$rid" 2>/dev/null)"; then
+      PREFLIGHT_RULESET_UNREADABLE=1
+      continue
+    fi
+    eval "$ids_arr+=(\"\$rid\")"
+    eval "$details_arr+=(\"\$detail\")"
+  done <<< "$ids"
+}
+# Read both branch- AND tag-target rulesets in one list call: the signed-commit
+# detector needs tag rulesets (refs/tags/v* signing) and the bypass detector
+# needs branch rulesets, so collecting both here lets the signed-commit detector
+# reuse the cached tag details instead of re-listing rulesets a second time.
+preflight_brownfield_read_rulesets() {
+  [[ $PREFLIGHT_RULESETS_READ -eq 1 ]] && return 0
+  PREFLIGHT_RULESET_IDS=()
+  PREFLIGHT_RULESET_DETAILS=()
+  PREFLIGHT_TAG_RULESET_IDS=()
+  PREFLIGHT_TAG_RULESET_DETAILS=()
+  PREFLIGHT_RULESET_UNREADABLE=0
+  PREFLIGHT_RULESETS_READ=1
+  [[ -n "${REPO:-}" ]] || return 0
+  local rulesets_json branch_ids tag_ids
+  if ! rulesets_json="$(gh api "repos/$REPO/rulesets" 2>/dev/null)"; then
+    # Listing failed entirely — token can't read rulesets. Mark indeterminate so
+    # the caller emits could-not-verify rather than asserting "no protection".
+    PREFLIGHT_RULESET_UNREADABLE=1
+    return 0
+  fi
+  branch_ids="$(echo "$rulesets_json" | jq -r '.[]? | select(.target == "branch") | .id' 2>/dev/null || true)"
+  _preflight_read_ruleset_details "$branch_ids" PREFLIGHT_RULESET_IDS PREFLIGHT_RULESET_DETAILS
+  tag_ids="$(echo "$rulesets_json" | jq -r '.[]? | select(.target == "tag") | .id' 2>/dev/null || true)"
+  _preflight_read_ruleset_details "$tag_ids" PREFLIGHT_TAG_RULESET_IDS PREFLIGHT_TAG_RULESET_DETAILS
+}
+
+# preflight_brownfield_default_branch — echo the repo's default branch as a full
+# ref (refs/heads/<name>), or empty if REPO is unresolved / the read fails. Needed
+# so ~DEFAULT_BRANCH coverage is evaluated against the ACTUAL default branch rather
+# than treated as covering every managed branch. Memoized once per run (one gh read
+# serves every ref_covered call); preflight_run resets the flag so a fresh run
+# re-reads. Read-only; errors swallowed.
+PREFLIGHT_DEFAULT_BRANCH=""
+PREFLIGHT_DEFAULT_BRANCH_READ=0
+preflight_brownfield_default_branch() {
+  if [[ $PREFLIGHT_DEFAULT_BRANCH_READ -eq 0 ]]; then
+    PREFLIGHT_DEFAULT_BRANCH_READ=1
+    if [[ -n "${REPO:-}" ]]; then
+      local d
+      d="$(gh api "repos/$REPO" -q '.default_branch' 2>/dev/null || true)"
+      [[ -n "$d" ]] && PREFLIGHT_DEFAULT_BRANCH="refs/heads/$d"
+    fi
+  fi
+  printf '%s' "$PREFLIGHT_DEFAULT_BRANCH"
+}
+
+# preflight_brownfield_ref_covered <detail-json> <ref> — print 1 if the ruleset
+# detail's conditions.ref_name.include covers <ref> (exact match, ~ALL, or
+# ~DEFAULT_BRANCH — the last ONLY when <ref> is the repo's actual default branch),
+# else 0. Centralizes the coverage heuristic the bypass and signed-commit detectors
+# share. Scoping ~DEFAULT_BRANCH to the real default branch avoids both a false
+# block on the other managed branches and a false negative on the default branch
+# (vs. dropping the token entirely). If the default branch can't be resolved, the
+# match falls through (empty $default never equals a real ref), degrading to the
+# safe false-negative side. jq is guarded (2>/dev/null) so a malformed / non-object
+# detail can't abort under set -e — it simply reads as not-covered.
+preflight_brownfield_ref_covered() {
+  local default_ref
+  default_ref="$(preflight_brownfield_default_branch)"
+  if echo "$1" | jq -e --arg ref "$2" --arg default "$default_ref" \
+    '[.conditions?.ref_name?.include[]? | select(. == $ref or . == "~ALL" or (. == "~DEFAULT_BRANCH" and $ref == $default))] | length > 0' \
+    >/dev/null 2>&1; then
+    printf '1\n'
+  else
+    printf '0\n'
+  fi
+}
+
+# _bypass_add_ruleset_id <id> — append <id> to BYPASS_RULESET_IDS unless already
+# present. Two managed branches can be covered by the SAME ruleset; without this
+# dedup the resolver would PUT-edit that ruleset (and re-add the App entry) twice.
+_bypass_add_ruleset_id() {
+  local id="$1" existing
+  # bash 3.2-safe: expanding "${arr[@]}" on an empty array aborts under `set -u`,
+  # and this is the first call right after BYPASS_RULESET_IDS is reset to (), so
+  # guard the empty case before iterating (as elsewhere in this file).
+  if [[ ${#BYPASS_RULESET_IDS[@]} -gt 0 ]]; then
+    for existing in "${BYPASS_RULESET_IDS[@]}"; do
+      [[ "$existing" == "$id" ]] && return 0
+    done
+  fi
+  BYPASS_RULESET_IDS+=("$id")
+}
+
+# preflight_detect_branch_protection_bypass — §spec:brownfield-detection.
+# READ-ONLY detector: for each managed branch that exists on the remote, decide
+# whether a protection ruleset that would block flywheel's pushes (PR-required,
+# no-force-push, or no-deletion) OMITS the flywheel App as a bypass actor. That
+# omission is the hazard: the release push and back-merge push the bot performs
+# would fail "changes must be made through a pull request". When the App ID is
+# configured (PREFLIGHT_APP_ID_VALUE) we look for that exact Integration actor in
+# the ruleset's bypass_actors; when the App ID is unknown (greenfield) we fall
+# back to "a blocking rule exists and there is NO Integration bypass actor at
+# all". Biased to FALSE NEGATIVES: a branch with no protection, or protection
+# that already lists the App, emits nothing. When protection can't be read we
+# emit a could-not-verify warn (never a false block), mirroring doctor.sh.
+preflight_detect_branch_protection_bypass() {
+  [[ -n "${REPO:-}" ]] || return 0
+
+  local managed
+  managed="$(preflight_brownfield_managed_branches)"
+  [[ -n "$managed" ]] || return 0
+
+  preflight_brownfield_read_rulesets
+
+  # Reset the resolver's edit-target stash so it reflects THIS run's live state.
+  BYPASS_RULESET_IDS=()
+  BYPASS_CLASSIC_BRANCHES=()
+
+  local app_id="${PREFLIGHT_APP_ID_VALUE:-}"
+  local affected="" b ref
+  while IFS= read -r b; do
+    [[ -n "$b" ]] || continue
+    ref="refs/heads/$b"
+    # Scan readable branch rulesets for one whose conditions include this branch.
+    # hazard_ruleset_ids collects the covering ruleset id(s) that carry a blocking
+    # rule but lack the App bypass — the exact set the resolver must edit for THIS
+    # branch (only stashed if the branch turns out to be affected, below).
+    local matched_blocking=0 app_bypass=0 has_integration_bypass=0
+    local matched_via_classic=0 hazard_ruleset_ids=""
+    local i=0 detail blocking app_actors integ_count rid this_app_bypass
+    while [[ $i -lt ${#PREFLIGHT_RULESET_IDS[@]} ]]; do
+      detail="${PREFLIGHT_RULESET_DETAILS[$i]}"
+      rid="${PREFLIGHT_RULESET_IDS[$i]}"
+      i=$((i+1))
+      # Skip rulesets that don't cover this branch (shared coverage heuristic).
+      [[ "$(preflight_brownfield_ref_covered "$detail" "$ref")" == 1 ]] || continue
+
+      # A "blocking" ruleset carries any rule that stops the bot's direct push:
+      # pull_request (changes must go through a PR), non_fast_forward / update
+      # (no force-push), or deletion (no branch delete).
+      blocking="$(echo "$detail" | jq -r \
+        '[.rules[]? | select(.type == "pull_request" or .type == "non_fast_forward" or .type == "update" or .type == "deletion")] | length' 2>/dev/null || true)"
+      [[ "${blocking:-0}" -gt 0 ]] || continue
+      matched_blocking=1
+
+      # Count Integration-type bypass actors, and whether OUR App is among them.
+      integ_count="$(echo "$detail" | jq -r \
+        '[.bypass_actors[]? | select(.actor_type == "Integration")] | length' 2>/dev/null || true)"
+      [[ "${integ_count:-0}" -gt 0 ]] && has_integration_bypass=1
+      this_app_bypass=0
+      if [[ -n "$app_id" ]]; then
+        app_actors="$(echo "$detail" | jq -r --arg id "$app_id" \
+          '[.bypass_actors[]? | select(.actor_type == "Integration" and (.actor_id | tostring) == $id)] | length' 2>/dev/null || true)"
+        if [[ "${app_actors:-0}" -gt 0 ]]; then app_bypass=1; this_app_bypass=1; fi
+      fi
+      # This covering+blocking ruleset is an EDIT TARGET for the branch unless it
+      # already lists our App (known App ID) — that one needs no change. Stash its
+      # id; it's only promoted into BYPASS_RULESET_IDS if the branch is affected.
+      [[ "$this_app_bypass" -eq 0 ]] && hazard_ruleset_ids+="$rid"$'\n'
+    done
+
+    # Legacy classic branch-protection fallback: if no ruleset covered the branch
+    # but a classic protection rule requires PRs, that also blocks the bot. Classic
+    # protection has no per-App bypass we can read here, so treat a readable
+    # PR-requiring classic rule as the hazard (rulesets remain the primary surface).
+    if [[ $matched_blocking -eq 0 ]]; then
+      local classic
+      if classic="$(gh api "repos/$REPO/branches/$b/protection" 2>/dev/null)"; then
+        local classic_pr
+        # `?` suppresses the jq error if the response isn't an object (e.g. the
+        # default `[]` stub / a non-protection payload); `|| true` keeps a non-zero
+        # jq exit from aborting the run under `set -e`.
+        classic_pr="$(echo "$classic" | jq -r '(.required_pull_request_reviews? // null) | if (. != null) then 1 else 0 end' 2>/dev/null || true)"
+        if [[ "${classic_pr:-0}" -gt 0 ]]; then
+          matched_blocking=1
+          matched_via_classic=1
+          # Classic protection exposes no Integration bypass list — apps cannot be
+          # added as bypass actors there — so this is unambiguously the hazard.
+          has_integration_bypass=0
+          app_bypass=0
+        fi
+      fi
+    fi
+
+    [[ $matched_blocking -eq 1 ]] || continue
+
+    # Decide hazard. With a known App ID: hazard iff our App is NOT a bypass actor.
+    # Without one (greenfield): hazard iff there is NO Integration bypass actor at
+    # all (we can't say which App it would be, but any Integration bypass means
+    # the adopter has wired SOME app and we don't block — false-negative bias).
+    local is_affected=0
+    if [[ -n "$app_id" ]]; then
+      [[ $app_bypass -eq 0 ]] && is_affected=1
+    else
+      [[ $has_integration_bypass -eq 0 ]] && is_affected=1
+    fi
+    [[ $is_affected -eq 1 ]] || continue
+    affected+="$b, "
+
+    # Stash the resolver's edit targets for this affected branch. A classic-only
+    # hazard has no editable ruleset — route the branch to manual. Otherwise record
+    # the covering+blocking ruleset id(s) lacking the App, deduped across branches.
+    if [[ $matched_via_classic -eq 1 ]]; then
+      BYPASS_CLASSIC_BRANCHES+=("$b")
+    else
+      while IFS= read -r rid; do
+        [[ -n "$rid" ]] || continue
+        _bypass_add_ruleset_id "$rid"
+      done <<< "$hazard_ruleset_ids"
+    fi
+  done <<< "$managed"
+
+  if [[ -n "$affected" ]]; then
+    brownfield_finding branch_protection_bypass yes instance block "branch protection on ${affected%, } omits the Flywheel App as a bypass actor — the release push and back-merge push will fail \"changes must be made through a pull request\". Add the App (id ${app_id:-<your-app-id>}) as an Integration bypass actor on those branches' ruleset(s)."
+  elif [[ $PREFLIGHT_RULESET_UNREADABLE -eq 1 ]]; then
+    # Rulesets exist but at least one couldn't be read — never assert absent.
+    finding local-env warn "could not verify ${managed//$'\n'/, } branch protection bypass — reading protection requires repo-admin"
+  fi
+  # See preflight_detect_release_conflict: end deterministically at 0; the gate
+  # reads FINDINGS_BLOCK_COUNT, not this return.
+  return 0
+}
+
+# preflight_detect_signed_commit_requirement — §spec:brownfield-detection.
+# READ-ONLY detector: for each managed branch that exists on the remote, decide
+# whether a "require signed commits/tags" rule applies that flywheel's App
+# identity (semantic-release-bot / github-actions[bot] commits) cannot satisfy —
+# in which case the release and back-merge commits the bot pushes are rejected.
+# GitHub rulesets express this as a rule with `type == "required_signatures"`;
+# the classic branch-protection surface exposes `required_signatures.enabled`.
+# We ALSO read tag-target rulesets (which the shared branch-only reader does not
+# collect) because semantic-release pushes `v*` tags it cannot sign — a
+# required_signatures rule on `refs/tags/v*` is the same hazard. This condition
+# is NOT auto-resolvable: disabling a signing requirement is an adopter judgment
+# call (a security rule), so it hard-stops to the manual guide in a later batch.
+# Biased to FALSE NEGATIVES: no signing rule observed (and reads succeeded)
+# emits nothing. When protection can't be read we emit a could-not-verify warn
+# (never a false block), mirroring doctor.sh / the bypass detector.
+preflight_detect_signed_commit_requirement() {
+  [[ -n "${REPO:-}" ]] || return 0
+
+  local managed
+  managed="$(preflight_brownfield_managed_branches)"
+  [[ -n "$managed" ]] || return 0
+
+  # Shared reader is idempotent per run (PREFLIGHT_RULESETS_READ guard), so this
+  # is cheap whether or not the bypass detector already populated the globals.
+  preflight_brownfield_read_rulesets
+
+  local affected="" classic_unreadable=0 b ref
+  while IFS= read -r b; do
+    [[ -n "$b" ]] || continue
+    ref="refs/heads/$b"
+    local requires_signing=0
+    local i=0 detail sig_count
+    # Scan readable branch rulesets for one that covers this branch AND carries a
+    # required_signatures rule.
+    while [[ $i -lt ${#PREFLIGHT_RULESET_IDS[@]} ]]; do
+      detail="${PREFLIGHT_RULESET_DETAILS[$i]}"
+      i=$((i+1))
+      [[ "$(preflight_brownfield_ref_covered "$detail" "$ref")" == 1 ]] || continue
+      # `?` + `|| true` keep a malformed/non-object detail from aborting under set -e.
+      sig_count="$(echo "$detail" | jq -r \
+        '[.rules[]? | select(.type == "required_signatures")] | length' 2>/dev/null || true)"
+      [[ "${sig_count:-0}" -gt 0 ]] && requires_signing=1
+    done
+
+    # Classic branch-protection fallback: required_signatures.enabled == true.
+    if [[ $requires_signing -eq 0 ]]; then
+      local classic classic_sig
+      if classic="$(gh api "repos/$REPO/branches/$b/protection" 2>/dev/null)"; then
+        classic_sig="$(echo "$classic" | jq -r '(.required_signatures?.enabled? // false) | if . == true then 1 else 0 end' 2>/dev/null || true)"
+        [[ "${classic_sig:-0}" -gt 0 ]] && requires_signing=1
+      else
+        # A managed branch whose classic protection we couldn't read (and no
+        # ruleset covered it) is indeterminate — never assert absent.
+        if [[ $requires_signing -eq 0 ]]; then
+          classic_unreadable=1
+        fi
+      fi
+    fi
+
+    [[ $requires_signing -eq 1 ]] && affected+="$b, "
+  done <<< "$managed"
+
+  # Tag-target rulesets: semantic-release pushes unsigned `v*` tags, so a
+  # required_signatures rule on refs/tags/v* blocks tag creation. The shared
+  # reader already collected tag rulesets (and routes any unreadable detail to
+  # PREFLIGHT_RULESET_UNREADABLE), so reuse the cached details — no second list.
+  local tag_signing=0 i tdetail tsig
+  i=0
+  while [[ $i -lt ${#PREFLIGHT_TAG_RULESET_IDS[@]} ]]; do
+    tdetail="${PREFLIGHT_TAG_RULESET_DETAILS[$i]}"
+    i=$((i+1))
+    [[ "$(preflight_brownfield_ref_covered "$tdetail" "refs/tags/v*")" == 1 ]] || continue
+    tsig="$(echo "$tdetail" | jq -r '[.rules[]? | select(.type == "required_signatures")] | length' 2>/dev/null || true)"
+    [[ "${tsig:-0}" -gt 0 ]] && tag_signing=1
+  done
+
+  if [[ -n "$affected" || $tag_signing -eq 1 ]]; then
+    local what="${affected%, }"
+    [[ $tag_signing -eq 1 ]] && what="${affected:+${affected%, }, }refs/tags/v*"
+    brownfield_finding signed_commit no instance block "$what requires signed commits/tags, which flywheel's App identity (semantic-release-bot / github-actions[bot] commits) cannot satisfy — the release and back-merge commits (and v* tags) it pushes will be rejected. This is NOT auto-resolvable: disabling a signing requirement is an adopter judgment call, so setup hard-stops to the manual brownfield guide (docs/adopter/setup.md §0)."
+  elif [[ $PREFLIGHT_RULESET_UNREADABLE -eq 1 || $classic_unreadable -eq 1 ]]; then
+    finding local-env warn "could not verify ${managed//$'\n'/, } signed-commit requirement — reading protection requires repo-admin"
+  fi
+  # End deterministically at 0; the gate reads FINDINGS_BLOCK_COUNT, not this return.
+  return 0
+}
+
+# preflight_detect_history_and_prs — §spec:brownfield-detection.
+# READ-ONLY, ADVISORY-ONLY detector: surfaces conditions in existing history and
+# open PRs that will affect — but not break — flywheel's first release/promotion.
+# Unlike the other brownfield detectors, flywheel cannot and should not mutate
+# history or others' PRs, so EVERYTHING here is `info` (or a could-not-verify
+# `warn` for the token-gated PR read). It emits NO `block` under any circumstance.
+#
+# History scan (no token; local `git log`):
+#   * commits whose subject carries `[skip ci]` / `[ci skip]` — these suppress
+#     workflow runs, so legacy occurrences would suppress the first promotion's
+#     workflows. One summary info naming the count.
+#   * commit subjects that are NOT Conventional Commits — they distort the first
+#     semantic-release version computation. ONE summary info (not one per commit);
+#     ANY non-conventional subject in the window is enough. Biased to FALSE
+#     NEGATIVES: a clean conventional window emits nothing.
+# Open-PR scan (token-gated; gh api):
+#   * open PRs whose title is NOT Conventional Commits — flywheel rewrites these
+#     at cutover. ONE summary info naming the count. When the list can't be read
+#     (token gap) a could-not-verify `warn`; when REPO is unresolved, skip the PR
+#     read silently (gh-capability already covers an unusable token).
+# Bounded window (-n 50) keeps the log scan cheap on large repos.
+preflight_detect_history_and_prs() {
+  # Conventional Commits shape (case-insensitive): type(optional-scope)!: subject.
+  local cc_re='^(feat|fix|chore|docs|refactor|test|ci|build|perf|style|revert)(\([^)]*\))?!?: '
+
+  # --- History scan (local; no token). Swallow errors: a repo with no commits or
+  # a non-git dir yields an empty list and emits nothing.
+  local subjects skipci_count=0 nonconv_count=0 subject
+  subjects="$(git log --format='%s' -n 50 2>/dev/null || true)"
+  if [[ -n "$subjects" ]]; then
+    while IFS= read -r subject; do
+      [[ -n "$subject" ]] || continue
+      # `[skip ci]` / `[ci skip]` (case-insensitive) suppresses workflow runs.
+      if printf '%s' "$subject" | grep -qiF -e '[skip ci]' -e '[ci skip]'; then
+        skipci_count=$((skipci_count + 1))
+      fi
+      # Non-conventional subject: case-insensitive CC match.
+      if ! printf '%s' "$subject" | grep -qiE "$cc_re"; then
+        nonconv_count=$((nonconv_count + 1))
+      fi
+    done <<< "$subjects"
+  fi
+
+  if [[ $skipci_count -gt 0 ]]; then
+    brownfield_finding history_skip_ci no instance info "$skipci_count recent commit(s) carry [skip ci]/[ci skip] — these suppress workflow runs, so they could suppress the first promotion's workflows. Advisory only: flywheel does not rewrite history."
+  fi
+  if [[ $nonconv_count -gt 0 ]]; then
+    brownfield_finding history_nonconventional no instance info "$nonconv_count of the recent commit(s) are not Conventional Commits — legacy non-conventional history may distort the first semantic-release version computation. Advisory only: flywheel does not rewrite history."
+  fi
+
+  # --- Open-PR scan (token-gated). When REPO is unresolved, skip silently:
+  # gh-capability already flags an unusable token, and the could-not-verify warn
+  # is reserved for a real read failure under a resolved REPO.
+  if [[ -n "${REPO:-}" ]]; then
+    local pulls titles rewrite_count=0 total=0 title count_label
+    # One page (up to 100). This is an ADVISORY count, so we deliberately do not
+    # --paginate every open PR — on a large repo that walks every page and slows the
+    # hot pre-flight path. Instead, if the page comes back full we DISCLOSE the
+    # sample bound in the finding (a "+", below) rather than silently undercounting.
+    # A real read failure falls to the could-not-verify warn below.
+    if pulls="$(gh api "repos/$REPO/pulls?state=open&per_page=100" 2>/dev/null)"; then
+      # `?` + `|| true` keep a malformed/empty body from aborting under set -e.
+      titles="$(printf '%s' "$pulls" | jq -r '.[]?.title // empty' 2>/dev/null || true)"
+      while IFS= read -r title; do
+        [[ -n "$title" ]] || continue
+        total=$((total + 1))
+        if ! printf '%s' "$title" | grep -qiE "$cc_re"; then
+          rewrite_count=$((rewrite_count + 1))
+        fi
+      done <<< "$titles"
+      if [[ $rewrite_count -gt 0 ]]; then
+        # Page full (100) ⇒ there may be more open PRs than we sampled; say so.
+        count_label="$rewrite_count"
+        [[ $total -ge 100 ]] && count_label="$rewrite_count+ (first 100 open PRs sampled)"
+        brownfield_finding open_pr_rewrite no instance info "$count_label open PR(s) have non-conventional titles that flywheel will rewrite to Conventional Commits at cutover. Advisory only: review the rewritten titles after setup."
+      fi
+    else
+      finding local-env warn "could not verify open PRs — listing pull requests requires repo access"
+    fi
+  fi
+
+  # Advisory-only: never emits a block. End deterministically at 0.
   return 0
 }
 
@@ -485,16 +1103,31 @@ preflight_detect_gh_capability() {
 }
 
 # preflight_run — run every detector and print the pre-flight summary. Detectors
-# emit via the shared `finding` (and the preflight_block wrapper added with the
-# gate). The summary is the first thing the adopter sees; the gate acts on it
-# next.
+# emit via the shared `finding`. The summary is the first thing the adopter sees;
+# the gate acts on it next.
 preflight_run() {
   echo
   echo "Pre-flight checks:"
+  # Reset the per-run memoization guards so this run re-probes once, then shares
+  # the managed-branch list and ruleset details across the detectors that consult
+  # them (rather than each detector re-probing the same gh endpoints).
+  PREFLIGHT_MANAGED_BRANCHES_READ=0
+  PREFLIGHT_RULESETS_READ=0
+  PREFLIGHT_DEFAULT_BRANCH_READ=0
+  PREFLIGHT_DEFAULT_BRANCH=""
+  # Resolve the default branch ONCE in this (parent) shell so the per-ruleset
+  # ref-coverage checks — which run inside command substitutions — reuse the value
+  # rather than each re-reading it over the network (a memo set inside a $()
+  # subshell would not persist). One cheap repo-metadata read per run.
+  preflight_brownfield_default_branch >/dev/null 2>&1 || true
   # >>> detector seam — add new detectors here >>>
   preflight_detect_gh_capability       # §spec:preflight-gh-capability
   preflight_detect_release_conflict    # §spec:preflight-release-conflict
+  preflight_detect_version_tag_shape   # §spec:brownfield-detection
   preflight_detect_credentials_app     # §spec:preflight-credentials-app
+  preflight_detect_branch_protection_bypass # §spec:brownfield-detection
+  preflight_detect_signed_commit_requirement # §spec:brownfield-detection
+  preflight_detect_history_and_prs     # §spec:brownfield-detection
   preflight_inject                     # test-only hook (inert unless FLYWHEEL_TEST_HOOKS=1)
   # <<< detector seam <<<
   if [[ "$FINDINGS_BLOCK_COUNT" -gt 0 ]]; then
@@ -504,39 +1137,501 @@ preflight_run() {
   fi
 }
 
-# preflight_block <override-token> <bucket> <message>
-# Emit a block finding for <message>, UNLESS the override for <override-token> is
-# active (env/var PREFLIGHT_OVERRIDE_<token>=1), in which case demote it to an
-# advisory warn. The override is opt-in and never the default
-# (SPEC §spec:preflight-gate). The --override-release-conflict flag sets the
-# token PREFLIGHT_OVERRIDE_release_conflict. <override-token> uses underscores
-# (e.g. release_conflict → flag --override-release-conflict).
-preflight_block() {
-  local token="$1" bucket="$2" message="$3"
-  local ovar="PREFLIGHT_OVERRIDE_${token}"
-  if [[ "${!ovar:-0}" -eq 1 ]]; then
-    finding "$bucket" warn "$message (overridden via --override-${token//_/-})"
-  else
-    finding "$bucket" block "$message"
-  fi
-}
-
 # preflight_gate — severity drives control flow. A block halts setup before any
-# prompt or file is written. Interactively the adopter must resolve it (or pass
-# an offered override flag) and re-run; non-interactively the run exits non-zero
-# with the reason. warn/info are advisory and never halt. Runs immediately after
-# preflight_run, before the version resolution / first prompt / first write.
+# prompt or file is written. Interactively the adopter must resolve it and
+# re-run; non-interactively the run exits non-zero with the reason. warn/info are
+# advisory and never halt. Runs immediately after preflight_run, before the
+# version resolution / first prompt / first write.
 preflight_gate() {
   [[ "$FINDINGS_BLOCK_COUNT" -gt 0 ]] || return 0
   if [[ "$INTERACTIVE" -eq 1 ]]; then
-    printf '\n\033[31mPre-flight halted\033[0m — %d blocking problem(s) above. Resolve them (or pass an offered override flag) and re-run; no files were written.\n' "$FINDINGS_BLOCK_COUNT" >&2
+    printf '\n\033[31mPre-flight halted\033[0m — %d blocking problem(s) above. Resolve them and re-run; no files were written.\n' "$FINDINGS_BLOCK_COUNT" >&2
   else
     printf '\n\033[31mPre-flight failed\033[0m — %d blocking problem(s) above. Non-interactive run; refusing to proceed on defaults. No files were written.\n' "$FINDINGS_BLOCK_COUNT" >&2
   fi
   exit 1
 }
 
+# brownfield_confirm <prompt> — the SINGLE confirm primitive shared by every
+# brownfield resolver (§spec:brownfield-resolution "explicit, per-step, opt-in").
+# Prints the prompt and reads a y/N answer from fd 3 — the interactive descriptor
+# every other init prompt reads (`read -r -u 3`). Default is No: returns 0 only on
+# an explicit yes (y/Y/yes), non-zero otherwise. Interactive-only by construction —
+# the dispatcher never reaches a resolver on a non-interactive run, so this is never
+# asked there; if it somehow were, the empty read degrades to No (no mutation).
+brownfield_confirm() {
+  local prompt="$1" reply=""
+  read -r -u 3 -p "$prompt" reply
+  # Case-insensitive so a capitalized "Yes"/"YES" reads as consent, not a silent
+  # decline. bash 3.2 has no ${reply,,}, so lowercase via tr before matching.
+  reply="$(printf '%s' "$reply" | tr '[:upper:]' '[:lower:]')"
+  [[ "$reply" =~ ^(y|yes)$ ]]
+}
+
+# brownfield_resolver_tag_shape_bare_semver — the GUIDED RETAG resolver
+# (SPEC.md §spec:brownfield-resolvers "Guided retag"). Implements the WS0 RESOLVER
+# CONTRACT (see brownfield_resolve below): re-derive from LIVE state, show the full
+# change, confirm via brownfield_confirm, return 0=applied / 1=declined / 2=unable.
+#
+# The change is NON-DESTRUCTIVE: for each colliding bare-semver tag X (3.4.2, 2.0)
+# it CREATES `vX` pointing at the same commit and pushes it, NEVER deleting or
+# moving X. The adopter can prune the originals later on their own terms.
+#
+# The detector already filters out any X whose `vX` exists (idempotency), but this
+# re-derives independently from live state and applies the same filter defensively,
+# so a stale registry message can never make it create a duplicate.
+brownfield_resolver_tag_shape_bare_semver() {
+  local tags tag bare bare_tags="" had_any=0
+  # Re-derive the tag set the way the detector does: re-read LOCAL tags live (cheap,
+  # no token, and another resolver may have mutated tags this run), unioned with the
+  # remote set the detector already gathered (PREFLIGHT_REMOTE_TAGS) — no second
+  # paginated `gh api repos/$REPO/tags`, since remote tags can't change before the
+  # resolver that pushes them.
+  tags="$(git tag -l 2>/dev/null || true)"
+  if [[ -n "${PREFLIGHT_REMOTE_TAGS:-}" ]]; then
+    tags="$(printf '%s\n%s\n' "$tags" "$PREFLIGHT_REMOTE_TAGS" | sort -u)"
+  fi
+
+  # Collect the bare-semver tags to retag, skipping any X whose vX already exists
+  # (resolved). Each entry is the bare value X; the v-twin is derived as `v$X`.
+  while IFS= read -r tag; do
+    [[ -n "$tag" ]] || continue
+    # Mirror the detector's bare-semver shape (incl. prerelease/build-metadata) so
+    # the resolver never silently skips a tag the detector flagged.
+    [[ "$tag" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?([-+][0-9A-Za-z.-]+)?$ ]] || continue
+    had_any=1
+    if printf '%s\n' "$tags" | grep -qxF "v$tag"; then
+      continue   # vX already exists — already retagged.
+    fi
+    bare_tags+="$tag"$'\n'
+  done <<<"$tags"
+
+  # Nothing left to do (all bare tags already have their v-twin) — treat as a
+  # resolved no-op so the gate stops counting the block. The detector normally
+  # prevents reaching here, but a stale message must not be a false hard-stop.
+  if [[ -z "$bare_tags" ]]; then
+    if [[ "$had_any" -eq 1 ]]; then
+      printf '  Bare-semver tags already retagged with a v-prefix — nothing to do.\n'
+    fi
+    return 0
+  fi
+
+  # SHOW the exact change in full BEFORE applying (shown-before-applied contract).
+  printf '  Guided retag — these bare-semver tags collide with the v-prefixed scheme.\n'
+  printf '  This is NON-DESTRUCTIVE: the v-prefixed tags are added alongside the\n'
+  printf '  originals (which are kept); you can prune the originals later yourself.\n'
+  while IFS= read -r bare; do
+    [[ -n "$bare" ]] || continue
+    printf '    %s -> v%s\n' "$bare" "$bare"
+  done <<<"$bare_tags"
+
+  if ! brownfield_confirm "  Create and push these v-prefixed tags? [y/N] "; then
+    return 1   # DECLINED — dispatcher prints the manual pointer; change nothing.
+  fi
+
+  # A bare tag detected only on the remote (via the GitHub API, never fetched) has
+  # no local object, so `git tag vX X` below would fail. We need the tag object
+  # locally to retag it. Identify those and ask permission to fetch — fetching only
+  # adds local copies of remote tags, mutating nothing on the remote. This resolver
+  # runs interactively only (the dispatcher gates on INTERACTIVE), so the prompt is
+  # safe. Declining leaves those tags to the manual route (the APPLY loop reports
+  # them as unable below); locally-present tags are still retagged.
+  local remote_only="" bare
+  while IFS= read -r bare; do
+    [[ -n "$bare" ]] || continue
+    git rev-parse -q --verify "refs/tags/$bare" >/dev/null 2>&1 || remote_only+="$bare"$'\n'
+  done <<<"$bare_tags"
+  if [[ -n "$remote_only" ]]; then
+    printf '  Some tags exist only on the remote and must be fetched locally before\n'
+    printf '  they can be re-tagged (this only adds local copies; the remote is\n'
+    printf '  unchanged):\n'
+    while IFS= read -r bare; do
+      [[ -n "$bare" ]] || continue
+      printf '    %s\n' "$bare"
+    done <<<"$remote_only"
+    if brownfield_confirm "  Fetch these tags from origin? [y/N] "; then
+      while IFS= read -r bare; do
+        [[ -n "$bare" ]] || continue
+        git fetch --quiet origin "refs/tags/$bare:refs/tags/$bare" 2>/dev/null || true
+      done <<<"$remote_only"
+    fi
+  fi
+
+  # APPLY: for each pair create vX at the same commit as X, then push it. NEVER
+  # delete or move X. A push failure (no origin / no network / no perms) routes to
+  # manual: naming what was created locally but not pushed (no false success).
+  local created="" failed=0
+  while IFS= read -r bare; do
+    [[ -n "$bare" ]] || continue
+    # git tag vX X — point the v-tag at the same commit as the bare tag.
+    if ! git tag "v$bare" "$bare" 2>/dev/null; then
+      # Already created on a prior partial run, or X resolved away — skip safely.
+      git rev-parse -q --verify "refs/tags/v$bare" >/dev/null 2>&1 || { failed=1; continue; }
+    fi
+    if git push origin "v$bare" >/dev/null 2>&1; then
+      created+="${created:+, }v$bare"
+    else
+      failed=1
+      printf '  Created v%s locally but could not push it to origin.\n' "$bare"
+    fi
+  done <<<"$bare_tags"
+
+  if [[ "$failed" -eq 1 ]]; then
+    printf '  Push the remaining v-prefixed tag(s) yourself (check `origin` and your push access), then re-run.\n'
+    return 2   # UNABLE — route to manual; do not claim success.
+  fi
+
+  printf '  Created and pushed v-prefixed tag(s): %s. Originals kept.\n' "$created"
+  return 0   # APPLIED.
+}
+
+# brownfield_resolver_release_conflict — the PRIOR RELEASE-SYSTEM REMOVAL resolver
+# (SPEC.md §spec:brownfield-resolvers "Prior release-system removal",
+# docs/adopter/setup.md §0.2). Implements the WS0 RESOLVER CONTRACT: show the full
+# change, confirm via brownfield_confirm, return 0=applied / 1=declined / 2=unable.
+#
+# The detector flags one block per conflicting file (a goreleaser/changesets config,
+# a release-please/semantic-release/hand-rolled workflow). brownfield_resolve dedups
+# by token and invokes this resolver ONCE per run, so a single consolidated offer
+# covers the whole prior release system: it computes the removal set from
+# RELEASE_CONFLICT_PATHS (filtered to paths still on disk — idempotency for a path
+# already removed earlier this run or by a prior run), shows it, and confirms once.
+#
+# Removal is RECOVERABLE: each path is removed with `git rm` (file) / `git rm -r`
+# (the .changeset dir), so it stays in git history and can be restored with
+# `git checkout`/`git revert`. An UNTRACKED path falls back to `rm`/`rm -r` and is
+# NOTEd as not recoverable from history. This removal is what replaces the deleted
+# `--override-release-conflict` layer-on-top behavior — two release systems never
+# run at once.
+brownfield_resolver_release_conflict() {
+  # Compute the removal set = flagged paths that still EXIST on disk.
+  local path remove=()
+  for path in "${RELEASE_CONFLICT_PATHS[@]}"; do
+    [[ -e "$path" ]] && remove+=("$path")
+  done
+
+  # Nothing left to remove (all already gone) — a resolved no-op.
+  if [[ "${#remove[@]}" -eq 0 ]]; then
+    return 0
+  fi
+
+  # SHOW the exact list BEFORE removing (shown-before-applied contract).
+  printf '  Prior release-system removal — these files race Flywheel and will be removed:\n'
+  for path in "${remove[@]}"; do
+    printf '    %s\n' "$path"
+  done
+  printf '  This is RECOVERABLE: removal uses `git rm`, so the files stay in git\n'
+  printf '  history and can be restored with `git checkout`/`git revert`.\n'
+
+  if ! brownfield_confirm "  Remove these prior release-system files? [y/N] "; then
+    return 1   # DECLINED — dispatcher prints the manual pointer; change nothing.
+  fi
+
+  # APPLY: prefer `git rm` (keeps the file in history); fall back to plain `rm` for
+  # an untracked path, NOTEing that it is NOT recoverable. A genuine failure routes
+  # to manual (return 2) without claiming success.
+  local removed="" rm_flag
+  for path in "${remove[@]}"; do
+    # `-r` for the .changeset directory; plain for files.
+    if [[ -d "$path" ]]; then rm_flag="-r"; else rm_flag=""; fi
+    if git ls-files --error-unmatch -- "$path" >/dev/null 2>&1; then
+      if git rm $rm_flag -- "$path" >/dev/null 2>&1; then
+        removed+="${removed:+, }$path"
+      else
+        printf '  Could not remove %s with `git rm`.\n' "$path"
+        return 2
+      fi
+    else
+      # Untracked: not in git history, so removal is NOT recoverable. Say so.
+      if rm $rm_flag -f -- "$path" 2>/dev/null; then
+        printf '  Removed untracked %s (NOT recoverable from git history).\n' "$path"
+        removed+="${removed:+, }$path"
+      else
+        printf '  Could not remove %s.\n' "$path"
+        return 2
+      fi
+    fi
+  done
+
+  printf '  Removed prior release-system file(s): %s.\n' "$removed"
+  return 0   # APPLIED.
+}
+
+# _bypass_blocking_rule_labels <detail-json> — print the human labels for the
+# blocking rule types this ruleset carries (one per line), so the offer can name
+# the EXACT rules flywheel's pushes hit (not a blanket "protection"). Read-only.
+_bypass_blocking_rule_labels() {
+  local detail="$1"
+  echo "$detail" | jq -r '
+    [ .rules[]? | .type
+      | if . == "pull_request" then "pull request required"
+        elif . == "non_fast_forward" then "no force-push"
+        elif . == "update" then "no force-push (update)"
+        elif . == "deletion" then "no branch deletion"
+        else empty end ]
+    | unique | .[]' 2>/dev/null || true
+}
+
+# brownfield_resolver_branch_protection_bypass — the APP BYPASS-ACTOR ADDITION
+# resolver (SPEC.md §spec:brownfield-resolvers "App bypass-actor addition",
+# docs/adopter/setup.md §0.3). Implements the WS0 RESOLVER CONTRACT: show the full
+# change, confirm via brownfield_confirm, return 0=applied / 1=declined / 2=unable.
+#
+# This is the MOST security-sensitive resolver — it changes WHO can bypass branch
+# protection — so it is held to the tightest form of the safety contract:
+#   * NO-PRIVILEGE-ESCALATION GATE FIRST. If the token lacks repo-admin we do NOT
+#     attempt the edit: we report the limit and route to manual (return 2), NEVER
+#     demanding a broader token (§spec:preflight-gh-capability,
+#     §spec:doctor-credential-clarity). Signals: PREFLIGHT_RULESET_UNREADABLE=1
+#     (rulesets weren't readable), and any ruleset PUT that fails with a
+#     permissions error (treated as a limit, routed to manual — never retried).
+#   * APP ID REQUIRED. The bypass entry is keyed on the App's numeric id; absent
+#     PREFLIGHT_APP_ID_VALUE we can't construct it → report + route to manual.
+#   * CLASSIC-protection branches can't be fixed via a ruleset edit (apps can't be
+#     classic-protection bypass actors) → name them, route to manual.
+#   * SHOW THE EXACT CHANGE before applying: per ruleset, the blocking rule type(s)
+#     and the EXACT bypass entry added. The grant is SCOPED to that ruleset's
+#     blocking rules (NOT a blanket exemption) and REVERSIBLE (remove the entry).
+#
+# APPLY adds ONLY `{actor_id:<App>, actor_type:"Integration", bypass_mode:"always"}`
+# to each target ruleset's bypass_actors (deduped) and PUTs the ruleset back built
+# from its cached detail (read-only fields stripped). We never modify/remove a rule
+# and never add ~ALL/teams — the tightest grant that lets the release + back-merge
+# pushes through. Any PUT failure → report the limit, return 2 (no partial-success
+# claim). All targets updated → brief confirmation, return 0.
+brownfield_resolver_branch_protection_bypass() {
+  # NO-PRIVILEGE-ESCALATION GATE (first). If we couldn't even read the rulesets,
+  # the token lacks repo-admin — report the limit, route to manual, never escalate.
+  if [[ "${PREFLIGHT_RULESET_UNREADABLE:-0}" -eq 1 ]]; then
+    printf '  Branch-protection bypass: your token cannot read this repo'\''s rulesets\n'
+    printf '  (repo-admin required). Add the Flywheel App as a bypass actor yourself, or\n'
+    printf '  re-run with an admin token: docs/adopter/setup.md §0.\n'
+    return 2
+  fi
+
+  # APP ID REQUIRED — the bypass entry is keyed on the App's numeric id.
+  local app_id="${PREFLIGHT_APP_ID_VALUE:-}"
+  if [[ -z "$app_id" ]]; then
+    printf '  Branch-protection bypass: the Flywheel App ID is not known yet, so the\n'
+    printf '  bypass entry can'\''t be constructed. Provision the App (it writes\n'
+    printf '  FLYWHEEL_GH_APP_ID), then add the App as a bypass actor: docs/adopter/setup.md §0.\n'
+    return 2
+  fi
+  # The App ID is the adopter-set FLYWHEEL_GH_APP_ID variable; assert it is numeric
+  # before it reaches the bypass-entry JSON below. jq's --argjson already fails
+  # closed on a malformed value, but this resolver GRANTS branch-protection bypass,
+  # so a non-numeric id is rejected up front rather than smuggled into the PUT body.
+  if [[ ! "$app_id" =~ ^[0-9]+$ ]]; then
+    printf '  Branch-protection bypass: the configured Flywheel App ID (%s) is not numeric,\n' "$app_id"
+    printf '  so the bypass entry can'\''t be constructed safely. Fix FLYWHEEL_GH_APP_ID, then\n'
+    printf '  add the App as a bypass actor: docs/adopter/setup.md §0.\n'
+    return 2
+  fi
+
+  # CLASSIC-protection branches can't be fixed by a ruleset edit — name them.
+  if [[ "${#BYPASS_CLASSIC_BRANCHES[@]}" -gt 0 ]]; then
+    printf '  These branch(es) use CLASSIC branch protection, which has no per-App bypass\n'
+    printf '  list — apps cannot be added as bypass actors there. Resolve them manually\n'
+    printf '  (migrate to a ruleset, or relax the rule): %s\n' \
+      "$(IFS=', '; echo "${BYPASS_CLASSIC_BRANCHES[*]}")"
+  fi
+
+  # If ALL affected branches were classic-only (no editable ruleset), there is
+  # nothing to PUT — route entirely to manual.
+  if [[ "${#BYPASS_RULESET_IDS[@]}" -eq 0 ]]; then
+    printf '  No editable ruleset covers the affected branch(es) — routing to manual: docs/adopter/setup.md §0.\n'
+    return 2
+  fi
+
+  # The EXACT bypass entry we will add (shown, then applied verbatim).
+  local entry
+  entry="$(printf '{"actor_id":%s,"actor_type":"Integration","bypass_mode":"always"}' "$app_id")"
+
+  # SHOW the exact change in full BEFORE applying (shown-before-applied contract).
+  printf '  Branch-protection bypass — these ruleset(s) block Flywheel'\''s release and\n'
+  printf '  back-merge pushes and do not list the Flywheel App as a bypass actor:\n'
+  local id detail name labels label
+  for id in "${BYPASS_RULESET_IDS[@]}"; do
+    detail="$(_bypass_cached_detail "$id")"
+    name="$(echo "$detail" | jq -r '.name // "(unnamed)"' 2>/dev/null || true)"
+    printf '    ruleset "%s" (id %s) — blocking rule(s):\n' "${name:-(unnamed)}" "$id"
+    labels="$(_bypass_blocking_rule_labels "$detail")"
+    while IFS= read -r label; do
+      [[ -n "$label" ]] || continue
+      printf '      - %s\n' "$label"
+    done <<< "$labels"
+  done
+  printf '  It will ADD this bypass actor (the Flywheel App, id %s) to each:\n' "$app_id"
+  printf '    %s\n' "$entry"
+  printf '  This is SCOPED to exactly those ruleset(s)'\'' blocking rules (NOT a blanket\n'
+  printf '  exemption) and is REVERSIBLE — the entry can be removed from the ruleset'\''s\n'
+  printf '  bypass actors at any time.\n'
+
+  if ! brownfield_confirm "  Add the Flywheel App as a bypass actor on these ruleset(s)? [y/N] "; then
+    return 1   # DECLINED — dispatcher prints the manual pointer; change nothing.
+  fi
+
+  # APPLY: for each target ruleset, append the App entry to bypass_actors (dedup),
+  # rebuild a PUT body from the cached detail (read-only fields stripped), and PUT.
+  # A failed PUT is reported as a limit and routes to manual (return 2) — NEVER
+  # retried with a broader token, NEVER claimed as partial success.
+  local updated="" body
+  for id in "${BYPASS_RULESET_IDS[@]}"; do
+    detail="$(_bypass_cached_detail "$id")"
+    # Build the update body: preserve name/target/enforcement/conditions/rules,
+    # add the App to bypass_actors (deduped on actor_id+Integration), and strip the
+    # read-only fields the rulesets PUT endpoint rejects.
+    body="$(echo "$detail" | jq \
+      --argjson entry "$entry" '
+        .bypass_actors = ((.bypass_actors // [])
+          + ( if any(.bypass_actors[]?;
+                       .actor_type == "Integration"
+                       and (.actor_id | tostring) == ($entry.actor_id | tostring))
+              then [] else [$entry] end ))
+        | {name, target, enforcement, conditions, rules, bypass_actors}' \
+      2>/dev/null || true)"
+    if [[ -z "$body" ]]; then
+      printf '  Could not construct the update for ruleset id %s — routing to manual.\n' "$id"
+      return 2
+    fi
+    if printf '%s' "$body" | gh api -X PUT "repos/$REPO/rulesets/$id" --input - >/dev/null 2>&1; then
+      updated+="${updated:+, }$id"
+    else
+      # A permissions error (or any PUT failure) is a capability LIMIT: report and
+      # route to manual. Do not retry with a broader token; do not claim success.
+      printf '  Could not update ruleset id %s (this needs repo-admin) — add the App as a\n' "$id"
+      printf '  bypass actor yourself, or re-run with an admin token: docs/adopter/setup.md §0.\n'
+      return 2
+    fi
+  done
+
+  printf '  Added the Flywheel App (id %s) as a bypass actor on ruleset(s): %s.\n' "$app_id" "$updated"
+  return 0   # APPLIED.
+}
+
+# _bypass_cached_detail <id> — print the cached ruleset detail JSON for <id> by
+# matching the id in the parallel PREFLIGHT_RULESET_IDS / PREFLIGHT_RULESET_DETAILS
+# arrays (no second gh read). Empty if not found (defensive — shouldn't happen).
+_bypass_cached_detail() {
+  local want="$1" i=0
+  while [[ $i -lt ${#PREFLIGHT_RULESET_IDS[@]} ]]; do
+    if [[ "${PREFLIGHT_RULESET_IDS[$i]}" == "$want" ]]; then
+      printf '%s' "${PREFLIGHT_RULESET_DETAILS[$i]}"
+      return 0
+    fi
+    i=$((i+1))
+  done
+}
+
+# brownfield_resolve — the resolution phase (SPEC.md §spec:brownfield-resolution).
+# Runs AFTER the detection pass and BEFORE the gate / any scaffold write — the
+# first point init could mutate PRE-EXISTING repo state, so it is governed by the
+# safety contract: shown-before-applied, explicit per-step opt-in, NOTHING
+# destructive non-interactively, idempotent, no new privilege.
+#
+# PER-CONDITION DISPATCH. For each `block` condition this looks for a resolver
+# function named `brownfield_resolver_<token>` (e.g. brownfield_resolver_tag_shape_bare_semver)
+# and dispatches to it ONLY when the condition is marked resolvable, the run is
+# interactive, AND the function is actually defined. Everything else degrades to
+# the hard-stop print (named in the shared bucket x severity vocabulary, routed to
+# the manual §0 guide). The gate (next) owns the single non-zero exit, so this
+# never overrides the gate's contract (§spec:setup-exit-contract).
+#
+# RESOLVER CONTRACT (#233-3 WS1–WS3 implement to this). A resolver is invoked as:
+#       brownfield_resolver_<token> "<message>"
+# It re-derives its exact change from LIVE state, shows the full change, asks via
+# `brownfield_confirm`, then returns:
+#   0 = APPLIED   — the change was made. The dispatcher records `resolved` and
+#                   decrements FINDINGS_BLOCK_COUNT so the gate stops counting it.
+#   1 = DECLINED  — adopter said no; nothing changed. The dispatcher records
+#                   `declined`, decrements FINDINGS_BLOCK_COUNT (a deliberate
+#                   deferral, not a blocker — the run continues), and prints a
+#                   one-line pointer to the manual procedure (§spec:brownfield-resolution
+#                   "accept some, decline others").
+#   2 = UNABLE    — a capability/scope limit or anything the resolver will not do
+#                   safely; route to manual. The dispatcher records `hardstop`,
+#                   leaves the block counted, and falls through to the hard-stop
+#                   print, exactly like a condition with no resolver.
+#
+# OUTCOMES are stashed in BROWNFIELD_OUTCOMES (NOT record_outcome — that is defined
+# AFTER this runs); brownfield_emit_summary_records replays them into the summary.
+#
+# NON-INTERACTIVE (curl|bash, CI): INTERACTIVE -ne 1, so NO resolver is dispatched
+# and NO mutation happens — every resolvable block degrades to hard-stop
+# (detect-and-report), satisfying the spec's "nothing destructive non-interactively"
+# rule. Reporting/routing happens in both modes — only mutation is interactive-only.
+#
+#   * info   -> DEFERRED (advisory): skipped here; a later step folds these into
+#               the completion summary.
+#
+# GREENFIELD: BROWNFIELD_CONDITIONS is empty -> strict no-op, no output.
+brownfield_resolve() {
+  [[ "${#BROWNFIELD_CONDITIONS[@]}" -gt 0 ]] || return 0
+  local rec token bucket severity resolvable message printed_header=0
+  # Per-token resolver-result cache. A resolver runs at most ONCE per run even when
+  # the detector emits several block records for one token (release_conflict emits
+  # one block per flagged file). Each record still records its own outcome and
+  # decrements the gate count, so the per-file summary lines and block accounting
+  # are unchanged — only the resolver CALL (its prompt + mutation) is deduplicated.
+  # This keeps the resolvers pure: none needs a run-scoped guard of its own, and a
+  # resolver that returns 2 (unable) is never re-prompted on a sibling record.
+  # bash 3.2-safe: a newline list of "<token>\t<rc>" scanned with a read loop.
+  local dispatched=""
+  for rec in "${BROWNFIELD_CONDITIONS[@]}"; do
+    IFS=$'\t' read -r token bucket severity resolvable message <<< "$rec"
+    # Advisory infos are folded into the completion summary later — not here.
+    [[ "$severity" == "block" ]] || continue
+
+    # Dispatch to a resolver only when the condition is resolvable, the run is
+    # interactive (no mutation otherwise), and the resolver function exists.
+    if [[ "$resolvable" == "yes" && "$INTERACTIVE" -eq 1 ]] \
+       && declare -F "brownfield_resolver_${token}" >/dev/null 2>&1; then
+      # Reuse this token's result if a prior record already dispatched its resolver;
+      # otherwise call it once and cache the code. `|| rc=$?` keeps a non-zero return
+      # (declined/unable) from tripping `set -e` before we can branch on it.
+      local rc="" dt drc
+      while IFS=$'\t' read -r dt drc; do
+        [[ "$dt" == "$token" ]] && { rc="$drc"; break; }
+      done <<< "$dispatched"
+      if [[ -z "$rc" ]]; then
+        rc=0
+        "brownfield_resolver_${token}" "$message" || rc=$?
+        dispatched+="${token}"$'\t'"${rc}"$'\n'
+      fi
+      case "$rc" in
+        0) # APPLIED — change made; stop the gate counting this block.
+          BROWNFIELD_OUTCOMES+=("${token}"$'\t'resolved$'\t'"${bucket}"$'\t'"${severity}"$'\t'"${message}")
+          [[ "$FINDINGS_BLOCK_COUNT" -gt 0 ]] && FINDINGS_BLOCK_COUNT=$((FINDINGS_BLOCK_COUNT - 1))
+          continue ;;
+        1) # DECLINED — unchanged, but a deliberate deferral: uncount + point to manual.
+          BROWNFIELD_OUTCOMES+=("${token}"$'\t'declined$'\t'"${bucket}"$'\t'"${severity}"$'\t'"${message}")
+          [[ "$FINDINGS_BLOCK_COUNT" -gt 0 ]] && FINDINGS_BLOCK_COUNT=$((FINDINGS_BLOCK_COUNT - 1))
+          printf '  Declined — resolve this later with the manual brownfield guide: docs/adopter/setup.md §0.\n'
+          continue ;;
+        *) # UNABLE (2, or any non-0/1) — route to manual; fall through to hard-stop.
+          BROWNFIELD_OUTCOMES+=("${token}"$'\t'hardstop$'\t'"${bucket}"$'\t'"${severity}"$'\t'"${message}")
+          ;;
+      esac
+    else
+      # resolvable=no, OR non-interactive, OR no resolver function -> hard-stop.
+      BROWNFIELD_OUTCOMES+=("${token}"$'\t'hardstop$'\t'"${bucket}"$'\t'"${severity}"$'\t'"${message}")
+    fi
+
+    # Hard-stop print: name the still-counted block in the shared vocabulary.
+    if [[ "$printed_header" -eq 0 ]]; then
+      printf '\nBrownfield conditions need your hand before adoption:\n'
+      printed_header=1
+    fi
+    format_finding "$bucket" "$severity" "$message"
+  done
+  if [[ "$printed_header" -eq 1 ]]; then
+    printf '  Resolve these with the manual brownfield guide: docs/adopter/setup.md §0 (Adopting Flywheel into an existing project), then re-run.\n'
+  fi
+  return 0
+}
+
 preflight_run
+brownfield_resolve
 preflight_gate
 
 # ---------------------------------------------------------------------------
@@ -564,6 +1659,44 @@ record_outcome() {
   local label="$1" outcome="$2" bucket="${3:-}" severity="${4:-}" command="${5:-}"
   SUMMARY_RECORDS+=("${label}"$'\t'"${outcome}"$'\t'"${bucket}"$'\t'"${severity}"$'\t'"${command}")
 }
+
+# brownfield_emit_summary_records — fold the run's brownfield conditions into the
+# completion summary (SPEC.md §spec:brownfield-resolution, §spec:setup-completion-summary).
+# This runs on a run that PROCEEDED past the gate, so the only `block` conditions
+# that reach it are ones the resolution phase cleared the gate of: resolved (applied)
+# or declined (a deliberate deferral). A hard-stopped block never reaches here — the
+# gate exits first. Two sources, no double-recording:
+#   * BROWNFIELD_OUTCOMES drives the block verdicts the dispatcher reached:
+#       resolved -> `configured`, declined -> `deferred`.
+#   * BROWNFIELD_CONDITIONS drives the advisory `info` conditions (legacy [skip ci] /
+#     non-conventional history, open-PR title rewrites), recorded `deferred` as before.
+# Both land in the SAME bucket x severity vocabulary as the rest of the summary;
+# a deferral the adopter has been shown is never a failure, so it never moves the
+# complete/incomplete verdict (§spec:setup-exit-contract). Empty -> no-op.
+brownfield_emit_summary_records() {
+  local rec token outcome bucket severity resolvable message
+  # Block verdicts from the resolution phase. Guard the empty case so an unset
+  # array expansion does not abort under `set -u` (bash 3.2-safe, as elsewhere).
+  if [[ "${#BROWNFIELD_OUTCOMES[@]}" -gt 0 ]]; then
+    for rec in "${BROWNFIELD_OUTCOMES[@]}"; do
+      IFS=$'\t' read -r token outcome bucket severity message <<< "$rec"
+      case "$outcome" in
+        resolved) record_outcome "brownfield: ${message}" configured "$bucket" "$severity" ;;
+        declined) record_outcome "brownfield: ${message}" deferred "$bucket" "$severity" ;;
+        # hardstop never reaches here (the gate exits first) — defensive skip.
+      esac
+    done
+  fi
+  # Advisory info conditions (severity != block) fold in as deliberate deferrals.
+  if [[ "${#BROWNFIELD_CONDITIONS[@]}" -gt 0 ]]; then
+    for rec in "${BROWNFIELD_CONDITIONS[@]}"; do
+      IFS=$'\t' read -r token bucket severity resolvable message <<< "$rec"
+      [[ "$severity" == "block" ]] && continue
+      record_outcome "brownfield: ${message}" deferred "$bucket" "$severity"
+    done
+  fi
+}
+brownfield_emit_summary_records
 
 # run_setup_validation — auto-run doctor.sh at the end of the run and fold its
 # findings into the completion summary (SPEC.md §spec:setup-auto-validation), so
@@ -701,11 +1834,15 @@ print_completion_summary() {
         esac
       fi
       # N (the count that drives "incomplete") = records whose outcome is `failed`
-      # OR whose severity is `block`. A deliberate skip (deferred warn/info) never
-      # counts. SPEC.md §spec:setup-completion-summary: "only a step that was meant
-      # to run and failed, or an unresolved block-severity finding, makes the
-      # verdict incomplete".
-      if [[ "$outcome" == "failed" || "$severity" == "block" ]]; then
+      # OR an UNRESOLVED block-severity finding. A deliberate skip (deferred
+      # warn/info) never counts; neither does a `configured` step that happens to
+      # carry block severity — a resolved brownfield block (resolution phase ->
+      # `configured`, severity `block`) is a completed step, not an outstanding
+      # blocker (§spec:brownfield-resolution "the run still completes"). SPEC.md
+      # §spec:setup-completion-summary: "only a step that was meant to run and
+      # failed, or an unresolved block-severity finding, makes the verdict
+      # incomplete".
+      if [[ "$outcome" == "failed" || ( "$severity" == "block" && "$outcome" != "configured" ) ]]; then
         incomplete_count=$((incomplete_count + 1))
       fi
       # warn-severity items (deliberate deferrals like skipped App creds /
