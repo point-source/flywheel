@@ -1114,6 +1114,7 @@ preflight_run() {
   PREFLIGHT_MANAGED_BRANCHES_READ=0
   PREFLIGHT_RULESETS_READ=0
   PREFLIGHT_DEFAULT_BRANCH_READ=0
+  PREFLIGHT_DEFAULT_BRANCH=""
   # Resolve the default branch ONCE in this (parent) shell so the per-ruleset
   # ref-coverage checks — which run inside command substitutions — reuse the value
   # rather than each re-reading it over the network (a memo set inside a $()
