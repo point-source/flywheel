@@ -518,9 +518,13 @@ preflight_detect_version_tag_shape() {
 
   while IFS= read -r tag; do
     [[ -n "$tag" ]] || continue
-    # v-prefixed semver is greenfield-compatible — ignore.
-    [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+ ]] && continue
-    if [[ "$tag" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?$ ]]; then
+    # v-prefixed semver is greenfield-compatible — ignore. Anchored, with optional
+    # prerelease/build-metadata suffix, so v3.4.2 / v3.4.2-rc1 / v2.0.0+build7 are
+    # skipped but a 4-component vX.Y.Z.W (not semver) falls through to exotic-ignore.
+    [[ "$tag" =~ ^v[0-9]+\.[0-9]+(\.[0-9]+)?([-+][0-9A-Za-z.-]+)?$ ]] && continue
+    # Bare semver, including prerelease/build-metadata (3.4.2, 3.4.2-rc1, 2.0.0+build7)
+    # — all collide with the v-prefixed scheme and are retag-resolvable.
+    if [[ "$tag" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?([-+][0-9A-Za-z.-]+)?$ ]]; then
       # Idempotency: a bare-semver tag whose `v`-prefixed twin already exists in
       # the gathered set (local + remote) is ALREADY resolved — the guided retag
       # (§spec:brownfield-resolvers) is non-destructive and leaves the original in
@@ -560,7 +564,11 @@ preflight_detect_version_tag_shape() {
 # managed branches that EXIST on the remote. The candidate set is flywheel's
 # standard topology (develop main staging) because at pre-flight the preset /
 # .flywheel.yml is not yet known — we probe the superset and let the caller act
-# only on what exists. Existence is tested with the doctor.sh idiom
+# only on what exists. KNOWN LIMITATION (point-source/flywheel#263): a renamed /
+# multi-stream topology whose managed branch is none of develop/main/staging is not
+# probed by the branch-scoped detectors, so those checks silently no-op there (a
+# false negative caught later by doctor.sh or the first release). Existence is
+# tested with the doctor.sh idiom
 # (`gh api repos/$REPO/branches/$b`). REPO may be empty (gh unresolved); in that
 # case we can't probe the remote, so echo nothing. Read-only; errors swallowed.
 # Memoized once per run: both the bypass and signed-commit detectors call this,
@@ -666,14 +674,41 @@ preflight_brownfield_read_rulesets() {
   _preflight_read_ruleset_details "$tag_ids" PREFLIGHT_TAG_RULESET_IDS PREFLIGHT_TAG_RULESET_DETAILS
 }
 
+# preflight_brownfield_default_branch — echo the repo's default branch as a full
+# ref (refs/heads/<name>), or empty if REPO is unresolved / the read fails. Needed
+# so ~DEFAULT_BRANCH coverage is evaluated against the ACTUAL default branch rather
+# than treated as covering every managed branch. Memoized once per run (one gh read
+# serves every ref_covered call); preflight_run resets the flag so a fresh run
+# re-reads. Read-only; errors swallowed.
+PREFLIGHT_DEFAULT_BRANCH=""
+PREFLIGHT_DEFAULT_BRANCH_READ=0
+preflight_brownfield_default_branch() {
+  if [[ $PREFLIGHT_DEFAULT_BRANCH_READ -eq 0 ]]; then
+    PREFLIGHT_DEFAULT_BRANCH_READ=1
+    if [[ -n "${REPO:-}" ]]; then
+      local d
+      d="$(gh api "repos/$REPO" -q '.default_branch' 2>/dev/null || true)"
+      [[ -n "$d" ]] && PREFLIGHT_DEFAULT_BRANCH="refs/heads/$d"
+    fi
+  fi
+  printf '%s' "$PREFLIGHT_DEFAULT_BRANCH"
+}
+
 # preflight_brownfield_ref_covered <detail-json> <ref> — print 1 if the ruleset
 # detail's conditions.ref_name.include covers <ref> (exact match, ~ALL, or
-# ~DEFAULT_BRANCH), else 0. Centralizes the coverage heuristic the bypass and
-# signed-commit detectors share. jq is guarded (2>/dev/null) so a malformed /
-# non-object detail can't abort under set -e — it simply reads as not-covered.
+# ~DEFAULT_BRANCH — the last ONLY when <ref> is the repo's actual default branch),
+# else 0. Centralizes the coverage heuristic the bypass and signed-commit detectors
+# share. Scoping ~DEFAULT_BRANCH to the real default branch avoids both a false
+# block on the other managed branches and a false negative on the default branch
+# (vs. dropping the token entirely). If the default branch can't be resolved, the
+# match falls through (empty $default never equals a real ref), degrading to the
+# safe false-negative side. jq is guarded (2>/dev/null) so a malformed / non-object
+# detail can't abort under set -e — it simply reads as not-covered.
 preflight_brownfield_ref_covered() {
-  if echo "$1" | jq -e --arg ref "$2" \
-    '[.conditions?.ref_name?.include[]? | select(. == $ref or . == "~ALL" or . == "~DEFAULT_BRANCH")] | length > 0' \
+  local default_ref
+  default_ref="$(preflight_brownfield_default_branch)"
+  if echo "$1" | jq -e --arg ref "$2" --arg default "$default_ref" \
+    '[.conditions?.ref_name?.include[]? | select(. == $ref or . == "~ALL" or (. == "~DEFAULT_BRANCH" and $ref == $default))] | length > 0' \
     >/dev/null 2>&1; then
     printf '1\n'
   else
@@ -686,9 +721,14 @@ preflight_brownfield_ref_covered() {
 # dedup the resolver would PUT-edit that ruleset (and re-add the App entry) twice.
 _bypass_add_ruleset_id() {
   local id="$1" existing
-  for existing in "${BYPASS_RULESET_IDS[@]}"; do
-    [[ "$existing" == "$id" ]] && return 0
-  done
+  # bash 3.2-safe: expanding "${arr[@]}" on an empty array aborts under `set -u`,
+  # and this is the first call right after BYPASS_RULESET_IDS is reset to (), so
+  # guard the empty case before iterating (as elsewhere in this file).
+  if [[ ${#BYPASS_RULESET_IDS[@]} -gt 0 ]]; then
+    for existing in "${BYPASS_RULESET_IDS[@]}"; do
+      [[ "$existing" == "$id" ]] && return 0
+    done
+  fi
   BYPASS_RULESET_IDS+=("$id")
 }
 
@@ -963,18 +1003,27 @@ preflight_detect_history_and_prs() {
   # gh-capability already flags an unusable token, and the could-not-verify warn
   # is reserved for a real read failure under a resolved REPO.
   if [[ -n "${REPO:-}" ]]; then
-    local pulls titles rewrite_count=0 title
+    local pulls titles rewrite_count=0 total=0 title count_label
+    # One page (up to 100). This is an ADVISORY count, so we deliberately do not
+    # --paginate every open PR — on a large repo that walks every page and slows the
+    # hot pre-flight path. Instead, if the page comes back full we DISCLOSE the
+    # sample bound in the finding (a "+", below) rather than silently undercounting.
+    # A real read failure falls to the could-not-verify warn below.
     if pulls="$(gh api "repos/$REPO/pulls?state=open&per_page=100" 2>/dev/null)"; then
       # `?` + `|| true` keep a malformed/empty body from aborting under set -e.
-      titles="$(echo "$pulls" | jq -r '.[]?.title // empty' 2>/dev/null || true)"
+      titles="$(printf '%s' "$pulls" | jq -r '.[]?.title // empty' 2>/dev/null || true)"
       while IFS= read -r title; do
         [[ -n "$title" ]] || continue
+        total=$((total + 1))
         if ! printf '%s' "$title" | grep -qiE "$cc_re"; then
           rewrite_count=$((rewrite_count + 1))
         fi
       done <<< "$titles"
       if [[ $rewrite_count -gt 0 ]]; then
-        brownfield_finding open_pr_rewrite no instance info "$rewrite_count open PR(s) have non-conventional titles that flywheel will rewrite to Conventional Commits at cutover. Advisory only: review the rewritten titles after setup."
+        # Page full (100) ⇒ there may be more open PRs than we sampled; say so.
+        count_label="$rewrite_count"
+        [[ $total -ge 100 ]] && count_label="$rewrite_count+ (first 100 open PRs sampled)"
+        brownfield_finding open_pr_rewrite no instance info "$count_label open PR(s) have non-conventional titles that flywheel will rewrite to Conventional Commits at cutover. Advisory only: review the rewritten titles after setup."
       fi
     else
       finding local-env warn "could not verify open PRs — listing pull requests requires repo access"
@@ -1064,6 +1113,12 @@ preflight_run() {
   # them (rather than each detector re-probing the same gh endpoints).
   PREFLIGHT_MANAGED_BRANCHES_READ=0
   PREFLIGHT_RULESETS_READ=0
+  PREFLIGHT_DEFAULT_BRANCH_READ=0
+  # Resolve the default branch ONCE in this (parent) shell so the per-ruleset
+  # ref-coverage checks — which run inside command substitutions — reuse the value
+  # rather than each re-reading it over the network (a memo set inside a $()
+  # subshell would not persist). One cheap repo-metadata read per run.
+  preflight_brownfield_default_branch >/dev/null 2>&1 || true
   # >>> detector seam — add new detectors here >>>
   preflight_detect_gh_capability       # §spec:preflight-gh-capability
   preflight_detect_release_conflict    # §spec:preflight-release-conflict
@@ -1106,7 +1161,10 @@ preflight_gate() {
 brownfield_confirm() {
   local prompt="$1" reply=""
   read -r -u 3 -p "$prompt" reply
-  [[ "$reply" =~ ^(y|Y|yes)$ ]]
+  # Case-insensitive so a capitalized "Yes"/"YES" reads as consent, not a silent
+  # decline. bash 3.2 has no ${reply,,}, so lowercase via tr before matching.
+  reply="$(printf '%s' "$reply" | tr '[:upper:]' '[:lower:]')"
+  [[ "$reply" =~ ^(y|yes)$ ]]
 }
 
 # brownfield_resolver_tag_shape_bare_semver — the GUIDED RETAG resolver
@@ -1137,7 +1195,9 @@ brownfield_resolver_tag_shape_bare_semver() {
   # (resolved). Each entry is the bare value X; the v-twin is derived as `v$X`.
   while IFS= read -r tag; do
     [[ -n "$tag" ]] || continue
-    [[ "$tag" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?$ ]] || continue
+    # Mirror the detector's bare-semver shape (incl. prerelease/build-metadata) so
+    # the resolver never silently skips a tag the detector flagged.
+    [[ "$tag" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?([-+][0-9A-Za-z.-]+)?$ ]] || continue
     had_any=1
     if printf '%s\n' "$tags" | grep -qxF "v$tag"; then
       continue   # vX already exists — already retagged.
@@ -1166,6 +1226,34 @@ brownfield_resolver_tag_shape_bare_semver() {
 
   if ! brownfield_confirm "  Create and push these v-prefixed tags? [y/N] "; then
     return 1   # DECLINED — dispatcher prints the manual pointer; change nothing.
+  fi
+
+  # A bare tag detected only on the remote (via the GitHub API, never fetched) has
+  # no local object, so `git tag vX X` below would fail. We need the tag object
+  # locally to retag it. Identify those and ask permission to fetch — fetching only
+  # adds local copies of remote tags, mutating nothing on the remote. This resolver
+  # runs interactively only (the dispatcher gates on INTERACTIVE), so the prompt is
+  # safe. Declining leaves those tags to the manual route (the APPLY loop reports
+  # them as unable below); locally-present tags are still retagged.
+  local remote_only="" bare
+  while IFS= read -r bare; do
+    [[ -n "$bare" ]] || continue
+    git rev-parse -q --verify "refs/tags/$bare" >/dev/null 2>&1 || remote_only+="$bare"$'\n'
+  done <<<"$bare_tags"
+  if [[ -n "$remote_only" ]]; then
+    printf '  Some tags exist only on the remote and must be fetched locally before\n'
+    printf '  they can be re-tagged (this only adds local copies; the remote is\n'
+    printf '  unchanged):\n'
+    while IFS= read -r bare; do
+      [[ -n "$bare" ]] || continue
+      printf '    %s\n' "$bare"
+    done <<<"$remote_only"
+    if brownfield_confirm "  Fetch these tags from origin? [y/N] "; then
+      while IFS= read -r bare; do
+        [[ -n "$bare" ]] || continue
+        git fetch --quiet origin "refs/tags/$bare:refs/tags/$bare" 2>/dev/null || true
+      done <<<"$remote_only"
+    fi
   fi
 
   # APPLY: for each pair create vX at the same commit as X, then push it. NEVER
