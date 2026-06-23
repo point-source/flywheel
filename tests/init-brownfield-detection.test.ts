@@ -882,6 +882,21 @@ describe("init.sh — config-derived managed-branch enumeration", () => {
     }
   });
 
+  it("an invalid --preset is rejected up front (exit 2) before any branch probe — no path/URL traversal via $PRESET", () => {
+    const r = runInitCfg([], {
+      args: ["--preset", "../../evil", "--version", "v0", "--skip-secrets", "--skip-rulesets"],
+    });
+    try {
+      const combined = stripAnsi(r.stdout + r.stderr);
+      expect(r.status, `combined:\n${combined}`).toBe(2);
+      expect(combined).toMatch(/--preset must be minimal \| three-stage \| multi-stream/);
+      // Bailed before the pre-flight pass — $PRESET never reached a path/fetch.
+      expect(r.ghCalls).not.toMatch(/branches\//);
+    } finally {
+      rmSync(r.work, { recursive: true, force: true });
+    }
+  });
+
   it("second run with an existing .flywheel.yml ('main') ⇒ reads config, probes main, no re-default notice (idempotent)", () => {
     const r = runInitCfg(
       [

@@ -95,6 +95,20 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+# Validate an explicitly-provided --preset NOW, before anything consults it. The
+# pre-flight managed-branch enumeration interpolates $PRESET into a template path
+# (`flywheel.$PRESET.yml`) and a fetch URL (§spec:brownfield-managed-branches),
+# which runs well before the preset-selection block below — so an unchecked value
+# could traverse paths or rewrite the fetch. An empty PRESET means "not chosen via
+# flag"; the interactive selection below only ever assigns one of these literals,
+# so guarding the flag value here closes the gap without disturbing that path.
+if [[ -n "$PRESET" ]]; then
+  case "$PRESET" in
+    minimal|three-stage|multi-stream) ;;
+    *) echo "error: --preset must be minimal | three-stage | multi-stream (got '$PRESET')" >&2; exit 2 ;;
+  esac
+fi
+
 # Only git is needed immediately (for `git rev-parse` below). gh's install +
 # auth state is probed by the pre-flight pass (preflight_detect_gh_capability),
 # so a missing/unauthenticated gh surfaces as a finding rather than a hard exit
