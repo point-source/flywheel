@@ -23,13 +23,19 @@ Run from your repo, with `gh auth login` already done:
 curl -fsSL https://raw.githubusercontent.com/point-source/flywheel/main/scripts/init.sh | bash
 ```
 
-`init.sh` picks a `.flywheel.yml` preset, writes both Flywheel workflow files, prompts for the GitHub App credentials, and (optionally) applies the recommended branch + tag rulesets. Validate any time with:
+`init.sh` picks a `.flywheel.yml` preset, writes both Flywheel workflow files, prompts for the GitHub App credentials, and (optionally) applies the recommended branch + tag rulesets. It is safe to run on **any** repository, greenfield or populated: before it writes anything, every run checks for brownfield conditions — prior version tags, an existing release pipeline, branch protection that omits the App — and either resolves them inline after showing you the exact change and asking, or stops with a non-zero exit and routes you to the manual guide when a condition needs a judgment call. Running the one command above top-down never silently layers Flywheel onto a conflicting setup. The three presets differ by purpose:
+
+- **`minimal`** — a single release line on one branch that cuts a release on every qualifying push.
+- **`three-stage`** — one release line through staged branches (develop → staging → main) with promotion PRs between them.
+- **`multi-stream`** — two or more independent release lines in parallel, each cutting its own prereleases with its own version suffix and auto-merge rules.
+
+See [docs/adopter/setup.md §2](./docs/adopter/setup.md#2-add-flywheelyml) for the full per-preset walkthrough. Validate any time with:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/point-source/flywheel/main/scripts/doctor.sh | bash
 ```
 
-> **Adopting into an existing repo** with prior version tags, release automation, or branch protection? Skip `init.sh` and start with [docs/adopter/setup.md §0](./docs/adopter/setup.md#0-adopting-flywheel-into-an-existing-project) — it covers the audit and cleanup steps the script doesn't.
+> **Adopting into an existing repo** with prior version tags, release automation, or branch protection? Run the one command above — `init.sh` detects those conditions on every run, offers to resolve the safe ones inline (with your confirmation), and stops with a pointer to [docs/adopter/setup.md §0](./docs/adopter/setup.md#0-adopting-flywheel-into-an-existing-project) when a condition needs a judgment call. §0 is the reference for what the inline resolvers do and the guide the hard stop routes you to.
 
 The hand-rolled equivalent — four files in your repo:
 
@@ -116,7 +122,7 @@ workflow_run: build completed
 
 ## Permissions
 
-Flywheel mints its own installation token from the GitHub App credentials you supply via the `app-id` / `app-private-key` inputs. The App needs these scopes:
+A GitHub App is how the flywheel workflows act on your repo as a bot — push releases and tags, open and merge promotion PRs, apply labels — and Flywheel mints its own installation token from the App credentials you supply via the `app-id` / `app-private-key` inputs. The App is a permanent dependency used on every workflow run, not install-time scaffolding to remove later. The work above maps directly onto these scopes:
 
 | Scope          | Purpose                                               |
 | -------------- | ----------------------------------------------------- |
@@ -126,7 +132,9 @@ Flywheel mints its own installation token from the GitHub App credentials you su
 | Checks: r/w    | Posting the `flywheel/conventional-commit` check      |
 | Metadata: read | Required for any token interacting with a repo        |
 
-Adopters store `FLYWHEEL_GH_APP_ID` as a repo Variable (it's not sensitive — the App ID is printed on the App's settings page) and `FLYWHEEL_GH_APP_PRIVATE_KEY` as a repo Secret, and pass them straight into the action — no separate `actions/create-github-app-token` step. Personal Access Tokens are not supported (they don't reliably propagate the cross-workflow trigger semantics Flywheel relies on); `secrets.GITHUB_TOKEN` is similarly insufficient (it cannot trigger downstream workflows from PRs it creates).
+Adopters store `FLYWHEEL_GH_APP_ID` as a repo Variable (it's not sensitive — the App ID is printed on the App's settings page) and `FLYWHEEL_GH_APP_PRIVATE_KEY` as a repo Secret, and pass them straight into the action — no separate `actions/create-github-app-token` step.
+
+Why an App and not a personal access token? Flywheel registers the App as an *Integration*-type bypass actor in the branch/tag rulesets so the bot can push releases and tags to protected branches, and only a GitHub App can be that bypass actor — a PAT cannot stand in. A PAT would also tie the automation to one person's account and rate limit and live as a long-lived manual secret rather than a token minted fresh per run, and it doesn't reliably propagate the cross-workflow trigger semantics Flywheel relies on. Personal Access Tokens are not supported; `secrets.GITHUB_TOKEN` is similarly insufficient (it cannot trigger downstream workflows from PRs it creates).
 
 ## Inputs and outputs
 

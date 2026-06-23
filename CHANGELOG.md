@@ -1,3 +1,94 @@
+# [2.1.0-dev.13](https://github.com/point-source/flywheel/compare/v2.1.0-dev.12...v2.1.0-dev.13) (2026-06-20)
+
+
+### Features
+
+* brownfield-safe init.sh adoption (detect, resolve, or hard-stop) ([#264](https://github.com/point-source/flywheel/issues/264)) ([e9ebd9c](https://github.com/point-source/flywheel/commit/e9ebd9c79fefbbc7b35c4fea51eb06f7cb4780c2)), closes [#233](https://github.com/point-source/flywheel/issues/233) [#233](https://github.com/point-source/flywheel/issues/233) [#233-3](https://github.com/point-source/flywheel/issues/233-3) [#233-3](https://github.com/point-source/flywheel/issues/233-3) [#233-3](https://github.com/point-source/flywheel/issues/233-3) [#233](https://github.com/point-source/flywheel/issues/233) [#2](https://github.com/point-source/flywheel/issues/2) [#1](https://github.com/point-source/flywheel/issues/1) [#4](https://github.com/point-source/flywheel/issues/4) [#6](https://github.com/point-source/flywheel/issues/6) [#3](https://github.com/point-source/flywheel/issues/3) [#5](https://github.com/point-source/flywheel/issues/5) [#8](https://github.com/point-source/flywheel/issues/8) [#233](https://github.com/point-source/flywheel/issues/233) [#6](https://github.com/point-source/flywheel/issues/6) [#2](https://github.com/point-source/flywheel/issues/2) [#4](https://github.com/point-source/flywheel/issues/4) [#233](https://github.com/point-source/flywheel/issues/233) [#233](https://github.com/point-source/flywheel/issues/233)
+
+# [2.1.0-dev.12](https://github.com/point-source/flywheel/compare/v2.1.0-dev.11...v2.1.0-dev.12) (2026-06-19)
+
+
+### Features
+
+* optional doctor.sh CI validation workflow for adopters ([#262](https://github.com/point-source/flywheel/issues/262)) ([fda7a83](https://github.com/point-source/flywheel/commit/fda7a83f7f219effb2c6fbbcb88d826862d2d6a8)), closes [#240](https://github.com/point-source/flywheel/issues/240) [#240](https://github.com/point-source/flywheel/issues/240) [#240](https://github.com/point-source/flywheel/issues/240) [#240](https://github.com/point-source/flywheel/issues/240) [#240](https://github.com/point-source/flywheel/issues/240) [#240](https://github.com/point-source/flywheel/issues/240) [#240](https://github.com/point-source/flywheel/issues/240) [#240](https://github.com/point-source/flywheel/issues/240) [#240](https://github.com/point-source/flywheel/issues/240) [#240](https://github.com/point-source/flywheel/issues/240) [#240](https://github.com/point-source/flywheel/issues/240) [#240](https://github.com/point-source/flywheel/issues/240) [#240](https://github.com/point-source/flywheel/issues/240) [#240](https://github.com/point-source/flywheel/issues/240) [#240](https://github.com/point-source/flywheel/issues/240) [#240](https://github.com/point-source/flywheel/issues/240)
+
+# [2.1.0-dev.11](https://github.com/point-source/flywheel/compare/v2.1.0-dev.10...v2.1.0-dev.11) (2026-06-19)
+
+
+### Features
+
+* clarify and auto-detect the GitHub App step in init.sh ([#261](https://github.com/point-source/flywheel/issues/261)) ([ce2b2f4](https://github.com/point-source/flywheel/commit/ce2b2f405c719d714fae5f58505c665aa7b56aae)), closes [#236](https://github.com/point-source/flywheel/issues/236) [#236](https://github.com/point-source/flywheel/issues/236) [#236](https://github.com/point-source/flywheel/issues/236) [#236](https://github.com/point-source/flywheel/issues/236) [#236](https://github.com/point-source/flywheel/issues/236) [#236](https://github.com/point-source/flywheel/issues/236) [#236](https://github.com/point-source/flywheel/issues/236) [#236](https://github.com/point-source/flywheel/issues/236) [#236](https://github.com/point-source/flywheel/issues/236) [#236](https://github.com/point-source/flywheel/issues/236) [#236](https://github.com/point-source/flywheel/issues/236) [#236](https://github.com/point-source/flywheel/issues/236) [#236](https://github.com/point-source/flywheel/issues/236) [#236](https://github.com/point-source/flywheel/issues/236) [#236](https://github.com/point-source/flywheel/issues/236) [#236](https://github.com/point-source/flywheel/issues/236) [#236](https://github.com/point-source/flywheel/issues/236) [#236](https://github.com/point-source/flywheel/issues/236)
+
+# [2.1.0-dev.10](https://github.com/point-source/flywheel/compare/v2.1.0-dev.9...v2.1.0-dev.10) (2026-06-19)
+
+
+### Features
+
+* clearer doctor.sh credential-check messaging (warn, not fail, when unverifiable) ([#260](https://github.com/point-source/flywheel/issues/260)) ([9a08933](https://github.com/point-source/flywheel/commit/9a0893334886ca23db6ecea9aa1e6b2f0dd6a1d0)), closes [#237](https://github.com/point-source/flywheel/issues/237) [#237](https://github.com/point-source/flywheel/issues/237) [#237](https://github.com/point-source/flywheel/issues/237) [#237](https://github.com/point-source/flywheel/issues/237)
+
+# [2.1.0-dev.9](https://github.com/point-source/flywheel/compare/v2.1.0-dev.8...v2.1.0-dev.9) (2026-06-19)
+
+
+### Features
+
+* clarify init.sh App-credential prompts and prompt only for the gap ([#259](https://github.com/point-source/flywheel/issues/259)) ([01206fb](https://github.com/point-source/flywheel/commit/01206fbefbe799115ad56f6aef19b88016d5c122)), closes [#235](https://github.com/point-source/flywheel/issues/235) [#235](https://github.com/point-source/flywheel/issues/235) [#235](https://github.com/point-source/flywheel/issues/235) [#235](https://github.com/point-source/flywheel/issues/235) [#235](https://github.com/point-source/flywheel/issues/235) [#235](https://github.com/point-source/flywheel/issues/235) [#235](https://github.com/point-source/flywheel/issues/235) [#235](https://github.com/point-source/flywheel/issues/235) [#235](https://github.com/point-source/flywheel/issues/235) [#235](https://github.com/point-source/flywheel/issues/235) [#235](https://github.com/point-source/flywheel/issues/235) [#235](https://github.com/point-source/flywheel/issues/235)
+
+# [2.1.0-dev.8](https://github.com/point-source/flywheel/compare/v2.1.0-dev.7...v2.1.0-dev.8) (2026-06-19)
+
+
+### Features
+
+* clarify init.sh preset menu wording ([#258](https://github.com/point-source/flywheel/issues/258)) ([5aee682](https://github.com/point-source/flywheel/commit/5aee6828c6ace5c1f53734762eaaba633a107251)), closes [#234](https://github.com/point-source/flywheel/issues/234) [#234](https://github.com/point-source/flywheel/issues/234) [#234](https://github.com/point-source/flywheel/issues/234) [#234](https://github.com/point-source/flywheel/issues/234) [#234](https://github.com/point-source/flywheel/issues/234)
+
+# [2.1.0-dev.7](https://github.com/point-source/flywheel/compare/v2.1.0-dev.6...v2.1.0-dev.7) (2026-06-18)
+
+
+### Features
+
+* doctor fix-script remediation matches invocation mode ([#257](https://github.com/point-source/flywheel/issues/257)) ([941b315](https://github.com/point-source/flywheel/commit/941b31524c4173aac44c40490d73ff47d5b6bdf7)), closes [#238](https://github.com/point-source/flywheel/issues/238) [#238](https://github.com/point-source/flywheel/issues/238) [#238](https://github.com/point-source/flywheel/issues/238) [#238](https://github.com/point-source/flywheel/issues/238) [#238](https://github.com/point-source/flywheel/issues/238) [#238](https://github.com/point-source/flywheel/issues/238) [#238](https://github.com/point-source/flywheel/issues/238) [#238](https://github.com/point-source/flywheel/issues/238) [#238](https://github.com/point-source/flywheel/issues/238) [#238](https://github.com/point-source/flywheel/issues/238)
+
+# [2.1.0-dev.6](https://github.com/point-source/flywheel/compare/v2.1.0-dev.5...v2.1.0-dev.6) (2026-06-18)
+
+
+### Features
+
+* setup completion summary ([#256](https://github.com/point-source/flywheel/issues/256)) ([156517d](https://github.com/point-source/flywheel/commit/156517d1f4a6f697204847956d0a883b8581e6c1)), closes [#242](https://github.com/point-source/flywheel/issues/242) [#242](https://github.com/point-source/flywheel/issues/242) [#242](https://github.com/point-source/flywheel/issues/242)
+
+# [2.1.0-dev.5](https://github.com/point-source/flywheel/compare/v2.1.0-dev.4...v2.1.0-dev.5) (2026-06-18)
+
+
+### Features
+
+* three-state doctor repo-field reads ([#255](https://github.com/point-source/flywheel/issues/255)) ([459ffeb](https://github.com/point-source/flywheel/commit/459ffeb8bcaf8927348cbd3f217635c4eb115eda)), closes [#239](https://github.com/point-source/flywheel/issues/239) [#239](https://github.com/point-source/flywheel/issues/239) [#239](https://github.com/point-source/flywheel/issues/239) [#239](https://github.com/point-source/flywheel/issues/239) [#239](https://github.com/point-source/flywheel/issues/239) [#239](https://github.com/point-source/flywheel/issues/239) [#239](https://github.com/point-source/flywheel/issues/239) [#239](https://github.com/point-source/flywheel/issues/239) [#239](https://github.com/point-source/flywheel/issues/239) [#239](https://github.com/point-source/flywheel/issues/239)
+
+# [2.1.0-dev.4](https://github.com/point-source/flywheel/compare/v2.1.0-dev.3...v2.1.0-dev.4) (2026-06-18)
+
+
+### Features
+
+* break Dependabot PR deadlock on required conventional-commit check ([#254](https://github.com/point-source/flywheel/issues/254)) ([58f9cfc](https://github.com/point-source/flywheel/commit/58f9cfc505a3b8540340077bf68231c00ca34f2a)), closes [#243](https://github.com/point-source/flywheel/issues/243) [#243](https://github.com/point-source/flywheel/issues/243)
+
+# [2.1.0-dev.3](https://github.com/point-source/flywheel/compare/v2.1.0-dev.2...v2.1.0-dev.3) (2026-06-13)
+
+
+### Features
+
+* pre-flight environment detection before setup starts ([#250](https://github.com/point-source/flywheel/issues/250)) ([418255b](https://github.com/point-source/flywheel/commit/418255b5caf1ed0af4e8ca0ba82fd1244e8a8502)), closes [#232](https://github.com/point-source/flywheel/issues/232) [#232](https://github.com/point-source/flywheel/issues/232) [#232](https://github.com/point-source/flywheel/issues/232) [#232](https://github.com/point-source/flywheel/issues/232) [preflight-#capability](https://github.com/preflight-/issues/capability) [preflight-#capability](https://github.com/preflight-/issues/capability) [#232](https://github.com/point-source/flywheel/issues/232) [#capability](https://github.com/point-source/flywheel/issues/capability) [preflight-#capability](https://github.com/preflight-/issues/capability) [preflight-#capability](https://github.com/preflight-/issues/capability) [#capability](https://github.com/point-source/flywheel/issues/capability) [preflight-#capability](https://github.com/preflight-/issues/capability) [preflight-#capability](https://github.com/preflight-/issues/capability) [preflight-#capability](https://github.com/preflight-/issues/capability) [#232](https://github.com/point-source/flywheel/issues/232)
+
+# [2.1.0-dev.2](https://github.com/point-source/flywheel/compare/v2.1.0-dev.1...v2.1.0-dev.2) (2026-06-13)
+
+
+### Features
+
+* stdin-safe ruleset application for piped apply-rulesets.sh ([#249](https://github.com/point-source/flywheel/issues/249)) ([4b67490](https://github.com/point-source/flywheel/commit/4b67490830ca4a0f21a80ff69e6932e6a6214f23)), closes [#244](https://github.com/point-source/flywheel/issues/244) [#244](https://github.com/point-source/flywheel/issues/244) [#244](https://github.com/point-source/flywheel/issues/244) [#244](https://github.com/point-source/flywheel/issues/244) [#244](https://github.com/point-source/flywheel/issues/244) [#244](https://github.com/point-source/flywheel/issues/244) [#245](https://github.com/point-source/flywheel/issues/245) [#244](https://github.com/point-source/flywheel/issues/244)
+
+# [2.1.0-dev.1](https://github.com/point-source/flywheel/compare/v2.0.1...v2.1.0-dev.1) (2026-06-13)
+
+
+### Features
+
+* apply-rulesets self-provisions PyYAML ephemerally ([#247](https://github.com/point-source/flywheel/issues/247)) ([d363a2f](https://github.com/point-source/flywheel/commit/d363a2f90a6de6d31ad1ffed6d24e67cf4e597ec)), closes [#245](https://github.com/point-source/flywheel/issues/245) [#245](https://github.com/point-source/flywheel/issues/245) [#245](https://github.com/point-source/flywheel/issues/245) [#245](https://github.com/point-source/flywheel/issues/245) [#245](https://github.com/point-source/flywheel/issues/245) [#245](https://github.com/point-source/flywheel/issues/245) [#245](https://github.com/point-source/flywheel/issues/245)
+
 ## [2.0.1](https://github.com/point-source/flywheel/compare/v2.0.0...v2.0.1) (2026-06-08)
 
 

@@ -11,23 +11,25 @@ Step-by-step guide to wiring Flywheel into your repository.
 
 ## Quick start (one command)
 
-If you have `gh`, `jq`, and `python3` (with `PyYAML`) installed and you're in your repo with `gh auth login` already done, the steps below collapse to:
+If you have `gh`, `jq`, and `python3` installed and you're in your repo with `gh auth login` already done, the steps below collapse to:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/point-source/flywheel/main/scripts/init.sh | bash
 ```
 
-`init.sh` picks a `.flywheel.yml` preset, writes both adopter workflow files, prompts for your GitHub App credentials, and optionally applies the branch + tag rulesets. Then validate with:
+`init.sh` picks a `.flywheel.yml` preset, writes both adopter workflow files, prompts for your GitHub App credentials, and optionally applies the branch + tag rulesets. It is safe to run on **any** repository, greenfield or populated — before it writes anything, every run checks for the brownfield conditions in [§0](#0-adopting-flywheel-into-an-existing-project) and either resolves the safe ones inline (showing you the exact change and asking first) or stops with a non-zero exit and points you to §0 when a condition needs a judgment call. Then validate with:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/point-source/flywheel/main/scripts/doctor.sh | bash
 ```
 
-The rest of this document is the manual walkthrough — useful if you want to understand what `init.sh` writes, or if you're retrofitting an existing setup.
+The rest of this document is the manual walkthrough — useful if you want to understand what `init.sh` writes, or to follow the brownfield audit (§0) by hand rather than letting the script's inline resolvers offer it.
 
 ## 0. Adopting Flywheel into an existing project
 
-Skip this section for greenfield repos. If your repo has any of: prior version tags, an existing release pipeline (release-please, manual `gh release create`, `npm publish` in CI, goreleaser, changesets), pre-existing branch protection rules, or many open PRs — work through the audit below before §1. Use the manual walkthrough for the rest of the doc rather than `init.sh`; the script doesn't audit existing state and will happily layer Flywheel on top of conflicts that surface later as failed releases.
+Greenfield repos hit none of this — `init.sh` finds no brownfield conditions and proceeds straight through, so you can skip this section. If your repo has any of: prior version tags, an existing release pipeline (release-please, manual `gh release create`, `npm publish` in CI, goreleaser, changesets), pre-existing branch protection rules, or many open PRs — `init.sh` now detects those on **every** run, before it writes anything, and either resolves the safe ones inline or stops and routes you here when a condition needs a judgment call. It does **not** silently layer Flywheel on top of a conflicting setup.
+
+This section is both the reference for what those inline resolvers do and the destination the script's hard stop routes you to. The quick-start command handles a populated repo safely on its own; you work through the audit below by hand only when you want to understand or pre-empt what the script offers, or when the script hard-stops on a condition it won't auto-resolve. Three conditions `init.sh` offers to resolve inline (showing the exact change and asking first): colliding bare-semver tags (a guided, non-destructive retag to `v*` — [§0.1](#01-audit-existing-version-tags)), a recognized prior release system (removing its specific config/workflows, recoverable from git history — [§0.2](#02-disable-previous-release-automation)), and a managed-branch ruleset that omits the App as a bypass actor (a scoped, reversible edit — [§0.3](#03-confirm-bot-identity-can-push-to-protected-branches)). It hard-stops to manual for the judgment calls: a non-semver tag baseline, an unrecognized or ambiguous release system, a signed-commit/tag rule, history rewrites ([§0.4](#04-audit-recent-commit-history)), and others' open PRs ([§0.5](#05-open-prs-at-cutover)). Work through whatever applies, then settle the [§0.6 completion check](#06-completion-check) — the same verdict `init.sh` lands on.
 
 ### 0.1 Audit existing version tags
 
@@ -84,9 +86,31 @@ If you need a release immediately and the recent history isn't conventional, the
 
 Open PRs whose titles aren't conventional commits will be rewritten by Flywheel on their next `synchronize` event. Nothing breaks, but if you have many open PRs expect a wave of title-rewrite activity in the first day. No action required — included so it's not a surprise.
 
+### 0.6 Completion check
+
+You've now audited the existing repo. Before moving on to §1, settle on the same verdict `init.sh` lands on at the end of a scripted run, so a hand retrofit and a scripted one reach **one definition of "done"**. Each item below carries the two labels that `init.sh`'s pre-flight, its completion summary, and `doctor.sh` all use — a **bucket** (`local-env` / `instance` / `config` — whose problem it is and when it's fixed) and a **severity** (`block` / `warn` / `info` — how serious it is):
+
+| §0 step | Outstanding item | Bucket | Severity |
+| --- | --- | --- | --- |
+| [Prerequisites](#prerequisites) | `gh` not installed/authenticated, or you lack repo-admin to write secrets and apply rulesets | `local-env` | `block` |
+| [0.1](#01-audit-existing-version-tags) | Bare or non-semver tags not retagged to `v*` (would collide with `semantic-release`'s versioning) | `instance` | `block` |
+| [0.2](#02-disable-previous-release-automation) | A prior release system (release-please, hand-rolled tagging, goreleaser, changesets, another `semantic-release`) is still wired up | `instance` | `block` |
+| [0.3](#03-confirm-bot-identity-can-push-to-protected-branches) | The Flywheel App is not a bypass actor on the managed-branch rules, or "Require signed commits" is still on | `config` | `block` |
+| [0.4](#04-audit-recent-commit-history) | Recent history isn't conventional and you need a release immediately | `instance` | `info` |
+| [0.5](#05-open-prs-at-cutover) | Non-conventional open PRs will be rewritten at cutover | `instance` | `info` |
+
+Tally it the way `init.sh` does:
+
+- **complete** — every `block` item above is resolved (or genuinely doesn't apply to your repo). `info` items you've read and accepted don't change the verdict: a deliberate choice is never counted as a failure. For any item you're deferring, note the command that finishes it (the §0.1 retag loop, or `scripts/apply-rulesets.sh <repo> --app-id <id>` for §0.3) so you don't reconstruct it later.
+- **incomplete — N item(s) remain** — one or more `block` items are still open. N is the count of unresolved `block` items, exactly as `init.sh` derives the number in its closing verdict. Resolve them before §1; layering Flywheel on top of a `block` item is what surfaces later as a failed or duplicated release.
+
+This is the manual mirror of the outcome summary `init.sh` prints at the end of a scripted run. Once you reach **complete** here and finish §1–§6, [§7 (Verify)](#7-verify) runs `doctor.sh`, which re-reports any remaining findings in these same buckets and severities — so the green/red confirmation you get there speaks the same language as this check.
+
 ## 1. Create a GitHub App
 
-Flywheel uses a GitHub App installation token. Personal Access Tokens are not supported — they don't reliably propagate the cross-workflow trigger semantics Flywheel relies on (in particular, native auto-merge enable and downstream workflow firing on bot-created PRs).
+A GitHub App is how the flywheel workflows act on this repo as a bot: push releases and tags, open and merge promotion PRs, and apply labels. The permissions it needs follow directly from that work (the list below). The App is a **permanent dependency** — used on every workflow run for the life of the adoption, not one-time install scaffolding to delete later. Changing it later means rotating its credential or revoking the App.
+
+**Why an App and not a personal access token?** Flywheel registers the App as an *Integration*-type bypass actor in the branch/tag rulesets so the bot can push releases and tags to protected branches, and only a GitHub App can be that kind of bypass actor — a PAT cannot stand in. A PAT would also tie the automation to one person's account and rate limit, act as that person rather than a bot in the audit trail, and live as a long-lived manually rotated secret instead of a token minted fresh per run. (PATs also don't reliably propagate the cross-workflow trigger semantics Flywheel relies on — in particular, native auto-merge enable and downstream workflow firing on bot-created PRs.) Personal Access Tokens are not supported.
 
 **Fastest path: let `init.sh` do it.** The quick-start command (§Quick start) opens a browser to GitHub's App-creation page pre-populated with the required permissions, captures the credentials on a localhost callback, and writes the App ID as a repo Variable + the private key as a repo Secret — about 30 seconds end to end. The only remaining manual step is clicking "Install" on the resulting App page to scope it to your repo. If that's all you need, skip the rest of this section.
 
@@ -98,18 +122,40 @@ If you'd rather create the App by hand: follow GitHub's [Creating a GitHub App](
 - **Checks: read and write** — posting the `flywheel/conventional-commit` check
 - **Metadata: read**
 
-Install the App on your repo. Then store its credentials in Settings → Secrets and variables → Actions:
+Install the App on your repo. Then store the Flywheel GitHub App's shared credentials — the App's automation identity, not a personal access token or per-user secret — in Settings → Secrets and variables → Actions (at repo scope, or at org scope with `visibility=all`):
 
-- `FLYWHEEL_GH_APP_ID` — the numeric App ID (visible on the App's settings page). Store as a **Variable**, not a Secret — it's not sensitive.
-- `FLYWHEEL_GH_APP_PRIVATE_KEY` — the PEM-format private key downloaded from the App settings. Store as a **Secret**.
+- `FLYWHEEL_GH_APP_ID` — the App's public numeric App ID (visible on the App's settings page). Store as a **Variable**, not a Secret — it's not sensitive.
+- `FLYWHEEL_GH_APP_PRIVATE_KEY` — the App's PEM-format private key downloaded from the App settings. Store as a **Secret**.
 
 Pass these straight into the Flywheel action via the `app-id` and `app-private-key` inputs (see the workflow YAML in §3). The action mints its own short-lived installation token internally and validates that the App's granted permissions match the list above — if anything is missing it fails fast with a friendly error pointing you at the App settings. You do not need a separate `actions/create-github-app-token` step.
+
+### 1.1 Opt Dependabot into the full flow (optional)
+
+By default a Dependabot PR does not get the full Flywheel treatment. The reason is where GitHub keeps its secrets: when a workflow is triggered by `dependabot[bot]`, GitHub sources `secrets.*` from the repository's (or organisation's) **Dependabot** secret store — a separate store from the **Actions** one you populated in §1 — *not* the Actions store. The `FLYWHEEL_GH_APP_PRIVATE_KEY` Secret you registered under Actions is therefore invisible to a Dependabot-triggered run, and `secrets.FLYWHEEL_GH_APP_PRIVATE_KEY` arrives **empty**. Without the key, the action cannot mint its App token, so it cannot rewrite the title, apply a label, or enable auto-merge.
+
+**Without the Dependabot secret** the run still does one thing: it posts the `flywheel/conventional-commit` required check — `success` or `failure`, reflecting the PR title — using the workflow's built-in token. That lets the PR *conclude* rather than hang forever at `Expected` on a check that would otherwise never be posted. But the PR is **not** auto-merged: it is made mergeable and then waits for a human to review and merge it. This is the safe default and needs no configuration.
+
+**To grant Dependabot the full flow** — title validate/rewrite, the `flywheel:auto-merge` / `flywheel:needs-review` label, and native auto-merge, exactly as a first-party PR gets — register the same private key a second time, in the **Dependabot** secret store:
+
+- Go to **Settings → Secrets and variables → Dependabot** (organisation-level if you manage credentials there).
+- Add a Secret named `FLYWHEEL_GH_APP_PRIVATE_KEY` with the same PEM-format private key you stored under Actions in §1.
+
+`FLYWHEEL_GH_APP_ID` is a Variable, not a Secret, and is read the same way regardless of who triggered the run — you do not need to duplicate it. Only the private-key Secret needs to live in the Dependabot store as well.
+
+Once it's there, GitHub resolves `secrets.FLYWHEEL_GH_APP_PRIVATE_KEY` non-empty on Dependabot runs, the action mints its App token, and a `build(deps): …` or `chore(deps): …` bump flows through the conductor identically to any other PR.
+
+**This is a deliberate supply-chain decision, and it is double-gated.** Auto-merging a Dependabot PR means a dependency update can merge without a human looking at it — the standard tradeoff of trusting your update bot. Flywheel will not make that call for you. A Dependabot PR auto-merges only when **both** of these are true:
+
+1. The App private key is registered in the **Dependabot** secret store (the step above), **and**
+2. The bump's Conventional Commit type — typically `build(deps)` or `chore(deps)` — is listed in the target branch's `auto_merge` set in `.flywheel.yml` (e.g. `auto_merge: [build, chore]`).
+
+Miss either gate and the PR waits for a human. Flywheel adds no list of "trusted bots" of its own — registering the secret *is* the trust decision. Because an external fork can never write to your repository's Dependabot secret store, a fork can never present the key, and so a fork can never auto-merge. The Dependabot store is the actor boundary, enforced by GitHub rather than by any Flywheel allowlist.
 
 ## 2. Add `.flywheel.yml`
 
 Place at the root of your repo. Start from one of these.
 
-**Minimal viable** — single stream, single branch, immediate releases:
+**Minimal** — a single release line on one branch that cuts a release on every qualifying push:
 
 ```yaml
 flywheel:
@@ -123,7 +169,7 @@ flywheel:
 
 A single-branch stream releases on every qualifying push and creates no promotion PRs. This is the simplest valid configuration.
 
-**Three-stage promotion** — `develop` → `staging` → `main`:
+**Three-stage** — one release line through staged branches (`develop` → `staging` → `main`) with promotion PRs between them:
 
 ```yaml
 flywheel:
@@ -143,7 +189,7 @@ flywheel:
           auto_merge: []   # all PRs require human approval
 ```
 
-A multi-stream example with a customer variant:
+**Multi-stream** — two or more independent release lines in parallel, each cutting its own prereleases with its own version suffix and auto-merge rules. Reach for this when you need to ship a divergent build alongside your mainline: a per-customer fork, a long-term-support (LTS) line, or a region-specific / white-label build. For instance, a per-customer fork:
 
 ```yaml
 flywheel:
@@ -511,13 +557,21 @@ Flywheel is designed for repos where agent swarms produce dozens or hundreds of 
 - **Don't subscribe heavy workflows to `pull_request: synchronize` if you can avoid it.** Lint and unit tests are fine — they're seconds, not minutes. Reserve full integration / e2e suites for `merge_group:` only. Adopters who put expensive workflows on both triggers pay double.
 - **Use `concurrency: cancel-in-progress: true` on PR-triggered workflows** so rapid edits collapse to one surviving run per PR. The Flywheel templates already do this; mirror it for your own workflows.
 
-The first and third rulesets can be applied in one command. **Pass `--app-id` — it's mandatory**, not optional:
+The first and third rulesets can be applied in one command. **Pass `--app-id` — it's mandatory**, not optional. Both forms below are equivalent and take the same flags (add `--release-required-checks "<check>"` to gate release branches too):
+
+From a Flywheel checkout:
 
 ```bash
 scripts/apply-rulesets.sh <owner/repo> --required-checks "quality" --app-id <your-app-id>
 ```
 
-(Or via `curl -fsSL https://raw.githubusercontent.com/point-source/flywheel/main/scripts/apply-rulesets.sh | bash -s -- <owner/repo>` if you don't have the Flywheel repo checked out.)
+Piped, with no checkout (the script fetches its ruleset templates over the network):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/point-source/flywheel/main/scripts/apply-rulesets.sh | bash -s -- <owner/repo> --required-checks "quality" --app-id <your-app-id>
+```
+
+> **PyYAML is auto-provisioned.** `apply-rulesets.sh` needs PyYAML to read `.flywheel.yml`. When your `python3` can't `import yaml` (e.g. stock macOS, where PyYAML isn't preinstalled), the script provisions it into a throwaway virtualenv for that single run and removes it on exit — nothing is left installed. You don't need to `pip install` anything first (#245).
 
 ## 6. Brief your contributors (human and AI)
 
@@ -628,6 +682,34 @@ Merge the PR. On the resulting push, confirm:
 - A GitHub Release is published.
 - Your `build.yml` fires.
 
+### 7.1 Run doctor from CI (no local checkout)
+
+The `curl … | bash` invocation above assumes someone has a laptop checkout and a local token with admin reach. Some teams don't: their Flywheel credentials live **only** in CI — the `FLYWHEEL_GH_APP_ID` Variable and `FLYWHEEL_GH_APP_PRIVATE_KEY` Secret you registered in [§1](#1-create-a-github-app) — and nobody holds a local admin token or a working tree. For them, Flywheel ships an opt-in workflow that runs doctor from the Actions tab, so they can validate their config from the browser instead of configuring it and hoping it's right.
+
+**It is opt-in — `init.sh` does not install it.** Copy [`scripts/templates/doctor-ci.yml`](../../scripts/templates/doctor-ci.yml) from the Flywheel repo into your own `.github/workflows/` (e.g. as `flywheel-doctor.yml`):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/point-source/flywheel/main/scripts/templates/doctor-ci.yml \
+  -o .github/workflows/flywheel-doctor.yml
+```
+
+Neither `init.sh` nor the template install adds this file — adopters who don't need a CI validation path don't inherit one to maintain.
+
+**Trigger it from the Actions tab.** The workflow is `workflow_dispatch`-only — manual, on demand, not on push / PR / schedule (doctor is a point-in-time diagnostic, not a merge gate; the real gates live in `flywheel-pr.yml` / `flywheel-push.yml`). In the repo's **Actions** tab, select the **Flywheel doctor** workflow → **Run workflow**. No local checkout and no `gh auth login` are required by anyone.
+
+**Why this is the widest coverage in one run.** The job checks out your repo and runs doctor against *that* checkout with no `owner/repo` argument, so doctor resolves the repo from the git remote and runs its on-disk checks (`.gitattributes` / merge drivers, the committed `.flywheel.yml`) **alongside** the GitHub-API checks (managed branches, rulesets, Variables / Secrets, repo settings) in a single pass — the same breadth as a local run plus the API half. Before running doctor, the job mints a short-lived App installation token from the configured credentials; a successful mint is itself the passing credential check — it proves the App is installed and the private key is valid, which is stronger than confirming the Variable merely exists.
+
+**Optional admin PAT for stricter assurance.** App installation tokens categorically cannot list Variables or Secrets, so by default those admin-gated reads (Variables / Secrets / repo settings) report could-not-verify. If you want them to report verified-present or genuinely-missing instead, add an optional Secret named `FLYWHEEL_ADMIN_PAT` (an admin PAT); doctor then uses it for those reads and **raises** coverage. The PAT is never required: without it — and even with no App credentials configured at all — the workflow still runs, performs every check it can, and reports the rest as could-not-verify.
+
+**The trust contract.** Findings appear in the run's **Actions step summary** (readable at a glance) as well as the job log, in the same buckets and severities as [§0.6](#06-completion-check) and §7. doctor stays read-only, and the job's pass/fail mirrors doctor's verdict in that vocabulary:
+
+- A **green** job — possibly carrying could-not-verify notes — means *nothing is provably misconfigured*.
+- A **red** job means the config is *genuinely broken*: a `block`-severity finding fired.
+
+`warn` and could-not-verify findings never turn the job red.
+
+The shipped default fetches doctor from `@main` (the latest diagnostic, matching every other doctor invocation in this doc). If you'd rather doctor also fire on `.flywheel.yml` changes or on a schedule, extend the template's `on:` block yourself — the opt-in default keeps it manual.
+
 ## 8. Upgrading Flywheel
 
 Flywheel ships as a single composite action (`point-source/flywheel`). Your `.github/workflows/flywheel-{pr,push}.yml` callers pin it at `@v<major>` (e.g. `@v2`); that one ref governs every flywheel file that runs — the JS dispatcher, the bundled `scripts/` (back-merge loop, `@`-mention sanitizer, merge drivers), and the semantic-release plugin set wired into `action.yml`. Bug fixes and non-breaking features ride the floating major tag and are picked up on the next workflow run with no action from you.
@@ -682,6 +764,8 @@ Floating major tags don't pin you to a known-good build. If a recent `@v<major>`
 **Got `flywheel:needs-review` but expected `flywheel:auto-merge`.** Compare the PR's commit type (with `!` if breaking) against the target branch's `auto_merge` list. `fix!` only matches if `fix!` is listed explicitly — listing `fix` doesn't imply `fix!`.
 
 **Native auto-merge wasn't enabled even though the PR got `flywheel:auto-merge`.** Either the branch doesn't have native auto-merge enabled (check **Settings → General → Pull Requests → Allow auto-merge**), the App lacks **Pull requests: write**, or you're passing a `secrets.GITHUB_TOKEN` somewhere instead of the App credentials (`app-id` / `app-private-key`). `doctor.sh` flags all three. Note: when an eligible PR is already mergeable with no required check pending — e.g. your repo has no required status checks — GitHub's `enableAutoMerge` mutation has nothing to schedule and declines it; Flywheel then falls through to a direct REST merge, so the PR still merges and the label stays applied. If instead a required status check or review is unsatisfied (`mergeable_state` is `blocked`), Flywheel does **not** direct-merge — it leaves the label applied and logs a warning, so the fallback can never bypass your gates.
+
+**Dependabot PR got the `flywheel/conventional-commit` check but was never auto-merged or labelled.** Its run couldn't reach the App private key, because GitHub reads `secrets.*` from the **Dependabot** secret store on Dependabot-triggered runs, not the Actions store. Register `FLYWHEEL_GH_APP_PRIVATE_KEY` in the Dependabot store as well — see [§1.1](#11-opt-dependabot-into-the-full-flow-optional). Remember it's double-gated: even with the secret, the bump only auto-merges if its type (e.g. `build(deps)` / `chore(deps)`) is in the target branch's `auto_merge` set.
 
 **Release job failed with `EGITNOPERMISSION` / "denied to github-actions[bot]".** The branch ruleset doesn't list the App as a bypass actor — re-run `scripts/apply-rulesets.sh <owner/repo> --app-id <id>`. (Other historical causes — `actions/checkout@v6` not setting `persist-credentials: false`, extraheader shadowing — now live in the composite action's own checkout step and can't drift from your repo.)
 
