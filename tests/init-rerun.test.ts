@@ -107,6 +107,7 @@ interface Sandbox {
   binDir: string;
   adopter: string;
   ghLog: string;
+  doctorStub: string;
 }
 
 function setup(): Sandbox {
@@ -136,6 +137,19 @@ function setup(): Sandbox {
   writeFileSync(join(binDir, "gh"), GH_STUB);
   chmodSync(join(binDir, "gh"), 0o755);
 
+  // Green doctor stub for the end-of-run auto-validation (§spec:setup-auto-validation).
+  // These tests run init to completion, so without pinning a green doctor the real
+  // doctor.sh is curl-fetched and run against the hermetic gh stub (which answers no
+  // rulesets), reporting spurious block-severity findings that — under the exit
+  // contract (§spec:setup-exit-contract) — would flip a clean run's exit non-zero.
+  // Driven through the FLYWHEEL_DOCTOR_OVERRIDE seam (gated on FLYWHEEL_TEST_HOOKS).
+  const doctorStub = join(binDir, "doctor-stub.sh");
+  writeFileSync(
+    doctorStub,
+    "#!/usr/bin/env bash\nset -euo pipefail\nprintf 'DOCTOR_RESULT blocks=0 warns=0\\n'\nexit 0\n",
+  );
+  chmodSync(doctorStub, 0o755);
+
   const adopter = mkdtempSync(join(tmpdir(), "fw-rerun-adopter-"));
   execFileSync("git", ["init", "-q"], { cwd: adopter });
   execFileSync(
@@ -147,7 +161,7 @@ function setup(): Sandbox {
   const ghLog = join(adopter, "gh.log");
   writeFileSync(ghLog, "");
 
-  return { scriptDir, binDir, adopter, ghLog };
+  return { scriptDir, binDir, adopter, ghLog, doctorStub };
 }
 
 function teardown(s: Sandbox): void {
@@ -174,6 +188,9 @@ function runInit(
       ...process.env,
       PATH: `${s.binDir}:${process.env.PATH}`,
       GH_STUB_LOG: s.ghLog,
+      // Pin the end-of-run validation to a green doctor stub (see setup()).
+      FLYWHEEL_TEST_HOOKS: "1",
+      FLYWHEEL_DOCTOR_OVERRIDE: s.doctorStub,
       ...env,
     },
   } as Parameters<typeof spawnSync>[2];
