@@ -3147,3 +3147,153 @@ severity vocabulary of §req:preflight-detection.
   documented caveat. It sits within the setup-onboarding cluster alongside
   §req:init-brownfield and §req:init-preset-wording (the preset/template choice
   it now reads the branch set from).
+
+## Promotion Closes-ref from commit footers §req:promotion-closes-footers
+
+GitHub natively honors **closing keywords** — `Closes #N`, `Fixes #N`,
+`Resolves #N` and their variants — in two places: a pull request's description,
+and a **commit message**. When a commit carrying `Closes #N` in its footer lands
+on the default branch, GitHub closes issue #N and draws the linked-PR indicator
+on it. Putting the closing keyword in a commit footer (rather than the PR body) is
+a common, legitimate convention, and many contributors work that way by habit.
+
+flywheel does not honor that convention. When it builds the `develop → main`
+promotion PR, it gathers the issues that promotion should close so the merge
+auto-closes them and the linked-PR indicator appears — but it gathers them by
+reading **PR descriptions only**. For each commit waiting to be promoted, flywheel
+recovers the trailing `(#N)` from the commit *title*, looks up that sub-PR, and
+runs the closing-keyword scan over that **sub-PR's body**. The commit's own
+message body — where a footer-style `Closes #N` lives — is never scanned. So a
+contributor who put `Closes #N` in a commit footer instead of the PR description
+gets nothing: no auto-close on promotion, no linked-PR indicator on the issue.
+
+The convention is also actively erased by how flywheel moves work to `develop`.
+flywheel squash-merges each sub-PR into `develop`, and the squash collapses the
+original per-commit footers into a single synthesized commit. So a footer-only
+`Closes #N` is dropped at *both* stages: GitHub's own commit-keyword handling
+never fires (the footer reached `develop` via a squash, not as a default-branch
+commit), and flywheel's promotion aggregation never harvests it (it reads PR
+bodies, not commit messages). The issue silently stays open and shows no
+linked-PR icon, with nothing to point the contributor at the cause.
+
+The users are the **contributor** who follows the commit-footer convention and
+expects their issue to close when the work ships, and the **flywheel maintainer /
+adopter** who relies on the promotion PR to carry the full, accurate set of issues
+a release closes — so the release record and the issue tracker agree without
+manual reconciliation. This is a **robustness gap, not a regression**: flywheel
+faithfully propagates whatever closing keywords already exist in PR bodies; it
+simply never looked at the other place GitHub looks. The gap is silent (nothing
+fails — an issue just quietly stays open), low-frequency per contributor but
+cumulative across a busy repo with many concurrent sub-PRs, and it erodes trust in
+the promotion as the single thing that reconciles shipped work to closed issues.
+
+The need is that a closing keyword in a commit footer be honored by the promotion
+exactly as one in the PR body is. Concretely: when flywheel aggregates the issues a
+promotion PR should close, it shall also scan the **commit messages (titles and
+bodies) of each sub-PR** it already looks up — not just that sub-PR's description —
+and union those closing references with the PR-body ones, deduplicated. The scope
+of *which* commits are scanned matches flywheel's existing model: the commits of
+the sub-PRs reachable from the trailing `(#N)` on each pending commit title. A
+commit that reached `develop` with no associated sub-PR number is out of scope —
+flywheel's model is that work lands via squash-merged sub-PRs, and chasing
+footers on orphan commits would pull in commits no sub-PR gates. The same closing
+keyword recognition flywheel already uses applies unchanged, so the long-standing
+filters are preserved: a reference is dropped if it is the promotion's own
+self-reference, and only same-repository issues are aggregated. This applies at
+**every promotion edge** flywheel computes (e.g. `develop → staging → main` in a
+multi-stage topology), not only the final hop, so behavior is uniform wherever a
+promotion reconciles shipped work to issues.
+
+One precision the convention forces: a trailing `(#N)` on a commit title is a
+**PR number**, not a closing reference, and shall never be read as one. Only an
+actual closing keyword (`Closes`/`Fixes`/`Resolves`/variants) introducing `#N`
+counts. flywheel already distinguishes these — the title's `(#N)` is used solely
+to find the sub-PR — and that distinction shall hold once commit bodies are in
+scope.
+
+This sits in the promotion / release-reconciliation area rather than the
+setup-onboarding cluster. It builds on flywheel's existing closing-reference
+aggregation and changes only *what text* that aggregation reads, not the merge,
+labelling, or back-merge behavior around it.
+
+## Promotion Closes-ref from commit footers success criteria §req:promotion-closes-footers-criteria
+
+- **A footer-only `Closes #N` closes the issue on promotion.** A contributor
+  whose sub-PR carries `Closes #N` only in a commit footer (and not in the PR
+  description) sees issue #N auto-close when the promotion PR merges, and the
+  issue shows the linked-PR indicator — the same outcome as if the keyword had
+  been in the PR body. Verifiable end-to-end: a sub-PR with a footer-only closing
+  keyword, promoted, closes its issue.
+- **PR-body behavior is unchanged.** A closing keyword in a sub-PR's description
+  still produces the auto-close and linked-PR indicator exactly as before; this
+  change adds a source, it does not replace one.
+- **Body and footer for the same issue collapse to one reference.** When the same
+  `#N` appears both in a sub-PR's description and in one of its commit footers, the
+  promotion PR lists issue #N once — no duplicate closing line.
+- **A trailing `(#N)` PR number is never mistaken for a closing reference.** A
+  commit titled `... (#412)` with no closing keyword anywhere does not cause the
+  promotion to try to close issue #412; only an explicit closing keyword does.
+- **Self-reference and cross-repo references stay filtered.** The promotion never
+  lists itself as an issue it closes, and a closing keyword pointing at another
+  repository's issue is not aggregated — both filters behave exactly as they do for
+  PR-body references today.
+- **Uniform across promotion edges.** On a multi-stage topology, footer-sourced
+  closing references are aggregated at every promotion edge flywheel builds, not
+  only `develop → main`.
+- **Cheap, deterministic coverage.** Fast local unit tests cover the new behavior —
+  a footer-only `Closes #N`, a mixed PR-body-plus-footer case that must
+  deduplicate, and a trailing `(#N)` that must **not** be read as a closing
+  reference — exercising process-critical promotion glue without touching the
+  rate-limited e2e sandbox (§req:sandbox-ci-budget).
+
+## Promotion Closes-ref from commit footers user stories §req:promotion-closes-footers-stories
+
+- As a contributor who puts `Closes #N` in my commit footer rather than the PR
+  description, I want the issue to close automatically when my work is promoted to
+  the release branch, so I do not have to remember to also restate the keyword in
+  the PR body or close the issue by hand afterward.
+- As a flywheel maintainer reviewing a promotion PR, I want it to list every issue
+  the bundled work closes — whether the keyword lived in a PR body or a commit
+  footer — so the merged release and the issue tracker agree without my having to
+  reconcile them manually.
+- As a contributor whose commit title ends in `(#412)`, I want flywheel to treat
+  that as the PR reference it is and not accidentally try to close issue #412, so a
+  routine squash-merge title never closes an unrelated issue.
+- As an adopter running a multi-stage promotion (`develop → staging → main`), I
+  want footer-based closing references honored at each promotion the same way, so
+  the behavior does not depend on which edge a release happens to flow through.
+
+## Promotion Closes-ref from commit footers quality attributes and constraints §req:promotion-closes-footers-constraints
+
+- **Process-critical glue — must ship with tests.** Promotion aggregation decides
+  what a release closes; a defect here silently leaves issues open or closes the
+  wrong one. The change shall land with unit coverage of the footer, dedup, and
+  trailing-`(#N)` cases (§req:promotion-closes-footers-criteria), per the project's
+  norm that promotion glue is tested.
+- **Reuse the existing closing-keyword recognition.** The same keyword
+  recognition flywheel already applies to PR bodies is the one source of truth for
+  what counts as a closing reference; commit messages are simply fed through it.
+  No second, divergent notion of "closing keyword" is introduced.
+- **Additive and same-repo-scoped.** The change only widens the text scanned
+  (PR body → PR body ∪ that sub-PR's commit titles and bodies); it preserves the
+  self-reference and same-repository filters and does not alter merge, labelling,
+  or back-merge behavior.
+- **Bounded by the sub-PR model.** Only commits of sub-PRs reachable from a
+  trailing `(#N)` are scanned; commits with no associated sub-PR are deliberately
+  out of scope, matching flywheel's squash-merged-sub-PR model and avoiding
+  unbounded commit scanning.
+- **Stays within existing GitHub access.** Reading a sub-PR's commit messages uses
+  the same authenticated GitHub access flywheel already uses to read PR bodies; it
+  adds per-sub-PR reads but no new permissions.
+
+## Promotion Closes-ref from commit footers priorities §req:promotion-closes-footers-priorities
+
+Must-have: footer-only `Closes #N` closes the issue on promotion with the
+linked-PR indicator; PR-body behavior unchanged; body/footer dedup; trailing
+`(#N)` never read as a closing reference; self-reference and cross-repo filters
+preserved; unit coverage of those cases. This is a contained robustness fix on
+existing promotion glue, not new surface — it ranks below the requirements that
+protect releases or the v2 major and below the setup-onboarding safety cluster,
+and is independent of all of them. Nice-to-have / explicitly deferred: honoring
+closing footers on commits that reached `develop` without a sub-PR number (direct
+pushes or PR-number-less commits) — out of scope by the sub-PR-model bound above.
