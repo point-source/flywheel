@@ -706,18 +706,27 @@ describe("init.sh — brownfield history & open-PR awareness", () => {
  * the init args (e.g. drop `--preset` to exercise the no-config default). */
 function runInitCfg(
   apiCases: Array<[string, number, string]>,
-  opts: { env?: Record<string, string>; args?: string[]; flywheelYml?: string } = {},
+  opts: {
+    env?: Record<string, string>;
+    args?: string[];
+    flywheelYml?: string;
+    binStubs?: Record<string, string>;
+  } = {},
 ): RunResult & { ghCalls: string } {
   const work = mkdtempSync(join(tmpdir(), "flywheel-cfg-"));
   const binDir = join(work, "bin");
   mkdirSync(binDir);
   const ghLog = join(work, "gh-calls.log");
   const gh = join(binDir, "gh");
+  // A successful `gh api` prints its JSON to stdout; a failing one prints its
+  // diagnostic (e.g. `gh: Not Found (HTTP 404)`) to stderr — mirror that here so the
+  // branch-existence probe, which now reads stderr to tell a real 404 from a transient
+  // failure, sees output on the same stream real gh would use.
   const apiDispatch = apiCases
     .map(
       ([needle, code, out]) =>
         `  if [[ "$args" == *${JSON.stringify(needle)}* ]]; then ` +
-        `printf '%s' ${JSON.stringify(out)}; exit ${code}; fi`,
+        `printf '%s' ${JSON.stringify(out)}${code === 0 ? "" : " >&2"}; exit ${code}; fi`,
     )
     .join("\n");
   writeFileSync(
@@ -736,6 +745,14 @@ function runInitCfg(
       `echo "stub gh: unhandled: $*" >&2; exit 1\n`,
   );
   chmodSync(gh, 0o755);
+  // Extra executables on PATH ahead of the real ones — used to simulate a missing
+  // tool (e.g. a python3 that fails the linter invocation to exercise the
+  // could-not-verify path when PyYAML is absent).
+  for (const [name, body] of Object.entries(opts.binStubs ?? {})) {
+    const p = join(binDir, name);
+    writeFileSync(p, body);
+    chmodSync(p, 0o755);
+  }
   const doctorStub = writeDoctorStub(binDir, { blocks: 0, warns: 0 });
   execFileSync("git", ["init", "-q"], { cwd: work });
   if (opts.flywheelYml !== undefined) {
@@ -890,8 +907,10 @@ describe("init.sh — config-derived managed-branch enumeration", () => {
       const combined = stripAnsi(r.stdout + r.stderr);
       expect(r.status, `combined:\n${combined}`).toBe(2);
       expect(combined).toMatch(/--preset must be minimal \| three-stage \| multi-stream/);
-      // Bailed before the pre-flight pass — $PRESET never reached a path/fetch.
-      expect(r.ghCalls).not.toMatch(/branches\//);
+      // Bailed BEFORE the pre-flight pass even started — so $PRESET never reached the
+      // template path / fetch where a traversal could occur. The pre-flight pass always
+      // prints a "pre-flight:" line; its absence proves the guard short-circuited first.
+      expect(combined).not.toMatch(/pre-flight/i);
     } finally {
       rmSync(r.work, { recursive: true, force: true });
     }
@@ -933,7 +952,7 @@ describe("init.sh — missing managed-branch alert", () => {
   it("configured branch absent on the remote ⇒ exactly one config/warn finding naming it and both fixes; never hard-stops; folds into the summary", () => {
     const r = runInitCfg(
       [
-        ["repos/acme/widget/branches/trunk", 1, ""], // trunk does NOT exist
+        ["repos/acme/widget/branches/trunk", 1, "gh: Not Found (HTTP 404)"], // trunk: genuine 404
         ["repos/acme/widget/rulesets", 0, "[]"],
       ],
       { flywheelYml: oneBranchConfig("trunk"), args: NO_PRESET_ARGS },
@@ -988,7 +1007,7 @@ describe("init.sh — missing managed-branch alert", () => {
   it("no-config default to 'main' that is missing ⇒ 'defaulted to main' notice AND a config/warn finding naming main (not silently accepted)", () => {
     const r = runInitCfg(
       [
-        ["repos/acme/widget/branches/main", 1, ""], // main does NOT exist
+        ["repos/acme/widget/branches/main", 1, "gh: Not Found (HTTP 404)"], // main: genuine 404
         ["repos/acme/widget/rulesets", 0, "[]"],
       ],
       { args: NO_PRESET_ARGS },
@@ -1013,7 +1032,7 @@ describe("init.sh — missing managed-branch alert", () => {
   it("non-interactive run detect-and-reports the same finding with NO mutation (no branch creation, no protection edit)", () => {
     const r = runInitCfg(
       [
-        ["repos/acme/widget/branches/trunk", 1, ""], // trunk does NOT exist
+        ["repos/acme/widget/branches/trunk", 1, "gh: Not Found (HTTP 404)"], // trunk: genuine 404
         ["repos/acme/widget/rulesets", 0, "[]"],
       ],
       { flywheelYml: oneBranchConfig("trunk"), args: NO_PRESET_ARGS },
@@ -1028,6 +1047,73 @@ describe("init.sh — missing managed-branch alert", () => {
       expect(r.ghCalls).not.toMatch(/git\/refs/);
       expect(r.ghCalls).not.toMatch(/-X\s*(POST|PUT|PATCH|DELETE)/);
       expect(r.ghCalls).not.toMatch(/--method\s*(POST|PUT|PATCH|DELETE)/);
+    } finally {
+      rmSync(r.work, { recursive: true, force: true });
+    }
+  });
+
+  it("a NON-404 probe failure (rate limit / network) ⇒ could-not-verify local-env warn, NOT a false 'missing' finding; run completes", () => {
+    const r = runInitCfg(
+      [
+        // The branch may well exist, but the read fails transiently (HTTP 403, not a
+        // 404) — existence is unobservable, so it must NOT be asserted absent.
+        [
+          "repos/acme/widget/branches/trunk",
+          1,
+          "gh: error (HTTP 403): API rate limit exceeded",
+        ],
+        ["repos/acme/widget/rulesets", 0, "[]"],
+      ],
+      { flywheelYml: oneBranchConfig("trunk"), args: NO_PRESET_ARGS },
+    );
+    try {
+      const combined = stripAnsi(r.stdout + r.stderr);
+      // warn, not block — the run proceeds to completion.
+      expect(r.status, `combined:\n${combined}`).toBe(0);
+      // Reported as a could-not-verify local-env warn that names the branch…
+      expect(combined).toContain("[local-env]");
+      expect(combined).toMatch(
+        /could not verify whether configured managed branch.*trunk/i,
+      );
+      // …and is NEVER asserted absent (no config/warn "do not exist" finding).
+      expect(combined).not.toMatch(/do not exist on/);
+    } finally {
+      rmSync(r.work, { recursive: true, force: true });
+    }
+  });
+
+  it("config present but python3+PyYAML unavailable to read it ⇒ could-not-verify local-env warn; no branch probed; run completes (no silent zero-coverage)", () => {
+    // The real interpreter the shim delegates non-linter calls to.
+    const realPython3 = execFileSync(
+      "python3",
+      ["-c", "import sys;print(sys.executable)"],
+      { encoding: "utf8" },
+    ).trim();
+    const r = runInitCfg([["repos/acme/widget/rulesets", 0, "[]"]], {
+      flywheelYml: oneBranchConfig("trunk"),
+      args: NO_PRESET_ARGS,
+      // Fail ONLY the flywheel linter invocation (PyYAML absent); delegate every other
+      // python3 call to the real interpreter so the rest of init is unaffected.
+      binStubs: {
+        python3:
+          `#!/usr/bin/env bash\n` +
+          `for a in "$@"; do case "$a" in *lint-flywheel-config.py) ` +
+          `echo "ModuleNotFoundError: No module named 'yaml'" >&2; exit 1;; esac; done\n` +
+          `exec ${JSON.stringify(realPython3)} "$@"\n`,
+      },
+    });
+    try {
+      const combined = stripAnsi(r.stdout + r.stderr);
+      // warn, not block — coverage was skipped but setup completes.
+      expect(r.status, `combined:\n${combined}`).toBe(0);
+      // A could-not-verify local-env warn that names the python3+PyYAML dependency…
+      expect(combined).toContain("[local-env]");
+      expect(combined).toMatch(/could not determine your managed branches/i);
+      expect(combined).toMatch(/python3.*PyYAML/i);
+      // …with no derivable branch set, the existence probe never ran (not silent: the
+      // warn fired), and nothing was falsely asserted missing.
+      expect(r.ghCalls).not.toMatch(/branches\/trunk/);
+      expect(combined).not.toMatch(/do not exist on/);
     } finally {
       rmSync(r.work, { recursive: true, force: true });
     }
