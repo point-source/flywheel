@@ -552,7 +552,8 @@ preflight_detect_version_tag_shape() {
 }
 
 # ---------------------------------------------------------------------------
-# Brownfield branch-protection helpers (§spec:brownfield-detection).
+# Brownfield branch-protection helpers (§spec:brownfield-detection,
+# §spec:brownfield-managed-branches).
 #
 # These two helpers are SHARED reuse boundaries: the branch-protection-bypass
 # detector below uses them, and the sibling signed-commit/tag workstream reuses
@@ -560,33 +561,113 @@ preflight_detect_version_tag_shape() {
 # re-probing gh. Keep them standalone, read-only, and error-swallowing.
 # ---------------------------------------------------------------------------
 
-# preflight_brownfield_managed_branches — echo (newline-separated) the candidate
-# managed branches that EXIST on the remote. The candidate set is flywheel's
-# standard topology (develop main staging) because at pre-flight the preset /
-# .flywheel.yml is not yet known — we probe the superset and let the caller act
-# only on what exists. KNOWN LIMITATION (point-source/flywheel#263): a renamed /
-# multi-stream topology whose managed branch is none of develop/main/staging is not
-# probed by the branch-scoped detectors, so those checks silently no-op there (a
-# false negative caught later by doctor.sh or the first release). Existence is
-# tested with the doctor.sh idiom
-# (`gh api repos/$REPO/branches/$b`). REPO may be empty (gh unresolved); in that
-# case we can't probe the remote, so echo nothing. Read-only; errors swallowed.
-# Memoized once per run: both the bypass and signed-commit detectors call this,
-# and each probe is 3 gh API calls (develop/main/staging) — without the guard
-# that is 6 calls per run against the adopter's rate limit. preflight_run resets
-# the flag so a fresh run re-probes.
+# _preflight_linter_branches <yml-path> — echo (newline-separated) the managed
+# branch names a .flywheel.yml declares, by running lint-flywheel-config.py and
+# reading its `BRANCHES <space-separated>` line. This is doctor.sh's idiom
+# (doctor.sh derives its managed branches exactly this way), reused here so init
+# and doctor agree on what "the managed branches" are rather than inventing a
+# second parse. The linter is located next to this script, else fetched from the
+# same ref as the templates (a curl|bash run pinned to a tag fetches that tag's
+# linter, not main). Any failure — linter missing, python/PyYAML absent, malformed
+# config — echoes nothing, so the caller degrades to probing no branches rather
+# than guessing. Read-only; errors swallowed.
+_preflight_linter_branches() {
+  local yml="$1" linter="" linter_tmp=0 out line rest b
+  if [[ -n "$SCRIPT_DIR" && -f "$SCRIPT_DIR/lint-flywheel-config.py" ]]; then
+    linter="$SCRIPT_DIR/lint-flywheel-config.py"
+  else
+    linter="$(mktemp)"; linter_tmp=1
+    if ! curl -fsSL "${TEMPLATES_BASE%/templates}/lint-flywheel-config.py" -o "$linter" 2>/dev/null; then
+      rm -f "$linter"; return 0
+    fi
+  fi
+  if out="$(python3 "$linter" "$yml" 2>/dev/null)"; then
+    while IFS= read -r line; do
+      case "$line" in
+        "BRANCHES "*)
+          rest="${line#BRANCHES }"
+          # Word-split the space-separated names into one branch per line.
+          # shellcheck disable=SC2086
+          for b in $rest; do printf '%s\n' "$b"; done
+          ;;
+      esac
+    done <<< "$out"
+  fi
+  [[ $linter_tmp -eq 1 ]] && rm -f "$linter"
+  return 0
+}
+
+# _preflight_config_declared_branches — echo (newline-separated) the managed
+# branches the IN-FORCE .flywheel.yml topology declares, in priority order:
+#   (a) an existing .flywheel.yml in the repo → the branches it declares;
+#   (b) the picked template (--preset minimal|three-stage|multi-stream) → its
+#       declared branches. The template is read for branch NAMES only, so no
+#       __FLYWHEEL_VERSION__ substitution is needed; locate it next to this script
+#       (LOCAL_TEMPLATES) else fetch it from TEMPLATES_BASE.
+# The no-config / no-preset default (case c) is handled by the caller, which is the
+# single place that records the "defaulted to main" state for the adopter notice.
+# Echoes nothing when neither source is present or parsing fails. Read-only.
+_preflight_config_declared_branches() {
+  local yml="" tmpl="" tmpl_tmp=0
+  if [[ -f .flywheel.yml ]]; then
+    yml=".flywheel.yml"
+  elif [[ -n "${PRESET:-}" ]]; then
+    if [[ -n "$LOCAL_TEMPLATES" && -f "$LOCAL_TEMPLATES/flywheel.$PRESET.yml" ]]; then
+      yml="$LOCAL_TEMPLATES/flywheel.$PRESET.yml"
+    else
+      tmpl="$(mktemp)"; tmpl_tmp=1
+      if curl -fsSL "$TEMPLATES_BASE/flywheel.$PRESET.yml" -o "$tmpl" 2>/dev/null; then
+        yml="$tmpl"
+      fi
+    fi
+  fi
+  [[ -n "$yml" ]] && _preflight_linter_branches "$yml"
+  [[ $tmpl_tmp -eq 1 ]] && rm -f "$tmpl"
+  return 0
+}
+
+# preflight_brownfield_managed_branches — echo (newline-separated) the configured
+# managed branches that EXIST on the remote. The candidate set is derived from the
+# adopter's CHOSEN configuration (§spec:brownfield-managed-branches) — an existing
+# .flywheel.yml, the picked template, or, when neither is present, the `main`
+# default that init's minimal scaffold writes — NOT a hardcoded develop/main/staging
+# superset. Reading the branch set from the topology actually in force is what gives
+# renamed / multi-stream / custom-topology adopters branch-scoped coverage on their
+# real branches; standard develop/main/staging adopters see exactly the coverage
+# they did before. Each configured branch's existence is tested with the doctor.sh
+# idiom (`gh api repos/$REPO/branches/$b`); a configured branch the repo lacks is
+# simply not probed here (the missing-branch alert is a separate detector). REPO may
+# be empty (gh unresolved); in that case we can't probe the remote, so we resolve
+# nothing and echo nothing — preserving today's bounded gh usage. Read-only; errors
+# swallowed. Memoized once per run: both the bypass and signed-commit detectors call
+# this, so without the guard each configured branch would be probed twice against the
+# adopter's rate limit. preflight_run resets the flags so a fresh run re-resolves the
+# (possibly now-written) config.
 PREFLIGHT_MANAGED_BRANCHES=""
 PREFLIGHT_MANAGED_BRANCHES_READ=0
+# Set to 1 when config resolution fell back to the `main` default because the repo
+# has neither a .flywheel.yml nor a picked preset — preflight_run reads this to emit
+# the adopter-visible "defaulted to main" notice once per run.
+PREFLIGHT_BRANCHES_DEFAULTED=0
 preflight_brownfield_managed_branches() {
   if [[ $PREFLIGHT_MANAGED_BRANCHES_READ -eq 0 ]]; then
     PREFLIGHT_MANAGED_BRANCHES_READ=1
     if [[ -n "${REPO:-}" ]]; then
-      local b found=""
-      for b in develop main staging; do
+      local declared="" b found=""
+      if [[ -f .flywheel.yml || -n "${PRESET:-}" ]]; then
+        declared="$(_preflight_config_declared_branches)"
+      else
+        # (c) No config and no picked preset: default to managing `main`, matching
+        # the minimal config init scaffolds below. Flag it for the adopter notice.
+        declared="main"
+        PREFLIGHT_BRANCHES_DEFAULTED=1
+      fi
+      while IFS= read -r b; do
+        [[ -n "$b" ]] || continue
         if gh api "repos/$REPO/branches/$b" >/dev/null 2>&1; then
           found+="${found:+$'\n'}$b"
         fi
-      done
+      done <<< "$declared"
       PREFLIGHT_MANAGED_BRANCHES="$found"
     fi
   fi
@@ -1112,6 +1193,7 @@ preflight_run() {
   # the managed-branch list and ruleset details across the detectors that consult
   # them (rather than each detector re-probing the same gh endpoints).
   PREFLIGHT_MANAGED_BRANCHES_READ=0
+  PREFLIGHT_BRANCHES_DEFAULTED=0
   PREFLIGHT_RULESETS_READ=0
   PREFLIGHT_DEFAULT_BRANCH_READ=0
   PREFLIGHT_DEFAULT_BRANCH=""
@@ -1120,6 +1202,15 @@ preflight_run() {
   # rather than each re-reading it over the network (a memo set inside a $()
   # subshell would not persist). One cheap repo-metadata read per run.
   preflight_brownfield_default_branch >/dev/null 2>&1 || true
+  # Resolve the config-derived managed-branch set ONCE here, in this (parent)
+  # shell, so both branch-scoped detectors share the memoized result and so the
+  # no-config "defaulted to main" notice is emitted from this VISIBLE pass — the
+  # detectors call the getter inside $(...) where its stdout is captured and never
+  # shown to the adopter (§spec:brownfield-managed-branches).
+  preflight_brownfield_managed_branches >/dev/null 2>&1 || true
+  if [[ "$PREFLIGHT_BRANCHES_DEFAULTED" -eq 1 ]]; then
+    echo "  No .flywheel.yml yet — branch-protection / signing checks default to managing 'main'; init will scaffold a minimal config defaulting to 'main'."
+  fi
   # >>> detector seam — add new detectors here >>>
   preflight_detect_gh_capability       # §spec:preflight-gh-capability
   preflight_detect_release_conflict    # §spec:preflight-release-conflict

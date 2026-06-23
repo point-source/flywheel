@@ -5,6 +5,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -720,6 +721,222 @@ describe("init.sh — brownfield history & open-PR awareness", () => {
       expect(out).toContain("[local-env]");
       expect(out).toMatch(/could not verify open PRs/i);
       expect(existsSync(join(r.work, ".flywheel.yml"))).toBe(true);
+    } finally {
+      rmSync(r.work, { recursive: true, force: true });
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// preflight_brownfield_managed_branches — config-derived enumeration
+// (§spec:brownfield-managed-branches).
+//
+// The two branch-scoped detectors above share ONE managed-branch enumeration.
+// These cases prove that enumeration takes its candidate set from the adopter's
+// CHOSEN configuration — an existing .flywheel.yml, the picked --preset template,
+// or the `main` default when neither exists — and never from a hardcoded
+// develop/main/staging list. The gh stub logs every invocation to a file so a
+// case can assert which branches were (and were NOT) probed and that each is
+// probed once per run.
+// ---------------------------------------------------------------------------
+
+/** Like runInitBP, but: (1) logs every `gh` invocation's args to a file exposed
+ * as `ghCalls`; (2) optionally writes a `.flywheel.yml` fixture into the work dir
+ * BEFORE invoking init (the existing-config path); (3) lets the caller override
+ * the init args (e.g. drop `--preset` to exercise the no-config default). */
+function runInitCfg(
+  apiCases: Array<[string, number, string]>,
+  opts: { env?: Record<string, string>; args?: string[]; flywheelYml?: string } = {},
+): RunResult & { ghCalls: string } {
+  const work = mkdtempSync(join(tmpdir(), "flywheel-cfg-"));
+  const binDir = join(work, "bin");
+  mkdirSync(binDir);
+  const ghLog = join(work, "gh-calls.log");
+  const gh = join(binDir, "gh");
+  const apiDispatch = apiCases
+    .map(
+      ([needle, code, out]) =>
+        `  if [[ "$args" == *${JSON.stringify(needle)}* ]]; then ` +
+        `printf '%s' ${JSON.stringify(out)}; exit ${code}; fi`,
+    )
+    .join("\n");
+  writeFileSync(
+    gh,
+    `#!/usr/bin/env bash\n` +
+      `printf '%s\\n' "$*" >> ${JSON.stringify(ghLog)}\n` +
+      `if [[ "$1" == "auth" && "$2" == "status" ]]; then echo "  - Token scopes: 'repo', 'read:org'"; exit 0; fi\n` +
+      `if [[ "$1" == "repo" && "$2" == "view" ]]; then echo "acme/widget"; exit 0; fi\n` +
+      `if [[ "$1" == "variable" || "$1" == "secret" ]]; then echo ""; exit 0; fi\n` +
+      `if [[ "$1" == "api" ]]; then\n` +
+      `  shift\n` +
+      `  args="$*"\n` +
+      apiDispatch +
+      `\n  echo "[]"; exit 0\n` +
+      `fi\n` +
+      `echo "stub gh: unhandled: $*" >&2; exit 1\n`,
+  );
+  chmodSync(gh, 0o755);
+  const doctorStub = writeDoctorStub(binDir, { blocks: 0, warns: 0 });
+  execFileSync("git", ["init", "-q"], { cwd: work });
+  if (opts.flywheelYml !== undefined) {
+    writeFileSync(join(work, ".flywheel.yml"), opts.flywheelYml);
+  }
+  const r = spawnSync("bash", [initSh, ...(opts.args ?? SCAFFOLD_ARGS)], {
+    cwd: work,
+    encoding: "utf8",
+    input: "",
+    timeout: 30000,
+    env: {
+      ...process.env,
+      PATH: `${binDir}:${process.env.PATH}`,
+      FLYWHEEL_TEST_HOOKS: "1",
+      FLYWHEEL_DOCTOR_OVERRIDE: doctorStub,
+      ...(opts.env ?? {}),
+    },
+  });
+  const ghCalls = existsSync(ghLog) ? readFileSync(ghLog, "utf8") : "";
+  return { status: r.status, stdout: r.stdout ?? "", stderr: r.stderr ?? "", work, ghCalls };
+}
+
+// A single managed branch, declared via a valid one-stream config.
+const oneBranchConfig = (branch: string) =>
+  `flywheel:\n  streams:\n    - name: main-line\n      branches:\n        - name: ${branch}\n          release: production\n          auto_merge: [fix, chore, docs]\n`;
+
+// A branch ruleset (PR-required) scoped to refs/heads/<branch>; `bypass` JSON is
+// spliced into bypass_actors so a case can include / omit the Integration App.
+const prRuleset = (id: number, branch: string, bypass: string) =>
+  JSON.stringify({
+    id,
+    target: "branch",
+    conditions: { ref_name: { include: [`refs/heads/${branch}`], exclude: [] } },
+    rules: [{ type: "pull_request" }],
+    bypass_actors: JSON.parse(bypass),
+  });
+
+// Init args without a preset, so the no-config default path engages.
+const NO_PRESET_ARGS = ["--version", "v0-preflight-test", "--skip-secrets", "--skip-rulesets"];
+
+describe("init.sh — config-derived managed-branch enumeration", () => {
+  it("trunk-only config + ruleset omitting the App bypass ⇒ finding on 'trunk'; never probes develop/main/staging", () => {
+    const r = runInitCfg(
+      [
+        ["repos/acme/widget/branches/trunk", 0, ""],
+        ["repos/acme/widget/rulesets/1", 0, prRuleset(1, "trunk", "[]")],
+        ["repos/acme/widget/rulesets", 0, JSON.stringify([{ id: 1, target: "branch" }])],
+      ],
+      { flywheelYml: oneBranchConfig("trunk") },
+    );
+    try {
+      const combined = stripAnsi(r.stdout + r.stderr);
+      expect(r.status, `combined:\n${combined}`).not.toBe(0);
+      expect(combined).toMatch(/pre-flight (failed|halted)/i);
+      expect(combined).toContain("[instance]");
+      expect(combined).toContain("trunk");
+      expect(combined).toMatch(/bypass actor/i);
+      // Probed the configured branch — and NOT the old hardcoded candidate set.
+      expect(r.ghCalls).toMatch(/branches\/trunk$/m);
+      expect(r.ghCalls).not.toMatch(/branches\/develop$/m);
+      expect(r.ghCalls).not.toMatch(/branches\/staging$/m);
+      expect(r.ghCalls).not.toMatch(/branches\/main$/m);
+    } finally {
+      rmSync(r.work, { recursive: true, force: true });
+    }
+  });
+
+  it("existing .flywheel.yml declaring only 'release' ⇒ probed on 'release', never on develop/main/staging", () => {
+    const r = runInitCfg(
+      [
+        ["repos/acme/widget/branches/release", 0, ""],
+        ["repos/acme/widget/rulesets", 0, "[]"],
+      ],
+      { flywheelYml: oneBranchConfig("release"), args: NO_PRESET_ARGS },
+    );
+    try {
+      const out = stripAnsi(r.stdout);
+      const combined = stripAnsi(r.stdout + r.stderr);
+      expect(r.status, `combined:\n${combined}`).toBe(0);
+      expect(out).toContain("pre-flight: no blockers.");
+      // Existing config drives detection — release probed, hardcoded set absent.
+      expect(r.ghCalls).toMatch(/branches\/release$/m);
+      expect(r.ghCalls).not.toMatch(/branches\/develop$/m);
+      expect(r.ghCalls).not.toMatch(/branches\/staging$/m);
+      expect(r.ghCalls).not.toMatch(/branches\/main$/m);
+      // An existing config is honored, never re-defaulted.
+      expect(out).not.toMatch(/default.*main/i);
+    } finally {
+      rmSync(r.work, { recursive: true, force: true });
+    }
+  });
+
+  it("no .flywheel.yml and no --preset ⇒ 'defaulted to main' notice; probes main; scaffolds config", () => {
+    const r = runInitCfg(
+      [
+        ["repos/acme/widget/branches/main", 0, ""],
+        ["repos/acme/widget/rulesets", 0, "[]"],
+      ],
+      { args: NO_PRESET_ARGS },
+    );
+    try {
+      const out = stripAnsi(r.stdout);
+      const combined = stripAnsi(r.stdout + r.stderr);
+      expect(r.status, `combined:\n${combined}`).toBe(0);
+      expect(out).toMatch(/No \.flywheel\.yml/i);
+      expect(out).toMatch(/default.*main/i);
+      expect(r.ghCalls).toMatch(/branches\/main$/m);
+      // The minimal config is scaffolded by init's normal greenfield write.
+      expect(existsSync(join(r.work, ".flywheel.yml"))).toBe(true);
+    } finally {
+      rmSync(r.work, { recursive: true, force: true });
+    }
+  });
+
+  it("three-stage preset ⇒ probes develop/staging/main once each; bypass-omitting ruleset on main blocks (standard adopter unchanged)", () => {
+    const r = runInitCfg(
+      [
+        ["repos/acme/widget/branches/develop", 0, ""],
+        ["repos/acme/widget/branches/staging", 0, ""],
+        ["repos/acme/widget/branches/main", 0, ""],
+        ["repos/acme/widget/rulesets/1", 0, prRuleset(1, "main", "[]")],
+        ["repos/acme/widget/rulesets", 0, JSON.stringify([{ id: 1, target: "branch" }])],
+      ],
+      { args: ["--preset", "three-stage", ...NO_PRESET_ARGS] },
+    );
+    try {
+      const combined = stripAnsi(r.stdout + r.stderr);
+      expect(r.status, `combined:\n${combined}`).not.toBe(0);
+      expect(combined).toContain("[instance]");
+      expect(combined).toContain("main");
+      expect(combined).toMatch(/bypass actor/i);
+      // All three configured branches are covered (the develop/main/staging
+      // adopter sees exactly today's coverage)…
+      expect(r.ghCalls).toMatch(/branches\/develop$/m);
+      expect(r.ghCalls).toMatch(/branches\/staging$/m);
+      expect(r.ghCalls).toMatch(/branches\/main$/m);
+      // …and each branch's existence is probed exactly once (memoization holds:
+      // both branch-scoped detectors reuse the one enumeration).
+      expect((r.ghCalls.match(/branches\/develop$/gm) ?? []).length).toBe(1);
+      expect((r.ghCalls.match(/branches\/staging$/gm) ?? []).length).toBe(1);
+      expect((r.ghCalls.match(/branches\/main$/gm) ?? []).length).toBe(1);
+    } finally {
+      rmSync(r.work, { recursive: true, force: true });
+    }
+  });
+
+  it("second run with an existing .flywheel.yml ('main') ⇒ reads config, probes main, no re-default notice (idempotent)", () => {
+    const r = runInitCfg(
+      [
+        ["repos/acme/widget/branches/main", 0, ""],
+        ["repos/acme/widget/rulesets", 0, "[]"],
+      ],
+      { flywheelYml: oneBranchConfig("main"), args: NO_PRESET_ARGS },
+    );
+    try {
+      const out = stripAnsi(r.stdout);
+      const combined = stripAnsi(r.stdout + r.stderr);
+      expect(r.status, `combined:\n${combined}`).toBe(0);
+      expect(r.ghCalls).toMatch(/branches\/main$/m);
+      // Reading a present config never re-defaults, so no "defaulted to main".
+      expect(out).not.toMatch(/default.*main/i);
     } finally {
       rmSync(r.work, { recursive: true, force: true });
     }
