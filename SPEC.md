@@ -3713,3 +3713,99 @@ routes to (and the §0 completion check already mirrors the script's verdict per
 - *Removing the manual guide now that init automates the steps* was rejected: it
   is still the fallback the hard-stop routes to and the reference for what the
   inline resolvers do.
+
+## Promotion Closes-ref aggregation from commit footers §spec:promotion-closes-footers
+
+*Status: not started*
+
+GitHub honors closing keywords — `Closes #N`, `Fixes #N`, `Resolves #N` and
+their inflections — in two places: a pull request's description and a commit
+message. flywheel's promotion aggregation reads only the first. When it builds a
+promotion PR, `aggregateClosesRefs` (`src/promotion.ts`) recovers the trailing
+`(#N)` PR number from each pending commit's *title*, fetches that sub-PR's
+*body*, and scans the body for closing keywords with `CLOSES_KEYWORD_RE`. The
+commit message body — where a footer-style `Closes #N` lives — is never scanned.
+A contributor who put the closing keyword in a commit footer rather than the PR
+description therefore gets no auto-close on promotion and no linked-PR indicator
+on the issue.
+
+The footer convention is doubly erased on flywheel-managed repositories.
+flywheel squash-merges each sub-PR onto the source branch, collapsing the
+original per-commit footers into one synthesized commit — so GitHub's own
+commit-keyword handling never fires (the footer never lands as a default-branch
+commit), and flywheel's aggregation never harvests it (it reads PR bodies, not
+commit text). The aggregated promotion-PR body is the single artifact that
+reconciles shipped work to closed issues; a footer-only closing keyword drops
+silently out of that reconciliation, leaving the issue open with nothing
+surfaced. This is a robustness gap, not a regression: flywheel faithfully
+propagates the closing keywords that exist in PR bodies; it simply never looked
+at the other place GitHub looks. §req:promotion-closes-footers
+
+**Observable behavior.** When flywheel aggregates the issues a promotion PR
+closes, for each sub-PR reachable from a pending commit's trailing `(#N)` it
+scans both that sub-PR's description and that sub-PR's commit messages — titles
+and bodies — and unions the closing references found. Specifically:
+
+- When a sub-PR carries `Closes #N` only in a commit footer (not in the PR
+  description), merging the promotion PR closes issue #N and draws the
+  linked-PR indicator — the same outcome as if the keyword had been in the PR
+  body. §req:promotion-closes-footers-criteria
+- A closing keyword in a sub-PR's description still produces the auto-close and
+  linked-PR indicator exactly as before. Commit text is an added source, not a
+  replacement. §req:promotion-closes-footers-criteria
+- When the same `#N` appears in both a sub-PR's description and one of its
+  commit footers, the promotion PR lists issue #N once. §req:promotion-closes-footers-criteria
+- A trailing `(#N)` on a commit title is a PR number, not a closing reference: a
+  commit titled `… (#412)` with no closing keyword anywhere never causes the
+  promotion to close issue #412. Only an explicit closing keyword introduces a
+  closed issue. §req:promotion-closes-footers-criteria
+- The promotion never lists itself as an issue it closes (self-reference
+  filter), and a closing keyword pointing at another repository's issue is not
+  aggregated (same-repository filter) — both behave for footer-sourced
+  references exactly as they do for PR-body references. §req:promotion-closes-footers-criteria
+- Footer-sourced closing references are aggregated at every promotion edge
+  flywheel computes (e.g. each hop of a `develop → staging → main` topology),
+  not only the final hop. §req:promotion-closes-footers-criteria
+
+A commit that reached the source branch with no associated sub-PR number is out
+of scope: flywheel's model is that work lands via squash-merged sub-PRs
+reachable from a trailing `(#N)`, and chasing footers on orphan commits would
+scan commits no sub-PR gates. §req:promotion-closes-footers-constraints
+
+**Why.**
+
+- *One recognizer, two sources.* Commit titles and bodies are fed through the
+  same closing-keyword recognizer already applied to PR bodies, so the body and
+  footer paths can never diverge on what counts as a closing reference. No
+  second notion of "closing keyword" is introduced. §req:promotion-closes-footers-constraints
+- *Additive union ahead of the existing filters.* Footer references join body
+  references before the dedup, self-reference, and same-repository filtering the
+  aggregation already performs, so those filters apply uniformly to both sources
+  and the output stays deduplicated. The change widens only the text scanned
+  (PR body → PR body ∪ that sub-PR's commit titles and bodies); merge,
+  labelling, and back-merge behavior are untouched. §req:promotion-closes-footers-constraints
+- *Bounded by the sub-PR set already fetched.* The scan covers exactly the
+  sub-PRs flywheel already looks up to read bodies — the per-sub-PR read widens
+  from one body to that sub-PR's commit list, over the existing authenticated
+  GitHub access and the existing bounded-concurrency fan-out. No new permission
+  and no unbounded commit walk. §req:promotion-closes-footers-constraints
+
+**Alternatives considered.**
+
+- *Scanning the pending commits' own titles and bodies directly* (instead of
+  each sub-PR's commits) was rejected: the squash-merge collapses per-commit
+  footers into one synthesized commit on the source branch, so the original
+  footers are absent from the pending commit and survive only on the sub-PR's
+  commits. The sub-PR is therefore the unit that must be scanned. §req:promotion-closes-footers
+- *Honoring footers on orphan commits* (direct pushes or PR-number-less commits
+  that reached the source branch without a sub-PR) is explicitly deferred — out
+  of scope by the sub-PR-model bound, to avoid pulling in commits no sub-PR
+  gates. §req:promotion-closes-footers-priorities
+
+**Verification.** Promotion aggregation is process-critical glue — a defect
+silently leaves issues open or closes the wrong one — so the behavior ships with
+fast local unit coverage: a footer-only `Closes #N`, a mixed
+PR-body-plus-footer case that shall deduplicate, and a trailing `(#N)` that
+shall not be read as a closing reference. The tests exercise the aggregation directly
+and add no load to the rate-limited e2e sandbox (§spec:sandbox-test-budget,
+§req:sandbox-ci-budget). §req:promotion-closes-footers-criteria §req:promotion-closes-footers-constraints
