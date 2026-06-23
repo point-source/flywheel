@@ -232,54 +232,14 @@ describe("init.sh — brownfield version-tag-shape detection", () => {
  * substring appears in the full `gh api` arg string wins; unmatched `gh api`
  * calls fall back to echoing `[]` exit 0 so unrelated detectors stay quiet.
  * `gh auth status` and `gh repo view` always answer so the gh-capability /
- * REPO-resolution detectors stay green. */
+ * REPO-resolution detectors stay green. A thin wrapper over runInitCfg (defined
+ * below, the general config-aware runner) with the default scaffold args — BP
+ * cases need neither its gh-call log nor its fixture-config / arg overrides. */
 function runInitBP(
   apiCases: Array<[string, number, string]>,
   opts: { env?: Record<string, string> } = {},
 ): RunResult {
-  const work = mkdtempSync(join(tmpdir(), "flywheel-bp-"));
-  const binDir = join(work, "bin");
-  mkdirSync(binDir);
-  const gh = join(binDir, "gh");
-  // Build the `gh api` dispatch as a bash case-ladder over the full arg string.
-  const apiDispatch = apiCases
-    .map(
-      ([needle, code, out]) =>
-        `  if [[ "$args" == *${JSON.stringify(needle)}* ]]; then ` +
-        `printf '%s' ${JSON.stringify(out)}; exit ${code}; fi`,
-    )
-    .join("\n");
-  writeFileSync(
-    gh,
-    `#!/usr/bin/env bash\n` +
-      `if [[ "$1" == "auth" && "$2" == "status" ]]; then echo "  - Token scopes: 'repo', 'read:org'"; exit 0; fi\n` +
-      `if [[ "$1" == "repo" && "$2" == "view" ]]; then echo "acme/widget"; exit 0; fi\n` +
-      `if [[ "$1" == "variable" || "$1" == "secret" ]]; then echo ""; exit 0; fi\n` +
-      `if [[ "$1" == "api" ]]; then\n` +
-      `  shift\n` +
-      `  args="$*"\n` +
-      apiDispatch +
-      `\n  echo "[]"; exit 0\n` +
-      `fi\n` +
-      `echo "stub gh: unhandled: $*" >&2; exit 1\n`,
-  );
-  chmodSync(gh, 0o755);
-  const doctorStub = writeDoctorStub(binDir, { blocks: 0, warns: 0 });
-  execFileSync("git", ["init", "-q"], { cwd: work });
-  const r = spawnSync("bash", [initSh, ...SCAFFOLD_ARGS], {
-    cwd: work,
-    encoding: "utf8",
-    input: "",
-    timeout: 30000,
-    env: {
-      ...process.env,
-      PATH: `${binDir}:${process.env.PATH}`,
-      FLYWHEEL_TEST_HOOKS: "1",
-      FLYWHEEL_DOCTOR_OVERRIDE: doctorStub,
-      ...(opts.env ?? {}),
-    },
-  });
-  return { status: r.status, stdout: r.stdout ?? "", stderr: r.stderr ?? "", work };
+  return runInitCfg(apiCases, opts);
 }
 
 // Ruleset detail covering refs/heads/main with a pull_request rule. `bypass` is
