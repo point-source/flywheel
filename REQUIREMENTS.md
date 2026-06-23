@@ -2985,8 +2985,8 @@ of §req:setup-completion-summary.
 The brownfield adoption work (§req:init-brownfield) gave `init.sh` a set of
 brownfield detectors, two of which are **branch-scoped**: one flags branch
 protection / rulesets that omit the flywheel App as a bypass actor (so the
-release push and back-merge push later fail "changes must be made through a pull
-request"), and one flags a "require signed commits/tags" rule the App cannot
+release push and back-merge push are later rejected for not going through a pull
+request), and one flags a "require signed commits/tags" rule the App cannot
 satisfy. To know *which* branches to inspect, the pre-flight pass uses a
 **hardcoded candidate set** — `develop`, `main`, `staging` — and acts only on
 whichever of those actually exist on the remote. It is hardcoded because at
