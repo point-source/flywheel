@@ -917,3 +917,119 @@ describe("init.sh — config-derived managed-branch enumeration", () => {
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// preflight_detect_missing_managed_branch — config-derived existence alert
+// (§spec:brownfield-managed-branches).
+//
+// Once the managed-branch set comes from the chosen configuration, a config can
+// name a branch the repo does not have. These cases prove the detector reports
+// that as a config/warn finding — naming the branch and both fixes — that never
+// hard-stops, folds into the completion summary, stays read-only, and degrades to
+// detect-and-report on a non-interactive run with no mutation. A branch reads as
+// MISSING when its `gh api …/branches/<b>` needle is stubbed to a non-zero exit.
+// ---------------------------------------------------------------------------
+describe("init.sh — missing managed-branch alert", () => {
+  it("configured branch absent on the remote ⇒ exactly one config/warn finding naming it and both fixes; never hard-stops; folds into the summary", () => {
+    const r = runInitCfg(
+      [
+        ["repos/acme/widget/branches/trunk", 1, ""], // trunk does NOT exist
+        ["repos/acme/widget/rulesets", 0, "[]"],
+      ],
+      { flywheelYml: oneBranchConfig("trunk"), args: NO_PRESET_ARGS },
+    );
+    try {
+      const combined = stripAnsi(r.stdout + r.stderr);
+      // warn, not block — the run proceeds to completion.
+      expect(r.status, `combined:\n${combined}`).toBe(0);
+      expect(combined).not.toMatch(/pre-flight (failed|halted)/i);
+      expect(stripAnsi(r.stdout)).toContain("pre-flight: no blockers.");
+      // Reported in the shared bucket × severity vocabulary, naming the branch.
+      expect(combined).toContain("[config]");
+      expect(combined).toMatch(/trunk.*do not exist|configured managed branch.*trunk/i);
+      // Both resolutions are spelled out.
+      expect(combined).toMatch(/create the branch/i);
+      expect(combined).toMatch(/edit \.flywheel\.yml/i);
+      // Folds into the end-of-run completion summary (machine rendering: the run
+      // is non-interactive, so summary steps emit FLYWHEEL_SETUP_STEP lines).
+      // Exactly ONE missing-branch summary step for the one missing branch — the
+      // single finding is emitted once and folded once.
+      const summarySteps =
+        r.stdout.match(
+          /FLYWHEEL_SETUP_STEP outcome=deferred bucket=config severity=warn .*trunk/g,
+        ) ?? [];
+      expect(summarySteps.length).toBe(1);
+    } finally {
+      rmSync(r.work, { recursive: true, force: true });
+    }
+  });
+
+  it("all configured branches exist ⇒ no missing-branch finding (greenfield parity)", () => {
+    const r = runInitCfg(
+      [
+        ["repos/acme/widget/branches/trunk", 0, ""], // trunk exists
+        ["repos/acme/widget/rulesets", 0, "[]"],
+      ],
+      { flywheelYml: oneBranchConfig("trunk"), args: NO_PRESET_ARGS },
+    );
+    try {
+      const out = stripAnsi(r.stdout);
+      const combined = stripAnsi(r.stdout + r.stderr);
+      expect(r.status, `combined:\n${combined}`).toBe(0);
+      expect(out).toContain("pre-flight: no blockers.");
+      // No new finding fires when the configured branch is present.
+      expect(combined).not.toMatch(/do not exist on/);
+      expect(combined).not.toMatch(/missing.*branch/i);
+    } finally {
+      rmSync(r.work, { recursive: true, force: true });
+    }
+  });
+
+  it("no-config default to 'main' that is missing ⇒ 'defaulted to main' notice AND a config/warn finding naming main (not silently accepted)", () => {
+    const r = runInitCfg(
+      [
+        ["repos/acme/widget/branches/main", 1, ""], // main does NOT exist
+        ["repos/acme/widget/rulesets", 0, "[]"],
+      ],
+      { args: NO_PRESET_ARGS },
+    );
+    try {
+      const out = stripAnsi(r.stdout);
+      const combined = stripAnsi(r.stdout + r.stderr);
+      expect(r.status, `combined:\n${combined}`).toBe(0);
+      // The default-to-main notice still prints…
+      expect(out).toMatch(/No \.flywheel\.yml/i);
+      expect(out).toMatch(/default.*main/i);
+      // …and a missing 'main' is WARNED, never silently accepted.
+      expect(combined).toContain("[config]");
+      expect(combined).toMatch(/main.*do not exist|configured managed branch.*main/i);
+      expect(combined).toMatch(/create the branch/i);
+      expect(combined).toMatch(/edit \.flywheel\.yml/i);
+    } finally {
+      rmSync(r.work, { recursive: true, force: true });
+    }
+  });
+
+  it("non-interactive run detect-and-reports the same finding with NO mutation (no branch creation, no protection edit)", () => {
+    const r = runInitCfg(
+      [
+        ["repos/acme/widget/branches/trunk", 1, ""], // trunk does NOT exist
+        ["repos/acme/widget/rulesets", 0, "[]"],
+      ],
+      { flywheelYml: oneBranchConfig("trunk"), args: NO_PRESET_ARGS },
+    );
+    try {
+      const combined = stripAnsi(r.stdout + r.stderr);
+      // The finding still fires on a piped/non-interactive run…
+      expect(r.status, `combined:\n${combined}`).toBe(0);
+      expect(combined).toMatch(/trunk.*do not exist|configured managed branch.*trunk/i);
+      // …and nothing mutates remote state: no ref-creation, no write verb. The
+      // detector only ever issues read-only `branches/` and `rulesets` probes.
+      expect(r.ghCalls).not.toMatch(/git\/refs/);
+      expect(r.ghCalls).not.toMatch(/-X\s*(POST|PUT|PATCH|DELETE)/);
+      expect(r.ghCalls).not.toMatch(/--method\s*(POST|PUT|PATCH|DELETE)/);
+    } finally {
+      rmSync(r.work, { recursive: true, force: true });
+    }
+  });
+});

@@ -3526,7 +3526,7 @@ flywheel should not mutate, and is detected-and-routed, not resolved.
 
 ## Config-derived managed-branch coverage §spec:brownfield-managed-branches
 
-*Status: in progress*
+*Status: complete*
 
 The two **branch-scoped** brownfield detectors — branch protection missing the
 App as a bypass actor, and the signed-commit/tag requirement

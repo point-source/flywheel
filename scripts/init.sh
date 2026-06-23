@@ -649,15 +649,22 @@ _preflight_config_declared_branches() {
 # renamed / multi-stream / custom-topology adopters branch-scoped coverage on their
 # real branches; standard develop/main/staging adopters see exactly the coverage
 # they did before. Each configured branch's existence is tested with the doctor.sh
-# idiom (`gh api repos/$REPO/branches/$b`); a configured branch the repo lacks is
-# simply not probed here (the missing-branch alert is a separate detector). REPO may
-# be empty (gh unresolved); in that case we can't probe the remote, so we resolve
-# nothing and echo nothing — preserving today's bounded gh usage. Read-only; errors
-# swallowed. Memoized once per run: both the bypass and signed-commit detectors call
-# this, so without the guard each configured branch would be probed twice against the
-# adopter's rate limit. preflight_run resets the flags so a fresh run re-resolves the
-# (possibly now-written) config.
+# idiom (`gh api repos/$REPO/branches/$b`). A configured branch the repo lacks is NOT
+# echoed here (the branch-scoped detectors only act on branches that exist), but it is
+# stashed in PREFLIGHT_MANAGED_BRANCHES_MISSING so the missing-branch detector can
+# alert on it (§spec:brownfield-managed-branches) — the same single existence probe
+# feeds both. REPO may be empty (gh unresolved); in that case we can't probe the
+# remote, so we resolve nothing, echo nothing, and stash no missing branches —
+# preserving today's bounded gh usage and degrading to checking nothing. Read-only;
+# errors swallowed. Memoized once per run: both the bypass and signed-commit detectors
+# call this, so without the guard each configured branch would be probed twice against
+# the adopter's rate limit. preflight_run resets the flags so a fresh run re-resolves
+# the (possibly now-written) config.
 PREFLIGHT_MANAGED_BRANCHES=""
+# Newline-separated configured branches that DO NOT exist on the remote, captured in
+# the same probe pass as PREFLIGHT_MANAGED_BRANCHES. preflight_detect_missing_managed_branch
+# reads this to emit the config/warn missing-branch finding.
+PREFLIGHT_MANAGED_BRANCHES_MISSING=""
 PREFLIGHT_MANAGED_BRANCHES_READ=0
 # Set to 1 when config resolution fell back to the `main` default because the repo
 # has neither a .flywheel.yml nor a picked preset — preflight_run reads this to emit
@@ -667,7 +674,7 @@ preflight_brownfield_managed_branches() {
   if [[ $PREFLIGHT_MANAGED_BRANCHES_READ -eq 0 ]]; then
     PREFLIGHT_MANAGED_BRANCHES_READ=1
     if [[ -n "${REPO:-}" ]]; then
-      local declared="" b found=""
+      local declared="" b found="" missing=""
       if [[ -f .flywheel.yml || -n "${PRESET:-}" ]]; then
         declared="$(_preflight_config_declared_branches)"
       else
@@ -680,9 +687,12 @@ preflight_brownfield_managed_branches() {
         [[ -n "$b" ]] || continue
         if gh api "repos/$REPO/branches/$b" >/dev/null 2>&1; then
           found+="${found:+$'\n'}$b"
+        else
+          missing+="${missing:+$'\n'}$b"
         fi
       done <<< "$declared"
       PREFLIGHT_MANAGED_BRANCHES="$found"
+      PREFLIGHT_MANAGED_BRANCHES_MISSING="$missing"
     fi
   fi
   [[ -n "$PREFLIGHT_MANAGED_BRANCHES" ]] && printf '%s\n' "$PREFLIGHT_MANAGED_BRANCHES"
@@ -1044,6 +1054,34 @@ preflight_detect_signed_commit_requirement() {
   return 0
 }
 
+# preflight_detect_missing_managed_branch — §spec:brownfield-managed-branches.
+# READ-ONLY detector: alert when the chosen configuration names a managed branch the
+# repository does not have. The missing set was already computed by the single
+# existence-probe pass in preflight_brownfield_managed_branches (no extra gh calls
+# here — preflight_run resolves that getter once before the detector seam). For any
+# configured-but-absent branch it emits ONE aggregate config/warn finding that names
+# the branch(es) and states BOTH resolutions: create the branch, or edit .flywheel.yml
+# to name a branch that exists. It is `warn`, not `block`, on purpose — a configured
+# branch absent at init is commonly transient (the minimal template's branch name is a
+# placeholder the adopter edits) and resolvable on the adopter's own terms, so it
+# INFORMS rather than hard-stops; the genuine downstream hazard is still backstopped by
+# doctor.sh and the first release / back-merge push. Routed through brownfield_finding
+# so it lands in the shared findings surface AND folds into the completion summary
+# (§spec:setup-completion-summary) via brownfield_emit_summary_records, with no second
+# reporting path. When REPO is unresolved the missing set is empty (the getter probed
+# nothing), so this no-ops — detection degrades to checking nothing. Detect-and-report
+# only: never creates the branch, never mutates state; a non-interactive run reports
+# the same warn with no mutation. resolvable=no (no inline resolver; warns are not
+# dispatched to resolution).
+preflight_detect_missing_managed_branch() {
+  [[ -n "${REPO:-}" ]] || return 0
+  [[ -n "$PREFLIGHT_MANAGED_BRANCHES_MISSING" ]] || return 0
+  local names="${PREFLIGHT_MANAGED_BRANCHES_MISSING//$'\n'/, }"
+  brownfield_finding missing_managed_branch no config warn "configured managed branch(es) ${names} declared in your Flywheel config do not exist on $REPO — branch-scoped protection/signing checks can't cover a branch that isn't there, and the first release / back-merge push would target a missing branch. Two ways to resolve: create the branch(es) on the remote, or edit .flywheel.yml to name a branch that already exists."
+  # End deterministically at 0; the gate reads FINDINGS_BLOCK_COUNT, not this return.
+  return 0
+}
+
 # preflight_detect_history_and_prs — §spec:brownfield-detection.
 # READ-ONLY, ADVISORY-ONLY detector: surfaces conditions in existing history and
 # open PRs that will affect — but not break — flywheel's first release/promotion.
@@ -1207,6 +1245,7 @@ preflight_run() {
   # the managed-branch list and ruleset details across the detectors that consult
   # them (rather than each detector re-probing the same gh endpoints).
   PREFLIGHT_MANAGED_BRANCHES_READ=0
+  PREFLIGHT_MANAGED_BRANCHES_MISSING=""
   PREFLIGHT_BRANCHES_DEFAULTED=0
   PREFLIGHT_RULESETS_READ=0
   PREFLIGHT_DEFAULT_BRANCH_READ=0
@@ -1232,6 +1271,7 @@ preflight_run() {
   preflight_detect_credentials_app     # §spec:preflight-credentials-app
   preflight_detect_branch_protection_bypass # §spec:brownfield-detection
   preflight_detect_signed_commit_requirement # §spec:brownfield-detection
+  preflight_detect_missing_managed_branch # §spec:brownfield-managed-branches
   preflight_detect_history_and_prs     # §spec:brownfield-detection
   preflight_inject                     # test-only hook (inert unless FLYWHEEL_TEST_HOOKS=1)
   # <<< detector seam <<<
