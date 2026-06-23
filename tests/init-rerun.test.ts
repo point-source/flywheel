@@ -15,6 +15,8 @@ import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
+import { writeDoctorStub } from "./helpers/doctorStub.js";
+
 // init.sh's re-run hazard: when both the FLYWHEEL_GH_APP_ID variable and
 // FLYWHEEL_GH_APP_PRIVATE_KEY secret already exist, the App-credential
 // prompt block short-circuits and CREATED_APP_ID stays empty. Without
@@ -142,13 +144,9 @@ function setup(): Sandbox {
   // doctor.sh is curl-fetched and run against the hermetic gh stub (which answers no
   // rulesets), reporting spurious block-severity findings that — under the exit
   // contract (§spec:setup-exit-contract) — would flip a clean run's exit non-zero.
-  // Driven through the FLYWHEEL_DOCTOR_OVERRIDE seam (gated on FLYWHEEL_TEST_HOOKS).
-  const doctorStub = join(binDir, "doctor-stub.sh");
-  writeFileSync(
-    doctorStub,
-    "#!/usr/bin/env bash\nset -euo pipefail\nprintf 'DOCTOR_RESULT blocks=0 warns=0\\n'\nexit 0\n",
-  );
-  chmodSync(doctorStub, 0o755);
+  // Driven through the FLYWHEEL_DOCTOR_OVERRIDE seam (gated on FLYWHEEL_TEST_HOOKS),
+  // via the shared helper the pre-flight suites already use.
+  const doctorStub = writeDoctorStub(binDir, { blocks: 0, warns: 0 });
 
   const adopter = mkdtempSync(join(tmpdir(), "fw-rerun-adopter-"));
   execFileSync("git", ["init", "-q"], { cwd: adopter });
