@@ -28,22 +28,31 @@ Three non-negotiables you'll hit immediately:
 
 Flywheel is a single TypeScript GitHub Action (`src/main.ts`) that dispatches by event type to one of two flows: `src/pr-flow.ts` (rewrites PR titles, applies `flywheel:auto-merge` / `flywheel:needs-review`, enables native auto-merge) or `src/push-flow.ts` (generates `.releaserc.json`, gates the `semantic-release` step in `flywheel-push.yml`, computes back-merge targets). It is stateless — the repository's branches, tags, PRs, and labels are the state machine; nothing is held between runs. `.flywheel.yml` is the single source of truth for branch topology, stream definitions, and auto-merge rules. `src/config.ts` validates it; `src/release-rc.ts` derives the semantic-release config from it at runtime (adopters never edit `.releaserc.json` themselves).
 
-## Build / test essentials
+## The pre-PR gate: `npm run check`
+
+**`npm run check` is the single command to run before opening a PR.** After `npm install`, it runs every PR-gating check — typecheck, unit tests, the `core/dist/` bundle verification, and the governance/prose lint (`scripts/governance-lint.sh`, the same script `governance-lint.yml` runs) — in fail-fast order, stopping at the first failure and naming the gate that failed (typecheck / test / verify-dist / governance-lint). It *composes* the existing checks — it calls the same scripts CI does rather than re-spelling them — so a local pass and a CI pass cannot diverge. If `npm run check` is green, the PR's gating jobs (`verify-dist.yml`, `governance-lint.yml`) will be too.
+
+**Vale is a prerequisite** (a separate binary, not an npm dependency) — install it to run the prose lint: <https://github.com/vale-cli/vale/releases>. When Vale is absent the command reports the governance check as *missing* and fails rather than silently passing — a skipped check never reports success.
+
+`npm run check` deliberately **excludes the integration and e2e suites**: they exercise a shared, rate-limited sandbox (§spec:sandbox-test-budget), so pulling them into the per-PR gate would defeat "run it before every PR." Run them on purpose via `npm run test:integration` / `npm run test:e2e` — see `CONTRIBUTING.md` for the sandbox setup they require.
+
+The individual gates are also runnable on their own while iterating:
 
 ```bash
 npm install
-npm run typecheck      # strict TS
-npm test               # vitest unit tests
-npm run test:watch     # iterate
-npm run build          # esbuild → dist/index.cjs
-npm run verify-dist    # rebuild + fail if dist/ drifts (CI runs this on every PR)
+npm run typecheck        # strict TS
+npm test                 # vitest unit tests
+npm run test:watch       # iterate
+npm run build            # esbuild → core/dist/index.cjs
+npm run verify-dist      # rebuild + fail if core/dist/ drifts
+npm run governance-lint  # markdownlint + Vale prose + SPEC/ROADMAP/README structure
 ```
 
-Run a single test file: `npx vitest run tests/<name>.test.ts`. Run by description: `npx vitest run -t "<substring of test name>"`. Integration and e2e suites use separate configs and are wired as `npm run test:integration` / `npm run test:e2e` — see `CONTRIBUTING.md` for the sandbox setup they require.
+Run a single test file: `npx vitest run tests/<name>.test.ts`. Run by description: `npx vitest run -t "<substring of test name>"`.
 
-## The `dist/` rule (load-bearing)
+## The `core/dist/` rule (load-bearing)
 
-`dist/index.cjs` is committed and GitHub Actions executes it directly — there is no install step at action runtime. The `Verify dist` workflow rebuilds on every PR and fails if the committed `dist/` doesn't match a fresh build. **Always `npm run build` and stage `dist/index.cjs` before pushing**, or `Verify dist` fails and the PR stalls. This applies even when your only edits are in `src/` — the bundle must reflect them.
+`core/dist/index.cjs` is committed and GitHub Actions executes it directly — there is no install step at action runtime. The `Verify dist` workflow rebuilds on every PR and fails if the committed `core/dist/` doesn't match a fresh build. `npm run check` runs this verification (via `npm run verify-dist`), so a green `check` confirms your bundle is rebuilt and staged — but if you bypass the gate, **always `npm run build` and stage `core/dist/` before pushing**, or `Verify dist` fails and the PR stalls. This applies even when your only edits are in `src/` — the bundle must reflect them.
 
 ## Adding a `.flywheel.yml` validation case
 

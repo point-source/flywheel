@@ -47,14 +47,18 @@ docs/design/testing-strategy.md target three-layer test architecture (see Status
 
 ## Edit-test-build loop
 
+While iterating, run the individual checks for fast feedback:
+
 ```bash
 npm run test:watch       # fast feedback while editing
 npm run typecheck        # strict TS check
-npm run build            # esbuild bundle → dist/index.cjs
-npm run verify-dist      # rebuild + fail if dist/ drifts (same check CI runs)
+npm run build            # esbuild bundle → core/dist/index.cjs
+npm run verify-dist      # rebuild + fail if core/dist/ drifts (same check CI runs)
 ```
 
-**`dist/index.cjs` is committed.** GitHub Actions executes the bundle directly; there is no install step at action runtime. The `Verify dist` workflow (`.github/workflows/verify-dist.yml`) runs `npm run build` on every PR and fails if the resulting `dist/` doesn't match what you committed. Always `npm run build` and stage `dist/index.cjs` before opening a PR.
+Then, before opening a PR, run the single gate — see [Pre-submission checklist](#pre-submission-checklist).
+
+**`core/dist/index.cjs` is committed.** GitHub Actions executes the bundle directly; there is no install step at action runtime. The `Verify dist` workflow (`.github/workflows/verify-dist.yml`) runs `npm run build` on every PR and fails if the resulting `core/dist/` doesn't match what you committed. `npm run check` (below) runs this check for you; always `npm run build` and stage `core/dist/` before opening a PR.
 
 ## Adding a `.flywheel.yml` validation case
 
@@ -176,11 +180,20 @@ When your change could meaningfully break adopters (schema changes, validation s
 
 ## Pre-submission checklist
 
-Before opening a PR:
+Before opening a PR, run the single pre-PR gate:
 
-- [ ] `npm run typecheck` is clean
-- [ ] `npm test` is clean
-- [ ] `npm run verify-dist` is clean (i.e. you ran `npm run build` and committed `dist/index.cjs`)
+```bash
+npm run check
+```
+
+`npm run check` runs **every** PR-gating check — typecheck, unit tests, the `core/dist/` bundle verification, and the governance/prose lint (`scripts/governance-lint.sh`) — in fail-fast order, stopping at the first failure and naming the gate that failed. It composes the same scripts CI runs (`verify-dist.yml`, `governance-lint.yml`), so a green `check` means those jobs will pass too. This replaces running the code checks by hand: the governance/prose lint is included by default, so you no longer have to know `scripts/governance-lint.sh` exists or invoke it separately.
+
+- **[Vale](https://github.com/vale-cli/vale/releases) is a prerequisite** — a separate binary, not an npm dependency. Install it so the governance gate can run prose linting; without it the command reports the governance check as *missing* and fails rather than silently passing.
+- `npm run check` **excludes the integration and e2e suites** — they exercise a shared, rate-limited sandbox (see [`docs/maintainer/sandbox-setup.md`](./docs/maintainer/sandbox-setup.md)), so they are not part of the per-PR gate. Run them deliberately with `npm run test:integration` / `npm run test:e2e`.
+
+Then confirm:
+
+- [ ] `npm run check` is clean (covers typecheck, tests, `core/dist/` verification, and governance/prose lint)
 - [ ] PR title is a Conventional Commit; breaking change is signalled with `!` if appropriate
 - [ ] If you added a validation rule, you added a fixture in `test-fixtures/` and a test in `tests/config.test.ts`
 

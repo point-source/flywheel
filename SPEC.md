@@ -3812,7 +3812,7 @@ and add no load to the rate-limited e2e sandbox (§spec:sandbox-test-budget,
 
 ## Single local PR-gating command §spec:local-pr-gate
 
-*Status: not started*
+*Status: complete*
 
 flywheel's PR-gating checks are spread across independent GitHub Actions
 workflows with no aggregator in front of them: `verify-dist.yml` runs
