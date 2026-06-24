@@ -28257,12 +28257,19 @@ function createGitHubClient(token, repoFullName) {
       }
     },
     async listPullCommits(pull_number) {
-      const all = await octokit.paginate(octokit.rest.pulls.listCommits, {
-        owner,
-        repo,
-        pull_number,
-        per_page: 100
-      });
+      let all;
+      try {
+        all = await octokit.paginate(octokit.rest.pulls.listCommits, {
+          owner,
+          repo,
+          pull_number,
+          per_page: 100
+        });
+      } catch (err) {
+        const status = err?.status;
+        if (status === 404) return [];
+        throw err;
+      }
       return all.map((c) => {
         const message = c.commit.message;
         const { title, body } = splitMessage(message);

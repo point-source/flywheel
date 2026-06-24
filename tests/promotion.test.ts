@@ -508,6 +508,39 @@ describe("runPromotion — orchestration", () => {
     expect(matches).toHaveLength(1);
   });
 
+  it("aggregates closing refs across multiple commits of one sub-PR, deduped (#265)", async () => {
+    // A sub-PR can carry several commits — some with closing footers, some
+    // without. extractClosesRefs runs over every commit, so distinct refs from
+    // different commits all aggregate, a ref repeated across commits collapses
+    // to one, and keyword-less commits contribute nothing.
+    const gh = createFakeGh({
+      branchCommits: {
+        develop: [
+          makeCommit("c1", "fix: a (#72)", date("2026-01-05T10:00:00Z")),
+        ],
+        staging: [makeCommit("s1", "chore: old", date("2025-12-01T10:00:00Z"))],
+      },
+      pullBodies: {
+        72: "Just a description, nothing to auto-close.",
+      },
+      pullCommits: {
+        72: [
+          makeCommit("sub1", "fix: a\n\nCloses #60", date("2026-01-05T09:02:00Z")),
+          makeCommit("sub2", "refactor: tidy up", date("2026-01-05T09:01:00Z")),
+          makeCommit("sub3", "fix: b\n\nCloses #61\nFixes #60", date("2026-01-05T09:00:00Z")),
+        ],
+      },
+    });
+    const { log } = silentLogger();
+
+    await runPromotion({ branchRef: "develop", config, gh, log });
+
+    const body = gh.createdPRs[0]!.body;
+    expect(body).toContain("Closes #60");
+    expect(body).toContain("Closes #61");
+    expect(body.match(/Closes #60/g) ?? []).toHaveLength(1); // repeated across commits → once
+  });
+
   it("never reads a trailing (#NN) on a sub-PR commit title as a closing reference (#265)", async () => {
     // A sub-PR commit titled `... (#412)` carries a PR number, not a closing
     // keyword. With no actual Closes/Fixes/Resolves keyword anywhere, #412
@@ -568,11 +601,13 @@ describe("runPromotion — orchestration", () => {
     expect(body).not.toContain("#100"); // cross-repo
   });
 
-  it("survives a 404 from getPullBody (sub-PR hard-deleted) — promotion PR still upserts", async () => {
-    // pullBodies map omits #72, so fakeGh.getPullBody returns null. The
-    // production GitHubClient returns null on 404 from octokit. Either
-    // way, runPromotion should treat it as "nothing to aggregate" and
-    // not fail.
+  it("survives a 404 on a hard-deleted sub-PR (both body and commits) — promotion PR still upserts (#265)", async () => {
+    // #72 is omitted from BOTH pullBodies and pullCommits, so fakeGh.getPullBody
+    // returns null and fakeGh.listPullCommits returns [] — modeling the real
+    // GitHubClient, where both tolerate a 404 (the trailing (#72) pointed at a
+    // hard-deleted PR, or something that isn't a PR). The whole aggregation must
+    // skip #72 and still recover #73's ref — a 404 on one sub-PR must not abort
+    // the promotion (see #265: listPullCommits is read alongside getPullBody).
     const gh = createFakeGh({
       branchCommits: {
         develop: [
@@ -582,15 +617,22 @@ describe("runPromotion — orchestration", () => {
         staging: [makeCommit("s1", "chore: old", date("2025-12-01T10:00:00Z"))],
       },
       pullBodies: {
-        // 72 omitted — simulates 404
+        // 72 omitted — simulates 404 on getPullBody
         73: "Fixes #70",
+      },
+      pullCommits: {
+        // 72 omitted — simulates 404 on listPullCommits
+        73: [makeCommit("sub73", "fix: b\n\nCloses #71", date("2026-01-04T09:00:00Z"))],
       },
     });
     const { log } = silentLogger();
 
     const outcome = await runPromotion({ branchRef: "develop", config, gh, log });
     expect(outcome.kind).toBe("created");
+    // #73's PR body (#70) and its commit footer (#71) both aggregate; #72 is
+    // skipped without error.
     expect(gh.createdPRs[0]!.body).toContain("Closes #70");
+    expect(gh.createdPRs[0]!.body).toContain("Closes #71");
   });
 
   it("ignores commits without a trailing (#NN) — direct-pushed bot commits don't trigger getPullBody", async () => {
