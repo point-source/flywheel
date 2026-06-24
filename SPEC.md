@@ -3524,6 +3524,148 @@ flywheel should not mutate, and is detected-and-routed, not resolved.
   scoped to only the rules flywheel's pushes require, limiting the blast radius of
   the grant.
 
+## Config-derived managed-branch coverage §spec:brownfield-managed-branches
+
+*Status: complete*
+
+The two **branch-scoped** brownfield detectors — branch protection missing the
+App as a bypass actor, and the signed-commit/tag requirement
+(§spec:brownfield-detection) — probe exactly the managed branches the adopter's
+**chosen configuration declares**, not a fixed candidate set. The managed-branch
+enumeration that both detectors share derives the branch list from the
+`.flywheel.yml` topology in force: the template the adopter picked
+(§spec:init-preset-wording), an existing `.flywheel.yml` already in the repo, or
+the default minimal config when none exists. There is no remaining
+`develop` / `main` / `staging` candidate list driving branch-scoped detection.
+§req:init-brownfield-managed-branches §req:init-brownfield-managed-branches-criteria
+§req:init-brownfield-managed-branches-constraints
+
+Because a configured topology can name a branch the repository does not yet have,
+`init.sh` also checks that **each configured managed branch exists** on the remote
+and, when one does not, reports a finding that names the specific missing branch
+and the two ways to resolve it — create the branch, or edit the config to name a
+branch that exists. The finding is bucket `config`, severity `warn`, in the shared
+bucket × severity vocabulary (§spec:preflight-classification): a managed branch the
+config points at but the repo lacks is a configuration mismatch the adopter
+resolves on their own terms, not an immediate hazard on existing state, and during
+onboarding it is frequently a transient in-progress condition (the minimal
+template's branch name is a placeholder the adopter is expected to edit), so it
+informs rather than hard-stopping the run. The branch set is taken from config in
+every case:
+
+- **An existing `.flywheel.yml`** drives detection against the branches it
+  declares — a re-run or a hand-written config probes the adopter's real topology
+  rather than a guess.
+- **No `.flywheel.yml`** causes `init.sh` to create a minimal config with `main`
+  as the sole managed branch, tell the adopter the config defaulted to `main`,
+  then check that `main` exists and warn if it does not — the adopter is never
+  silently handed a config pointing at a branch that isn't there.
+- **A picked template** (minimal, three-stage, multi-stream) supplies its declared
+  branches; the existence check then surfaces any the repo is missing.
+
+**Why config-derived rather than a hardcoded superset.** The previous candidate
+set — `develop`, `main`, `staging` — was hardcoded because at pre-flight the
+adopter's topology was treated as unknown, so the detectors probed flywheel's
+standard-topology superset and no-oped on the rest. The cost was a **silent false
+negative for every adopter whose managed branch is none of those three**: a
+`trunk` mainline, or a multi-stream config with custom stream branch names, still
+got the version-tag, release-conflict, and history/PR checks, but the two
+branch-scoped detectors never probed their real branches — so a genuine protection
+or signing hazard on a custom branch was simply not surfaced at `init` time. The
+adopter who most needed the warning (a non-default topology *and* a real conflict
+on it) was exactly the one who silently did not get it. The topology is in fact
+knowable at the moment the detectors run, because the branch-scoped checks already
+run after the configuration is chosen; reading the branch set from that
+configuration closes the gap for non-default adopters while leaving
+standard-topology adopters with exactly the coverage they have today. It is not a
+false positive either — no clean repo is wrongly blocked — so the only behavioral
+change is that custom-topology adopters now get the coverage default ones always
+had. §req:init-brownfield-managed-branches §req:init-brownfield-managed-branches-stories
+
+**Why coverage, not a new onboarding flow.** The scope is deliberately narrow:
+get branch-scoped detection to cover the right branches, plus the missing-branch
+alert. It does not add per-branch onboarding — no per-branch promotion-order,
+release-type, or auto-merge prompts; that fuller branch-mapping flow is out of
+scope. It extends §spec:brownfield-detection rather than forking a parallel
+detection or reporting path, and it adds no mutation of pre-existing repository
+state: `init.sh` never creates the missing branch and never edits protection as
+part of this work — it alerts. The one file it writes is the default minimal
+`.flywheel.yml` in the no-config case, which is `init.sh`'s normal scaffolding of
+its own config (the same write greenfield setup already performs), not a mutation
+of the adopter's existing state. §req:init-brownfield-managed-branches-constraints
+
+**Why this stays read-only and rate-limit-respectful.** Existence checks and
+protection probes use only the scopes `init.sh` already needs, probe only the
+configured branch set (never a superset), and keep the existing memoization so
+each branch is checked once per run; when the repository cannot be resolved the
+enumeration degrades to checking nothing, preserving today's bounded `gh` usage
+(§spec:preflight-gh-capability). A non-interactive or piped run degrades to
+detect-and-report with no mutation, consistent with §spec:brownfield-resolution.
+This is the same backstop relationship the rest of brownfield detection has: a
+hazard the config-derived set still misses is caught later by `doctor.sh`, which
+already derives its managed branches from the written `.flywheel.yml`, or by the
+first release / back-merge push. Closing the init-time gap lets the maintainer
+drop the documented `#263` false-negative caveat from the script.
+§req:init-brownfield-managed-branches-constraints
+
+**Criteria.**
+
+- The branch-scoped brownfield detectors shall probe exactly the managed branches
+  the chosen configuration declares — the picked template, an existing
+  `.flywheel.yml`, or the default config — and no standalone
+  `develop` / `main` / `staging` candidate list shall remain in that path. A
+  config that declares only `release` shall be probed on `release` and not on
+  `develop` / `main` / `staging`.
+- When `init.sh` runs against a repository whose only managed branch is a
+  non-default name (e.g. `trunk`) carrying a protection rule that omits the App as
+  a bypass actor, it shall surface the branch-protection-bypass finding on that
+  branch, the same way it surfaces it on `main` for a standard topology.
+- When the chosen configuration names a managed branch the repository does not
+  have, `init.sh` shall report a finding in the bucket × severity vocabulary that
+  names the specific missing branch and states both resolutions: create the
+  branch, or edit the config to name a branch that exists.
+- When a `.flywheel.yml` is already present, `init.sh` shall check the branches it
+  declares rather than a hardcoded set.
+- When no `.flywheel.yml` is present, `init.sh` shall create a minimal config with
+  `main` as the sole managed branch, tell the adopter the config defaulted to
+  `main`, and then check that `main` exists, warning if it does not.
+- A standard `develop` / `main` / `staging` adopter shall get exactly the
+  branch-scoped coverage they get today; the switch from a hardcoded list to a
+  config-derived set shall be invisible to them.
+- On a fresh repository where the chosen template's branches all exist (or where
+  `main` exists in the default case), no new finding shall fire and the run shall
+  proceed as before.
+- Branch-scoped detection shall remain read-only, probe only the configured branch
+  set, check each branch once per run, and degrade to checking nothing when the
+  repository cannot be resolved; a non-interactive run shall detect-and-report
+  with no mutation.
+- A second run shall read the now-written config and check the same declared
+  branches, neither drifting back to a hardcoded set nor re-defaulting a config
+  that already exists.
+- Fast local/CI tests with fixture repos and a stubbed `gh` shall exercise
+  custom-topology branch detection, the missing-branch alert, the existing-config
+  path, and the no-config `main` default, adding no load to the rate-limited e2e
+  sandbox (§spec:sandbox-test-budget).
+
+**Scope and alternatives.**
+
+- *Keeping the hardcoded `develop` / `main` / `staging` candidate set* was
+  rejected: it is the source of the silent false negative for every non-default
+  topology and is unnecessary once the branch set is read from the configuration
+  that is already chosen when the branch-scoped detectors run.
+- *Adding a full per-branch onboarding flow* (per-branch promotion-order,
+  release-type, auto-merge prompts) was rejected as out of scope: this work is
+  branch-detection coverage plus a missing-branch alert, not a new mapping UI.
+- *Creating the missing branch or editing protection automatically* was rejected:
+  this requirement is detect-and-report only and adds no mutation of pre-existing
+  repository state; resolution of a missing branch is the adopter's call between
+  the two named fixes.
+- *Reporting the missing-branch finding as a `block`* was rejected: a configured
+  branch absent at init is commonly a transient in-progress condition (placeholder
+  branch names the adopter edits) and is resolvable on the adopter's own terms, so
+  it warns rather than hard-stopping; the genuine downstream hazard is still
+  backstopped by `doctor.sh` and the first release push.
+
 ## Brownfield-safe onboarding docs §spec:brownfield-docs
 
 *Status: complete*
