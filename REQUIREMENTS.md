@@ -3288,7 +3288,7 @@ labelling, or back-merge behavior around it.
 
 ## Promotion Closes-ref from commit footers priorities §req:promotion-closes-footers-priorities
 
-Must-have: footer-only `Closes #N` closes the issue on promotion with the
+Required: footer-only `Closes #N` closes the issue on promotion with the
 linked-PR indicator; PR-body behavior unchanged; body/footer dedup; trailing
 `(#N)` never read as a closing reference; self-reference and cross-repo filters
 preserved; unit coverage of those cases. This is a contained robustness fix on
