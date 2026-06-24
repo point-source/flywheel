@@ -1,3 +1,10 @@
+# [2.2.0-dev.1](https://github.com/point-source/flywheel/compare/v2.1.0...v2.2.0-dev.1) (2026-06-24)
+
+
+### Features
+
+* drive init.sh brownfield branch detection from the adopter's configured managed branches ([#269](https://github.com/point-source/flywheel/issues/269)) ([19b2764](https://github.com/point-source/flywheel/commit/19b276405bd7ca29dd744cb39468c9c4cb424b06)), closes [#263](https://github.com/point-source/flywheel/issues/263) [#263](https://github.com/point-source/flywheel/issues/263) [#263](https://github.com/point-source/flywheel/issues/263) [#263](https://github.com/point-source/flywheel/issues/263) [#263](https://github.com/point-source/flywheel/issues/263) [#263](https://github.com/point-source/flywheel/issues/263) [#263](https://github.com/point-source/flywheel/issues/263) [#263](https://github.com/point-source/flywheel/issues/263) [#263](https://github.com/point-source/flywheel/issues/263) [#263](https://github.com/point-source/flywheel/issues/263) [#263](https://github.com/point-source/flywheel/issues/263) [#263](https://github.com/point-source/flywheel/issues/263) [preflight-#capability](https://github.com/preflight-/issues/capability)
+
 # [2.1.0](https://github.com/point-source/flywheel/compare/v2.0.1...v2.1.0) (2026-06-23)
 
 
