@@ -3716,7 +3716,7 @@ routes to (and the §0 completion check already mirrors the script's verdict per
 
 ## Promotion Closes-ref aggregation from commit footers §spec:promotion-closes-footers
 
-*Status: not started*
+*Status: complete*
 
 GitHub honors closing keywords — `Closes #N`, `Fixes #N`, `Resolves #N` and
 their inflections — in two places: a pull request's description and a commit

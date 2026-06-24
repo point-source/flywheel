@@ -457,6 +457,117 @@ describe("runPromotion — orchestration", () => {
     expect(gh.createdPRs[0]!.body).not.toMatch(/Closes #/);
   });
 
+  it("aggregates a footer-only Closes ref from a sub-PR's commit body (#265)", async () => {
+    // The contributor put `Closes #60` in a commit footer, not the PR
+    // description. flywheel's squash-merge collapsed that footer onto develop,
+    // so GitHub never auto-closed #60 and the PR body says nothing. Promotion
+    // aggregation now scans the sub-PR's own commit messages and recovers it.
+    const gh = createFakeGh({
+      branchCommits: {
+        develop: [
+          makeCommit("c1", "fix: a (#72)", date("2026-01-05T10:00:00Z")),
+        ],
+        staging: [makeCommit("s1", "chore: old", date("2025-12-01T10:00:00Z"))],
+      },
+      pullBodies: {
+        72: "Just a description, nothing to auto-close.",
+      },
+      pullCommits: {
+        72: [makeCommit("sub1", "fix: a\n\nCloses #60", date("2026-01-05T09:00:00Z"))],
+      },
+    });
+    const { log } = silentLogger();
+
+    await runPromotion({ branchRef: "develop", config, gh, log });
+
+    expect(gh.createdPRs[0]!.body).toContain("Closes #60");
+  });
+
+  it("dedups a Closes ref that appears in both a sub-PR's body and a commit footer (#265)", async () => {
+    // Same #60 in the PR description AND a commit footer — the union happens
+    // before dedup, so the promotion PR lists it exactly once.
+    const gh = createFakeGh({
+      branchCommits: {
+        develop: [
+          makeCommit("c1", "fix: a (#72)", date("2026-01-05T10:00:00Z")),
+        ],
+        staging: [makeCommit("s1", "chore: old", date("2025-12-01T10:00:00Z"))],
+      },
+      pullBodies: {
+        72: "Closes #60",
+      },
+      pullCommits: {
+        72: [makeCommit("sub1", "fix: a\n\nCloses #60", date("2026-01-05T09:00:00Z"))],
+      },
+    });
+    const { log } = silentLogger();
+
+    await runPromotion({ branchRef: "develop", config, gh, log });
+
+    const matches = gh.createdPRs[0]!.body.match(/Closes #60/g) ?? [];
+    expect(matches).toHaveLength(1);
+  });
+
+  it("never reads a trailing (#NN) on a sub-PR commit title as a closing reference (#265)", async () => {
+    // A sub-PR commit titled `... (#412)` carries a PR number, not a closing
+    // keyword. With no actual Closes/Fixes/Resolves keyword anywhere, #412
+    // must not be aggregated — the promotion emits no Closes block at all.
+    const gh = createFakeGh({
+      branchCommits: {
+        develop: [
+          makeCommit("c1", "fix: a (#72)", date("2026-01-05T10:00:00Z")),
+        ],
+        staging: [makeCommit("s1", "chore: old", date("2025-12-01T10:00:00Z"))],
+      },
+      pullBodies: {
+        72: "Just a description, nothing to auto-close.",
+      },
+      pullCommits: {
+        72: [makeCommit("sub1", "fix: rename helper (#412)", date("2026-01-05T09:00:00Z"))],
+      },
+    });
+    const { log } = silentLogger();
+
+    await runPromotion({ branchRef: "develop", config, gh, log });
+
+    const body = gh.createdPRs[0]!.body;
+    expect(body).not.toContain("Closes #412");
+    expect(body).not.toMatch(/Closes #/);
+  });
+
+  it("filters a footer-sourced self-reference and a cross-repo footer ref (#265)", async () => {
+    // The same self-reference and same-repository filters that apply to
+    // PR-body refs apply to footer-sourced refs: a commit footer closing the
+    // sub-PR's own number is dropped, and a cross-repo `owner/repo#N` footer
+    // is never matched by the recognizer (it matches bare `#N` only).
+    const gh = createFakeGh({
+      branchCommits: {
+        develop: [
+          makeCommit("c1", "fix: a (#72)", date("2026-01-05T10:00:00Z")),
+        ],
+        staging: [makeCommit("s1", "chore: old", date("2025-12-01T10:00:00Z"))],
+      },
+      pullBodies: { 72: "Just a description." },
+      pullCommits: {
+        72: [
+          makeCommit(
+            "sub1",
+            "fix: a\n\nCloses #72\nCloses octo-org/octo-repo#100\nResolves #60",
+            date("2026-01-05T09:00:00Z"),
+          ),
+        ],
+      },
+    });
+    const { log } = silentLogger();
+
+    await runPromotion({ branchRef: "develop", config, gh, log });
+
+    const body = gh.createdPRs[0]!.body;
+    expect(body).toContain("Closes #60");
+    expect(body).not.toContain("Closes #72"); // self-reference
+    expect(body).not.toContain("#100"); // cross-repo
+  });
+
   it("survives a 404 from getPullBody (sub-PR hard-deleted) — promotion PR still upserts", async () => {
     // pullBodies map omits #72, so fakeGh.getPullBody returns null. The
     // production GitHubClient returns null on 404 from octokit. Either

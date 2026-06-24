@@ -28691,12 +28691,19 @@ async function mapWithConcurrency(items, limit, fn) {
 async function aggregateClosesRefs(gh, pending) {
   const subPrNumbers = pending.map((c) => extractTrailingPrNumber(c.title)).filter((n) => n !== null);
   if (subPrNumbers.length === 0) return [];
-  const bodies = await mapWithConcurrency(
+  const perPrRefs = await mapWithConcurrency(
     subPrNumbers,
     GET_PULL_BODY_CONCURRENCY,
-    (n) => gh.getPullBody(n)
+    async (n) => {
+      const [body, commits] = await Promise.all([
+        gh.getPullBody(n),
+        gh.listPullCommits(n)
+      ]);
+      const texts = [body, ...commits.flatMap((c) => [c.title, c.body])];
+      return texts.flatMap(extractClosesRefs);
+    }
   );
-  const refs = bodies.flatMap(extractClosesRefs);
+  const refs = perPrRefs.flat();
   const filtered = refs.filter((n) => !subPrNumbers.includes(n));
   return Array.from(new Set(filtered)).sort((a, b) => a - b);
 }
