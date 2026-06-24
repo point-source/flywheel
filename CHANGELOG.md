@@ -1,3 +1,10 @@
+# [2.2.0-dev.2](https://github.com/point-source/flywheel/compare/v2.2.0-dev.1...v2.2.0-dev.2) (2026-06-24)
+
+
+### Features
+
+* aggregate promotion Closes #N references from sub-PR commit footers ([#272](https://github.com/point-source/flywheel/issues/272)) ([a193e6f](https://github.com/point-source/flywheel/commit/a193e6f1f4a293421810b86ad2fd46211e7580a0)), closes [#N](https://github.com/point-source/flywheel/issues/N) [#265](https://github.com/point-source/flywheel/issues/265) [#265](https://github.com/point-source/flywheel/issues/265) [#265](https://github.com/point-source/flywheel/issues/265) [#N](https://github.com/point-source/flywheel/issues/N) [#N](https://github.com/point-source/flywheel/issues/N) [#N](https://github.com/point-source/flywheel/issues/N) [#265](https://github.com/point-source/flywheel/issues/265) [#NN](https://github.com/point-source/flywheel/issues/NN) [#NN](https://github.com/point-source/flywheel/issues/NN)
+
 # [2.2.0-dev.1](https://github.com/point-source/flywheel/compare/v2.1.0...v2.2.0-dev.1) (2026-06-24)
 
 
