@@ -14,6 +14,11 @@ export interface FakeCall {
 }
 
 export interface FakeGhInit {
+  /**
+   * PR-number → commit list. Missing entries return `[]`, modeling the real
+   * GitHubClient.listPullCommits, which returns `[]` on a 404 (sub-PR
+   * hard-deleted, or a trailing (#NN) that isn't a PR) — see #265.
+   */
   pullCommits?: Record<number, Commit[]>;
   branchCommits?: Record<string, Commit[]>;
   openPRs?: Record<string, PRSummary[]>;
