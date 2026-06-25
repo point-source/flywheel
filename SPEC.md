@@ -3910,7 +3910,7 @@ at it. It adds no load to the rate-limited sandbox (§spec:sandbox-test-budget).
 
 ## Gating checks required on develop §spec:develop-gating-required
 
-*Status: not started*
+*Status: complete*
 
 flywheel's own `develop` branch carries no required status checks, and flywheel
 auto-merges PRs whose title type is in `develop`'s `auto_merge` list (`feat`,
