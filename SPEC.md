@@ -3809,3 +3809,149 @@ PR-body-plus-footer case that shall deduplicate, and a trailing `(#N)` that
 shall not be read as a closing reference. The tests exercise the aggregation directly
 and add no load to the rate-limited e2e sandbox (§spec:sandbox-test-budget,
 §req:sandbox-ci-budget). §req:promotion-closes-footers-criteria §req:promotion-closes-footers-constraints
+
+## Single local PR-gating command §spec:local-pr-gate
+
+*Status: complete*
+
+flywheel's PR-gating checks are spread across independent GitHub Actions
+workflows with no aggregator in front of them: `verify-dist.yml` runs
+`npm run typecheck`, `npm test`, a fresh `npm run build`, and
+`git diff --exit-code -- core/dist/`; `governance-lint.yml` runs the Vale prose
+rules, markdownlint, and the SPEC/ROADMAP/README status-line, slug, and
+cross-reference checks vendored in `scripts/governance-lint.sh`. `package.json`
+exposes `typecheck`, `test`, `build`, and `verify-dist` as separate scripts but
+nothing that runs the full gating set, and there is no Makefile or justfile. A
+contributor who wants to know "would my PR pass CI?" has to already know the
+complete list of gating jobs and run each by hand. The contributor-facing docs
+make this worse: CLAUDE.md's "Build / test essentials" and CONTRIBUTING.md's
+pre-submission checklist enumerate the *code* checks (typecheck / test /
+verify-dist) and never mention the governance lint as a local step, so a
+contributor anchored on that list runs the code checks and silently skips the
+prose/governance one. Because `develop` carries no required status checks and
+flywheel auto-merges eligible PRs, a skipped local check is not caught at the
+gate either — the PR merges red, the violation lands on `develop`, and a fix
+still in flight is stranded on the already-merged branch. This is exactly how a
+deprecated-keyword Vale violation shipped to `develop` and needed a follow-up PR
+to clean. §req:local-pr-gate
+
+flywheel exposes a single documented command — `npm run check` — that runs every
+PR-gating check in fail-fast order, and CLAUDE.md and CONTRIBUTING.md present it
+as *the* pre-PR step.
+
+**Observable behavior.**
+
+- The command runs the typecheck, the unit tests, the `core/dist/` bundle
+  verification (rebuild + `git diff --exit-code`), and the governance/prose lint
+  (`scripts/governance-lint.sh`) — every PR-gating check, none omitted.
+  Verifiable: introduce a type error, a failing unit test, a stale `core/dist/`,
+  or a Vale / markdownlint / status-line violation, and the command reports each.
+  §req:local-pr-gate-criteria
+- When a check fails, the command stops at that check and its output identifies
+  which gate failed; it does not run the later checks past a failure, so the
+  contributor is not left guessing among the workflows. §req:local-pr-gate-criteria
+- When the command passes on a clean change, that change's PR does not fail any
+  corresponding gating CI job (`verify-dist.yml`, `governance-lint.yml`) — local
+  and CI agree because the command runs the same vendored checks CI runs.
+  §req:local-pr-gate-criteria
+- The governance lint runs as part of the command by default; the contributor
+  does not need to know `scripts/governance-lint.sh` exists or invoke it
+  separately — closing the exact gap that let a Vale violation reach `develop`.
+  §req:local-pr-gate-criteria
+- The command does not run the sandbox-bound integration or e2e suites, and the
+  documentation for the command states that exclusion and why (the shared
+  rate-limit budget, §spec:sandbox-test-budget / §req:sandbox-ci-budget), so a
+  reader knows the command is the *PR-gating* set, not "all tests."
+  §req:local-pr-gate-criteria §req:local-pr-gate-constraints
+- A gating check whose tool is not a plain npm dependency — notably the Vale
+  binary — is a documented prerequisite, and when it is absent the command
+  reports the check as missing rather than passing. A skipped check never reports
+  success; that is the failure mode this command exists to remove.
+  §req:local-pr-gate-constraints
+- CLAUDE.md and CONTRIBUTING.md present this command as the pre-PR gate; the
+  previous partial "essentials" / checklist framing no longer reads as the
+  complete pre-PR set. §req:local-pr-gate-criteria §req:local-pr-gate-stories
+
+**Why.**
+
+- *Composition, not reimplementation.* The command delegates to the checks that
+  already exist — the same `tsc` / `vitest` / build-and-diff and the same
+  `scripts/governance-lint.sh` that `governance-lint.yml` runs — so there is one
+  source of truth and a local pass and a CI pass cannot diverge. If a check's
+  definition changes, the command picks it up because it calls rather than copies.
+  §req:local-pr-gate-constraints
+- *Cheap layer only.* The gating set is the fast, offline layer (typecheck, unit
+  tests, a local rebuild/diff, local prose/structure lint) and completes in
+  seconds without the sandbox. Pulling the rate-limited integration/e2e suites
+  into the default gate would defeat "run it before every PR," so they stay out
+  and the exclusion is stated where the command is documented rather than left as
+  a silent gap. §req:local-pr-gate-constraints §req:sandbox-ci-budget
+- *The fix is documentation as much as tooling.* The skipped-check failure mode
+  is driven by the partial list a contributor anchors on. Naming one command as
+  the pre-PR step and retiring the partial framing is the part that actually
+  removes the gap; a script with no doc change would leave the anchor in place.
+  §req:local-pr-gate
+
+**Alternatives considered.**
+
+- *Leaving the scripts separate and just documenting all four.* Rejected: a
+  four-item list is exactly the thing a contributor partially runs; a single
+  front door is the point. §req:local-pr-gate
+- *A pre-push / pre-commit hook (husky / lefthook) that makes the gate
+  unskippable.* Explicitly out of scope and deferred — the deliverable is the one
+  command and its documentation, not Git-hook enforcement, which is a separate
+  decision. §req:local-pr-gate-constraints §req:local-pr-gate-priorities
+
+**Verification.** The command is verified end-to-end by injecting one fault of
+each gated kind — a type error, a failing unit test, a stale `core/dist/`, and a
+governance violation — and confirming the single command surfaces each and stops
+at it. It adds no load to the rate-limited sandbox (§spec:sandbox-test-budget).
+§req:local-pr-gate-criteria
+
+## Gating checks required on develop §spec:develop-gating-required
+
+*Status: complete*
+
+flywheel's own `develop` branch carries no required status checks, and flywheel
+auto-merges PRs whose title type is in `develop`'s `auto_merge` list (`feat`,
+`fix`, `chore`, …) the moment they are mergeable. A PR therefore merges into
+`develop` even with a red gating check — which is how a skipped local check ships
+the violation outright and strands any in-flight fix on the already-merged
+branch. The single local command (§spec:local-pr-gate) removes the *cause* (a
+missed local check) but not the *failure mode*: nothing stops a red check from
+auto-merging. flywheel requires its PR-gating checks — at least the governance
+lint and the `core/dist/` verification — as status checks on `develop`, so a PR
+with a red gating check is not eligible for auto-merge and is held until the
+check is green. §req:local-pr-gate
+
+**Observable behavior.**
+
+- A PR into `develop` whose governance-lint or `core/dist/` verification is red
+  is not auto-merged; it waits for the required checks to go green. Verifiable: a
+  PR carrying a deliberately stale `core/dist/` or a Vale violation does not merge
+  on its own. §req:local-pr-gate-criteria
+- A PR whose title type is auto-merge-eligible still receives flywheel's
+  auto-merge enablement; native auto-merge then fires only once the required
+  checks pass, rather than the instant the PR is mergeable. §req:local-pr-gate-stories
+
+**Why.**
+
+- *Closes the strand-the-fix hole.* Requiring the gating checks on `develop` is
+  the deeper half of the fix: even when a contributor skips the local command,
+  the red check now blocks the merge instead of letting the violation land and
+  stranding the follow-up fix. §req:local-pr-gate
+- *Deliberate posture change, scoped to flywheel's own `develop`.* This tightens
+  flywheel's documented fast-auto-merge behavior (§spec:release-gate,
+  §req:release-safety-gate and the broader auto-merge model): the accepted
+  tradeoff is a little less merge speed on flywheel's own development branch in
+  exchange for the guarantee that a red gating check cannot ship. It is scoped to
+  flywheel-the-repo — required checks are configured as ordinary GitHub
+  branch-protection on `develop`, not something `.flywheel.yml` sets, so it
+  changes nothing flywheel configures on adopter branches. §req:local-pr-gate-constraints
+
+**Tradeoffs accepted.**
+
+- Auto-merge on `develop` no longer fires the instant a PR is mergeable; it waits
+  for the required checks. Accepted for the named gating checks because the
+  alternative is shipping red. This is contributor-facing dogfooding only and
+  adds no surface an adopter consumes. §req:local-pr-gate-constraints

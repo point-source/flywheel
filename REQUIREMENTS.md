@@ -3297,3 +3297,180 @@ protect releases or the v2 major and below the setup-onboarding safety cluster,
 and is independent of all of them. Nice-to-have / explicitly deferred: honoring
 closing footers on commits that reached `develop` without a sub-PR number (direct
 pushes or PR-number-less commits) — out of scope by the sub-PR-model bound above.
+
+## Single local PR-gating command §req:local-pr-gate
+
+A contributor who wants to know "would my PR pass CI?" has no single thing to run.
+flywheel's PR-gating checks are spread across several independent GitHub Actions
+workflows — `verify-dist.yml` (the committed `core/dist/` bundle still matches a
+fresh build), the unit-test and typecheck jobs, and `governance-lint.yml` (Vale
+prose rules, markdownlint, and the SPEC/ROADMAP/README status-line, slug, and
+cross-reference structure checks) — and there is no aggregator in front of them.
+`package.json` exposes `typecheck`, `test`, `build`, and `verify-dist` as separate
+scripts but no command that runs the full gating set; there is no Makefile or
+justfile. So a contributor has to already know the complete list of gating jobs and
+run each one's commands by hand, in the right order.
+
+The pieces a contributor would assemble already exist — in particular the
+governance checks were vendored into `scripts/governance-lint.sh` (so a local run
+and the CI job share one source of truth). What is missing is the **single front
+door**: nothing composes the code checks and that governance script into one
+command, and nothing documents that command as *the* thing to run before opening a
+PR. The governance script existing is necessary but not sufficient — a contributor
+who does not already know it exists does not run it.
+
+Two repo facts remove the usual safety net that would otherwise catch a partial
+local run:
+
+1. **The contributor-facing docs anchor on a partial list.** CLAUDE.md's "Build /
+   test essentials" enumerates `typecheck / test / build / verify-dist` — the
+   *build* checks, not the full gating surface. A contributor (or agent) who
+   anchors on that list runs the code checks and silently skips the prose /
+   governance check. CONTRIBUTING.md names `governance-lint.sh` only as a workflow
+   flywheel dogfoods, not as a local step a contributor performs.
+2. **`develop` has no required status checks, and flywheel auto-merges.** A
+   `feat:` / `fix:` PR into `develop` auto-merges the moment it is mergeable —
+   even with a red check. So a missed local check is *also* not caught at the PR
+   gate: the PR merges anyway, the violation lands on `develop`, and any fix the
+   contributor was still pushing is stranded on the already-merged branch. This is
+   not hypothetical — it is exactly how a Vale prose-rule violation (a deprecated
+   requirement keyword flagged in REQUIREMENTS.md) shipped to `develop`: the originating PR was
+   opened after running only `typecheck` + `test` + `verify-dist`, the governance
+   job failed, the PR auto-merged before the fix, and a separate follow-up PR was
+   needed to clean `develop`.
+
+The net effect is that in this repo **local verification is the real gate** — and
+yet there is no single local command that constitutes that gate, and no protection
+that stops a red check from auto-merging. The users are flywheel's own
+**contributors and agents**, who today either round-trip through CI to discover a
+skipped check or ship the violation outright. (This is about contributing to
+flywheel itself; it is not a feature flywheel scaffolds into adopter repos.)
+
+The need has two parts, both opted into for this requirement:
+
+- **One command runs the full PR-gating set.** A contributor runs a single
+  documented command that executes every PR-gating check — typecheck, unit tests,
+  the `core/dist/` bundle verification, and the governance/prose lint
+  (`scripts/governance-lint.sh`) — in order, failing fast on the first failure,
+  with no gating check omitted. It **composes** the checks that already exist
+  (notably the vendored governance script) rather than reimplementing them, so the
+  local result and CI stay identical. The rate-limited integration and e2e suites
+  stay **out** of this command — they require the sandbox and its constrained
+  budget (§req:sandbox-ci-budget) — and that exclusion is stated where the command
+  is documented so it is a deliberate, visible choice rather than a silent gap.
+  This command becomes the documented pre-PR step in CLAUDE.md and
+  CONTRIBUTING.md, replacing the partial "essentials" framing that anchors
+  contributors on the code-only subset.
+- **A red gating check can no longer auto-merge into `develop`.** The gating
+  checks (at least the governance lint and `core/dist/` verification) are required
+  on `develop`, so a PR with a failing gating check is not eligible for
+  auto-merge — closing the failure mode where a skipped local check ships the
+  violation and strands the fix. This deliberately tightens flywheel's
+  fast-auto-merge posture on its own `develop` branch; the tradeoff is acknowledged
+  in the constraints below.
+
+This sits in the contributor-experience / CI area. It does not change flywheel's
+runtime behavior as a GitHub Action, the promotion or release flow, or anything an
+adopter consumes — it changes how a flywheel contributor verifies a change before
+it merges.
+
+## Single local PR-gating command success criteria §req:local-pr-gate-criteria
+
+- **One command, full gate.** A contributor runs a single documented command and
+  it executes every PR-gating check — typecheck, unit tests, `core/dist/`
+  verification, and the governance/prose lint — with no gating check omitted.
+  Verifiable end-to-end: introduce a fault of each kind (a type error, a failing
+  unit test, a stale `core/dist/`, and a Vale/markdownlint/status-line violation)
+  and confirm the single command reports each one.
+- **Fails fast and reports which check failed.** When a check fails, the command
+  stops at that check and its output makes clear which gate failed, so the
+  contributor is not left guessing among four workflows.
+- **Green locally ⇒ green on the PR's gating jobs.** When the command passes on a
+  clean change, that change's PR does not fail any of the corresponding gating CI
+  jobs (`verify-dist.yml`, the typecheck/unit jobs, `governance-lint.yml`) — local
+  and CI agree because the command runs the same vendored checks CI runs.
+- **Governance check is included by default, not opt-in.** The prose / governance
+  lint runs as part of the single command without the contributor having to know
+  `scripts/governance-lint.sh` exists or invoke it separately — the exact gap that
+  let a Vale violation reach `develop`.
+- **Integration / e2e are visibly excluded, not silently dropped.** The command
+  does not run the sandbox-bound integration or e2e suites, and the documentation
+  for the command states that exclusion and why (sandbox budget,
+  §req:sandbox-ci-budget), so a reader knows the command is the *PR-gating* set,
+  not "all tests."
+- **Docs point at the one command.** CLAUDE.md and CONTRIBUTING.md present this
+  single command as the pre-PR check; the previous partial "essentials" list no
+  longer reads as the complete pre-PR gate.
+- **A failing gating check cannot auto-merge into `develop`.** A PR whose
+  governance-lint or `core/dist/` verification is red is not auto-merged into
+  `develop` — it is held until the check is green. Verifiable: a PR with a
+  deliberately stale `core/dist/` or a Vale violation does not merge on its own.
+
+## Single local PR-gating command user stories §req:local-pr-gate-stories
+
+- As a flywheel contributor about to open a PR, I want one command that runs
+  everything CI will gate on, so I find a skipped prose or `dist/` problem in
+  seconds locally instead of discovering it after a round-trip through CI.
+- As an agent contributing to flywheel, I want a single documented pre-PR command
+  that includes the governance lint, so I do not anchor on the code-only
+  "essentials" list and silently skip the check that ships prose violations to
+  `develop`.
+- As a contributor who ran the gate and saw it pass, I want confidence that my
+  PR's gating jobs will pass too, so my local green is the real signal and I am not
+  re-running checks in CI to learn what I could have known locally.
+- As a maintainer, I want a red gating check to block auto-merge into `develop`,
+  so a check that someone skipped locally cannot merge the violation and strand the
+  fix on the already-merged branch.
+
+## Single local PR-gating command quality attributes and constraints §req:local-pr-gate-constraints
+
+- **Composes existing checks — one source of truth.** The command runs the same
+  underlying checks CI runs (notably the vendored `scripts/governance-lint.sh`), so
+  local and CI verdicts are identical. It does not fork or reimplement any check;
+  if a check's definition changes, the single command picks it up because it
+  delegates rather than duplicates.
+- **Fast and offline-friendly.** The gating set is the *cheap* layer — typecheck,
+  unit tests, a local rebuild/diff, and local prose/structure lint — and runs in
+  seconds without the rate-limited sandbox. The sandbox-bound integration and e2e
+  suites are explicitly excluded (§req:sandbox-ci-budget); pulling them into the
+  default gate would defeat the "run it before every PR" purpose.
+- **Tool availability is handled honestly.** A gating check whose tool is not a
+  plain npm dependency (e.g. Vale, a Go binary not on npm) shall either be a
+  documented prerequisite or be reported as missing — the command shall not silently
+  pass by skipping a check whose tool is absent. A skipped check that reports
+  success is the failure mode this requirement exists to remove.
+- **No new enforcement mechanism beyond the command itself.** A pre-push /
+  pre-commit hook that makes the check unskippable is explicitly **out of scope** —
+  the deliverable is the one command and its documentation, not Git-hook
+  enforcement. (Deferred, noted in priorities.)
+- **The `develop` protection is a deliberate posture change.** Requiring gating
+  checks on `develop` tightens flywheel's documented fast-auto-merge behavior on
+  its own default development branch (§req:release-safety-gate and the broader
+  auto-merge model): a PR now waits for the required checks to be green before
+  auto-merge fires. The tradeoff — a little less merge speed for the guarantee that
+  a red gating check cannot ship — is accepted for the gating checks named here and
+  scoped to flywheel's own `develop`; it does not change what flywheel configures
+  on adopter branches.
+- **Contributor-facing only.** This is internal dogfooding ergonomics. It is not a
+  capability flywheel installs into adopter repositories and adds no surface an
+  adopter consumes.
+
+## Single local PR-gating command priorities §req:local-pr-gate-priorities
+
+Required: a single documented command that runs the full PR-gating set
+(typecheck, unit tests, `core/dist/` verification, governance/prose lint) in order,
+fail-fast, with the governance check included by default and the sandbox suites
+visibly excluded; CLAUDE.md and CONTRIBUTING.md updated to present it as *the*
+pre-PR gate; and the gating checks (at least governance-lint and `core/dist/`
+verification) required on `develop` so a red check cannot auto-merge. The command
+itself is the higher-impact, higher-confidence, easier half and the immediate cure
+for the skipped-check round-trip; the `develop` branch-protection change is the
+deeper fix for the strand-the-fix failure mode and carries the auto-merge-posture
+tradeoff above. Both are in scope for this requirement. This composes work that
+mostly exists (the vendored governance runner is already present), so the delta is
+aggregation, documentation, and branch configuration rather than new checks. It
+ranks below the requirements that protect releases or the v2 major, and is
+independent of the setup-onboarding cluster. Nice-to-have / explicitly deferred: a
+pre-push or pre-commit hook (husky / lefthook) that makes running the gate
+unskippable — valuable, but the documented command is the unit of work here and
+hook enforcement is a separate decision.
