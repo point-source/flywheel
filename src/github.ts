@@ -208,12 +208,23 @@ export function createGitHubClient(token: string, repoFullName?: string): GitHub
     },
 
     async listPullCommits(pull_number) {
-      const all = await octokit.paginate(octokit.rest.pulls.listCommits, {
-        owner,
-        repo,
-        pull_number,
-        per_page: 100,
-      });
+      let all;
+      try {
+        all = await octokit.paginate(octokit.rest.pulls.listCommits, {
+          owner,
+          repo,
+          pull_number,
+          per_page: 100,
+        });
+      } catch (err: unknown) {
+        // 404 — same case getPullBody tolerates: the squash commit's trailing
+        // (#NN) pointed at a hard-deleted PR or something that isn't a PR.
+        // Treat as "no commits to aggregate" rather than aborting the whole
+        // promotion (Closes-aggregation reads commits too — see #265).
+        const status = (err as { status?: number } | undefined)?.status;
+        if (status === 404) return [];
+        throw err;
+      }
       return all.map((c) => {
         const message = c.commit.message;
         const { title, body } = splitMessage(message);

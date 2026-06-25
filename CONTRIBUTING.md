@@ -47,14 +47,18 @@ docs/design/testing-strategy.md target three-layer test architecture (see Status
 
 ## Edit-test-build loop
 
+While iterating, run the individual checks for fast feedback:
+
 ```bash
 npm run test:watch       # fast feedback while editing
 npm run typecheck        # strict TS check
-npm run build            # esbuild bundle → dist/index.cjs
-npm run verify-dist      # rebuild + fail if dist/ drifts (same check CI runs)
+npm run build            # esbuild bundle → core/dist/index.cjs
+npm run verify-dist      # rebuild + fail if core/dist/ drifts (same check CI runs)
 ```
 
-**`dist/index.cjs` is committed.** GitHub Actions executes the bundle directly; there is no install step at action runtime. The `Verify dist` workflow (`.github/workflows/verify-dist.yml`) runs `npm run build` on every PR and fails if the resulting `dist/` doesn't match what you committed. Always `npm run build` and stage `dist/index.cjs` before opening a PR.
+Then, before opening a PR, run the single gate — see [Pre-submission checklist](#pre-submission-checklist).
+
+**`core/dist/index.cjs` is committed.** GitHub Actions executes the bundle directly; there is no install step at action runtime. The `Verify dist` workflow (`.github/workflows/verify-dist.yml`) runs `npm run build` on every PR and fails if the resulting `core/dist/` doesn't match what you committed. `npm run check` (below) runs this check for you; always `npm run build` and stage `core/dist/` before opening a PR.
 
 ## Adding a `.flywheel.yml` validation case
 
@@ -108,6 +112,8 @@ Recognized types: `feat`, `fix`, `chore`, `refactor`, `perf`, `style`, `test`, `
 **Closing linked issues.** If this PR fixes a tracked issue, include a `Closes #N` trailer in the PR body (or `Fixes #N` / `Resolves #N` — all three are recognised, case-insensitive). The PR template at `.github/pull_request_template.md` prompts for one. Flywheel preserves these trailers when it rewrites the body, and the `develop → main` promotion PR aggregates them into its own body so the issues auto-close when the release lands on `main`. The trailing `(#N)` GitHub appends to a squash-merge title is **not** a closing reference — without an explicit keyword, the issue stays open. AI agents authoring PRs: when the work resolves an issue, always include the trailer; do not rely on the title parenthetical.
 
 **Auto-merge eligibility.** Both `develop` and `main` auto-merge `feat`, `fix`, `fix!`, `chore`, `refactor`, `perf`, `style`, `test`, `docs`, `ci`, `build`. They deliberately **exclude `feat!`** — major bumps require human review on this repo.
+
+**Required gating checks (`develop` and `main`).** An eligible title type gets auto-merge *enablement*, but native auto-merge does **not** fire the instant the PR is mergeable — it waits for the repo's required status checks to go green: `verify` (the `core/dist/` bundle verification, `verify-dist.yml`), `lint` (governance + Vale prose lint, `governance-lint.yml`), `integration`, and `flywheel/conventional-commit`. A PR whose `core/dist/` is stale or that carries a Vale violation is therefore **held, not merged**, until the check passes — even if you skipped `npm run check` locally. This is the deeper half of the local PR-gate (`npm run check`, see *Pre-submission checklist*): the local command removes the *cause* of a missed check; the required checks remove the *failure mode* of a red check auto-merging and stranding the follow-up fix. The accepted tradeoff is a little less merge speed on flywheel's own development branch in exchange for the guarantee that a red gating check cannot ship. These are ordinary GitHub branch-protection rulesets on this repository (see [`docs/maintainer/setup.md`](./docs/maintainer/setup.md)); they are **not** anything `.flywheel.yml` configures, so nothing flywheel sets on adopter branches changes.
 
 **Open PRs only when ready to merge.** A branch is your private work-in-progress; a PR is a request to merge. There is no "draft" intermediate state in this workflow. Iterate on the branch (push, run checks locally, etc.); when the work is ready, push and open the PR. Once open, Flywheel will rewrite the title, label it, and — if eligible — auto-merge as soon as required checks pass.
 
@@ -176,11 +182,20 @@ When your change could meaningfully break adopters (schema changes, validation s
 
 ## Pre-submission checklist
 
-Before opening a PR:
+Before opening a PR, run the single pre-PR gate:
 
-- [ ] `npm run typecheck` is clean
-- [ ] `npm test` is clean
-- [ ] `npm run verify-dist` is clean (i.e. you ran `npm run build` and committed `dist/index.cjs`)
+```bash
+npm run check
+```
+
+`npm run check` runs **every** PR-gating check — typecheck, unit tests, the `core/dist/` bundle verification, and the governance/prose lint (`scripts/governance-lint.sh`) — in fail-fast order, stopping at the first failure and naming the gate that failed. It composes the same scripts CI runs (`verify-dist.yml`, `governance-lint.yml`), so a green `check` means those jobs will pass too. This replaces running the code checks by hand: the governance/prose lint is included by default, so you no longer have to know `scripts/governance-lint.sh` exists or invoke it separately.
+
+- **[Vale](https://github.com/vale-cli/vale/releases) is a prerequisite** — a separate binary, not an npm dependency. Install it so the governance gate can run prose linting; without it the command reports the governance check as *missing* and fails rather than silently passing.
+- `npm run check` **excludes the integration and e2e suites** — they exercise a shared, rate-limited sandbox (see [`docs/maintainer/sandbox-setup.md`](./docs/maintainer/sandbox-setup.md)), so they are not part of the per-PR gate. Run them deliberately with `npm run test:integration` / `npm run test:e2e`.
+
+Then confirm:
+
+- [ ] `npm run check` is clean (covers typecheck, tests, `core/dist/` verification, and governance/prose lint)
 - [ ] PR title is a Conventional Commit; breaking change is signalled with `!` if appropriate
 - [ ] If you added a validation rule, you added a fixture in `test-fixtures/` and a test in `tests/config.test.ts`
 

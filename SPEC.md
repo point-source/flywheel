@@ -3524,6 +3524,148 @@ flywheel should not mutate, and is detected-and-routed, not resolved.
   scoped to only the rules flywheel's pushes require, limiting the blast radius of
   the grant.
 
+## Config-derived managed-branch coverage §spec:brownfield-managed-branches
+
+*Status: complete*
+
+The two **branch-scoped** brownfield detectors — branch protection missing the
+App as a bypass actor, and the signed-commit/tag requirement
+(§spec:brownfield-detection) — probe exactly the managed branches the adopter's
+**chosen configuration declares**, not a fixed candidate set. The managed-branch
+enumeration that both detectors share derives the branch list from the
+`.flywheel.yml` topology in force: the template the adopter picked
+(§spec:init-preset-wording), an existing `.flywheel.yml` already in the repo, or
+the default minimal config when none exists. There is no remaining
+`develop` / `main` / `staging` candidate list driving branch-scoped detection.
+§req:init-brownfield-managed-branches §req:init-brownfield-managed-branches-criteria
+§req:init-brownfield-managed-branches-constraints
+
+Because a configured topology can name a branch the repository does not yet have,
+`init.sh` also checks that **each configured managed branch exists** on the remote
+and, when one does not, reports a finding that names the specific missing branch
+and the two ways to resolve it — create the branch, or edit the config to name a
+branch that exists. The finding is bucket `config`, severity `warn`, in the shared
+bucket × severity vocabulary (§spec:preflight-classification): a managed branch the
+config points at but the repo lacks is a configuration mismatch the adopter
+resolves on their own terms, not an immediate hazard on existing state, and during
+onboarding it is frequently a transient in-progress condition (the minimal
+template's branch name is a placeholder the adopter is expected to edit), so it
+informs rather than hard-stopping the run. The branch set is taken from config in
+every case:
+
+- **An existing `.flywheel.yml`** drives detection against the branches it
+  declares — a re-run or a hand-written config probes the adopter's real topology
+  rather than a guess.
+- **No `.flywheel.yml`** causes `init.sh` to create a minimal config with `main`
+  as the sole managed branch, tell the adopter the config defaulted to `main`,
+  then check that `main` exists and warn if it does not — the adopter is never
+  silently handed a config pointing at a branch that isn't there.
+- **A picked template** (minimal, three-stage, multi-stream) supplies its declared
+  branches; the existence check then surfaces any the repo is missing.
+
+**Why config-derived rather than a hardcoded superset.** The previous candidate
+set — `develop`, `main`, `staging` — was hardcoded because at pre-flight the
+adopter's topology was treated as unknown, so the detectors probed flywheel's
+standard-topology superset and no-oped on the rest. The cost was a **silent false
+negative for every adopter whose managed branch is none of those three**: a
+`trunk` mainline, or a multi-stream config with custom stream branch names, still
+got the version-tag, release-conflict, and history/PR checks, but the two
+branch-scoped detectors never probed their real branches — so a genuine protection
+or signing hazard on a custom branch was simply not surfaced at `init` time. The
+adopter who most needed the warning (a non-default topology *and* a real conflict
+on it) was exactly the one who silently did not get it. The topology is in fact
+knowable at the moment the detectors run, because the branch-scoped checks already
+run after the configuration is chosen; reading the branch set from that
+configuration closes the gap for non-default adopters while leaving
+standard-topology adopters with exactly the coverage they have today. It is not a
+false positive either — no clean repo is wrongly blocked — so the only behavioral
+change is that custom-topology adopters now get the coverage default ones always
+had. §req:init-brownfield-managed-branches §req:init-brownfield-managed-branches-stories
+
+**Why coverage, not a new onboarding flow.** The scope is deliberately narrow:
+get branch-scoped detection to cover the right branches, plus the missing-branch
+alert. It does not add per-branch onboarding — no per-branch promotion-order,
+release-type, or auto-merge prompts; that fuller branch-mapping flow is out of
+scope. It extends §spec:brownfield-detection rather than forking a parallel
+detection or reporting path, and it adds no mutation of pre-existing repository
+state: `init.sh` never creates the missing branch and never edits protection as
+part of this work — it alerts. The one file it writes is the default minimal
+`.flywheel.yml` in the no-config case, which is `init.sh`'s normal scaffolding of
+its own config (the same write greenfield setup already performs), not a mutation
+of the adopter's existing state. §req:init-brownfield-managed-branches-constraints
+
+**Why this stays read-only and rate-limit-respectful.** Existence checks and
+protection probes use only the scopes `init.sh` already needs, probe only the
+configured branch set (never a superset), and keep the existing memoization so
+each branch is checked once per run; when the repository cannot be resolved the
+enumeration degrades to checking nothing, preserving today's bounded `gh` usage
+(§spec:preflight-gh-capability). A non-interactive or piped run degrades to
+detect-and-report with no mutation, consistent with §spec:brownfield-resolution.
+This is the same backstop relationship the rest of brownfield detection has: a
+hazard the config-derived set still misses is caught later by `doctor.sh`, which
+already derives its managed branches from the written `.flywheel.yml`, or by the
+first release / back-merge push. Closing the init-time gap lets the maintainer
+drop the documented `#263` false-negative caveat from the script.
+§req:init-brownfield-managed-branches-constraints
+
+**Criteria.**
+
+- The branch-scoped brownfield detectors shall probe exactly the managed branches
+  the chosen configuration declares — the picked template, an existing
+  `.flywheel.yml`, or the default config — and no standalone
+  `develop` / `main` / `staging` candidate list shall remain in that path. A
+  config that declares only `release` shall be probed on `release` and not on
+  `develop` / `main` / `staging`.
+- When `init.sh` runs against a repository whose only managed branch is a
+  non-default name (e.g. `trunk`) carrying a protection rule that omits the App as
+  a bypass actor, it shall surface the branch-protection-bypass finding on that
+  branch, the same way it surfaces it on `main` for a standard topology.
+- When the chosen configuration names a managed branch the repository does not
+  have, `init.sh` shall report a finding in the bucket × severity vocabulary that
+  names the specific missing branch and states both resolutions: create the
+  branch, or edit the config to name a branch that exists.
+- When a `.flywheel.yml` is already present, `init.sh` shall check the branches it
+  declares rather than a hardcoded set.
+- When no `.flywheel.yml` is present, `init.sh` shall create a minimal config with
+  `main` as the sole managed branch, tell the adopter the config defaulted to
+  `main`, and then check that `main` exists, warning if it does not.
+- A standard `develop` / `main` / `staging` adopter shall get exactly the
+  branch-scoped coverage they get today; the switch from a hardcoded list to a
+  config-derived set shall be invisible to them.
+- On a fresh repository where the chosen template's branches all exist (or where
+  `main` exists in the default case), no new finding shall fire and the run shall
+  proceed as before.
+- Branch-scoped detection shall remain read-only, probe only the configured branch
+  set, check each branch once per run, and degrade to checking nothing when the
+  repository cannot be resolved; a non-interactive run shall detect-and-report
+  with no mutation.
+- A second run shall read the now-written config and check the same declared
+  branches, neither drifting back to a hardcoded set nor re-defaulting a config
+  that already exists.
+- Fast local/CI tests with fixture repos and a stubbed `gh` shall exercise
+  custom-topology branch detection, the missing-branch alert, the existing-config
+  path, and the no-config `main` default, adding no load to the rate-limited e2e
+  sandbox (§spec:sandbox-test-budget).
+
+**Scope and alternatives.**
+
+- *Keeping the hardcoded `develop` / `main` / `staging` candidate set* was
+  rejected: it is the source of the silent false negative for every non-default
+  topology and is unnecessary once the branch set is read from the configuration
+  that is already chosen when the branch-scoped detectors run.
+- *Adding a full per-branch onboarding flow* (per-branch promotion-order,
+  release-type, auto-merge prompts) was rejected as out of scope: this work is
+  branch-detection coverage plus a missing-branch alert, not a new mapping UI.
+- *Creating the missing branch or editing protection automatically* was rejected:
+  this requirement is detect-and-report only and adds no mutation of pre-existing
+  repository state; resolution of a missing branch is the adopter's call between
+  the two named fixes.
+- *Reporting the missing-branch finding as a `block`* was rejected: a configured
+  branch absent at init is commonly a transient in-progress condition (placeholder
+  branch names the adopter edits) and is resolvable on the adopter's own terms, so
+  it warns rather than hard-stopping; the genuine downstream hazard is still
+  backstopped by `doctor.sh` and the first release push.
+
 ## Brownfield-safe onboarding docs §spec:brownfield-docs
 
 *Status: complete*
@@ -3571,3 +3713,245 @@ routes to (and the §0 completion check already mirrors the script's verdict per
 - *Removing the manual guide now that init automates the steps* was rejected: it
   is still the fallback the hard-stop routes to and the reference for what the
   inline resolvers do.
+
+## Promotion Closes-ref aggregation from commit footers §spec:promotion-closes-footers
+
+*Status: complete*
+
+GitHub honors closing keywords — `Closes #N`, `Fixes #N`, `Resolves #N` and
+their inflections — in two places: a pull request's description and a commit
+message. flywheel's promotion aggregation reads only the first. When it builds a
+promotion PR, `aggregateClosesRefs` (`src/promotion.ts`) recovers the trailing
+`(#N)` PR number from each pending commit's *title*, fetches that sub-PR's
+*body*, and scans the body for closing keywords with `CLOSES_KEYWORD_RE`. The
+commit message body — where a footer-style `Closes #N` lives — is never scanned.
+A contributor who put the closing keyword in a commit footer rather than the PR
+description therefore gets no auto-close on promotion and no linked-PR indicator
+on the issue.
+
+The footer convention is doubly erased on flywheel-managed repositories.
+flywheel squash-merges each sub-PR onto the source branch, collapsing the
+original per-commit footers into one synthesized commit — so GitHub's own
+commit-keyword handling never fires (the footer never lands as a default-branch
+commit), and flywheel's aggregation never harvests it (it reads PR bodies, not
+commit text). The aggregated promotion-PR body is the single artifact that
+reconciles shipped work to closed issues; a footer-only closing keyword drops
+silently out of that reconciliation, leaving the issue open with nothing
+surfaced. This is a robustness gap, not a regression: flywheel faithfully
+propagates the closing keywords that exist in PR bodies; it simply never looked
+at the other place GitHub looks. §req:promotion-closes-footers
+
+**Observable behavior.** When flywheel aggregates the issues a promotion PR
+closes, for each sub-PR reachable from a pending commit's trailing `(#N)` it
+scans both that sub-PR's description and that sub-PR's commit messages — titles
+and bodies — and unions the closing references found. Specifically:
+
+- When a sub-PR carries `Closes #N` only in a commit footer (not in the PR
+  description), merging the promotion PR closes issue #N and draws the
+  linked-PR indicator — the same outcome as if the keyword had been in the PR
+  body. §req:promotion-closes-footers-criteria
+- A closing keyword in a sub-PR's description still produces the auto-close and
+  linked-PR indicator exactly as before. Commit text is an added source, not a
+  replacement. §req:promotion-closes-footers-criteria
+- When the same `#N` appears in both a sub-PR's description and one of its
+  commit footers, the promotion PR lists issue #N once. §req:promotion-closes-footers-criteria
+- A trailing `(#N)` on a commit title is a PR number, not a closing reference: a
+  commit titled `… (#412)` with no closing keyword anywhere never causes the
+  promotion to close issue #412. Only an explicit closing keyword introduces a
+  closed issue. §req:promotion-closes-footers-criteria
+- The promotion never lists itself as an issue it closes (self-reference
+  filter), and a closing keyword pointing at another repository's issue is not
+  aggregated (same-repository filter) — both behave for footer-sourced
+  references exactly as they do for PR-body references. §req:promotion-closes-footers-criteria
+- Footer-sourced closing references are aggregated at every promotion edge
+  flywheel computes (e.g. each hop of a `develop → staging → main` topology),
+  not only the final hop. §req:promotion-closes-footers-criteria
+
+A commit that reached the source branch with no associated sub-PR number is out
+of scope: flywheel's model is that work lands via squash-merged sub-PRs
+reachable from a trailing `(#N)`, and chasing footers on orphan commits would
+scan commits no sub-PR gates. §req:promotion-closes-footers-constraints
+
+**Why.**
+
+- *One recognizer, two sources.* Commit titles and bodies are fed through the
+  same closing-keyword recognizer already applied to PR bodies, so the body and
+  footer paths can never diverge on what counts as a closing reference. No
+  second notion of "closing keyword" is introduced. §req:promotion-closes-footers-constraints
+- *Additive union ahead of the existing filters.* Footer references join body
+  references before the dedup, self-reference, and same-repository filtering the
+  aggregation already performs, so those filters apply uniformly to both sources
+  and the output stays deduplicated. The change widens only the text scanned
+  (PR body → PR body ∪ that sub-PR's commit titles and bodies); merge,
+  labelling, and back-merge behavior are untouched. §req:promotion-closes-footers-constraints
+- *Bounded by the sub-PR set already fetched.* The scan covers exactly the
+  sub-PRs flywheel already looks up to read bodies — the per-sub-PR read widens
+  from one body to that sub-PR's commit list, over the existing authenticated
+  GitHub access and the existing bounded-concurrency fan-out. No new permission
+  and no unbounded commit walk. §req:promotion-closes-footers-constraints
+
+**Alternatives considered.**
+
+- *Scanning the pending commits' own titles and bodies directly* (instead of
+  each sub-PR's commits) was rejected: the squash-merge collapses per-commit
+  footers into one synthesized commit on the source branch, so the original
+  footers are absent from the pending commit and survive only on the sub-PR's
+  commits. The sub-PR is therefore the unit that must be scanned. §req:promotion-closes-footers
+- *Honoring footers on orphan commits* (direct pushes or PR-number-less commits
+  that reached the source branch without a sub-PR) is explicitly deferred — out
+  of scope by the sub-PR-model bound, to avoid pulling in commits no sub-PR
+  gates. §req:promotion-closes-footers-priorities
+
+**Verification.** Promotion aggregation is process-critical glue — a defect
+silently leaves issues open or closes the wrong one — so the behavior ships with
+fast local unit coverage: a footer-only `Closes #N`, a mixed
+PR-body-plus-footer case that shall deduplicate, and a trailing `(#N)` that
+shall not be read as a closing reference. The tests exercise the aggregation directly
+and add no load to the rate-limited e2e sandbox (§spec:sandbox-test-budget,
+§req:sandbox-ci-budget). §req:promotion-closes-footers-criteria §req:promotion-closes-footers-constraints
+
+## Single local PR-gating command §spec:local-pr-gate
+
+*Status: complete*
+
+flywheel's PR-gating checks are spread across independent GitHub Actions
+workflows with no aggregator in front of them: `verify-dist.yml` runs
+`npm run typecheck`, `npm test`, a fresh `npm run build`, and
+`git diff --exit-code -- core/dist/`; `governance-lint.yml` runs the Vale prose
+rules, markdownlint, and the SPEC/ROADMAP/README status-line, slug, and
+cross-reference checks vendored in `scripts/governance-lint.sh`. `package.json`
+exposes `typecheck`, `test`, `build`, and `verify-dist` as separate scripts but
+nothing that runs the full gating set, and there is no Makefile or justfile. A
+contributor who wants to know "would my PR pass CI?" has to already know the
+complete list of gating jobs and run each by hand. The contributor-facing docs
+make this worse: CLAUDE.md's "Build / test essentials" and CONTRIBUTING.md's
+pre-submission checklist enumerate the *code* checks (typecheck / test /
+verify-dist) and never mention the governance lint as a local step, so a
+contributor anchored on that list runs the code checks and silently skips the
+prose/governance one. Because `develop` carries no required status checks and
+flywheel auto-merges eligible PRs, a skipped local check is not caught at the
+gate either — the PR merges red, the violation lands on `develop`, and a fix
+still in flight is stranded on the already-merged branch. This is exactly how a
+deprecated-keyword Vale violation shipped to `develop` and needed a follow-up PR
+to clean. §req:local-pr-gate
+
+flywheel exposes a single documented command — `npm run check` — that runs every
+PR-gating check in fail-fast order, and CLAUDE.md and CONTRIBUTING.md present it
+as *the* pre-PR step.
+
+**Observable behavior.**
+
+- The command runs the typecheck, the unit tests, the `core/dist/` bundle
+  verification (rebuild + `git diff --exit-code`), and the governance/prose lint
+  (`scripts/governance-lint.sh`) — every PR-gating check, none omitted.
+  Verifiable: introduce a type error, a failing unit test, a stale `core/dist/`,
+  or a Vale / markdownlint / status-line violation, and the command reports each.
+  §req:local-pr-gate-criteria
+- When a check fails, the command stops at that check and its output identifies
+  which gate failed; it does not run the later checks past a failure, so the
+  contributor is not left guessing among the workflows. §req:local-pr-gate-criteria
+- When the command passes on a clean change, that change's PR does not fail any
+  corresponding gating CI job (`verify-dist.yml`, `governance-lint.yml`) — local
+  and CI agree because the command runs the same vendored checks CI runs.
+  §req:local-pr-gate-criteria
+- The governance lint runs as part of the command by default; the contributor
+  does not need to know `scripts/governance-lint.sh` exists or invoke it
+  separately — closing the exact gap that let a Vale violation reach `develop`.
+  §req:local-pr-gate-criteria
+- The command does not run the sandbox-bound integration or e2e suites, and the
+  documentation for the command states that exclusion and why (the shared
+  rate-limit budget, §spec:sandbox-test-budget / §req:sandbox-ci-budget), so a
+  reader knows the command is the *PR-gating* set, not "all tests."
+  §req:local-pr-gate-criteria §req:local-pr-gate-constraints
+- A gating check whose tool is not a plain npm dependency — notably the Vale
+  binary — is a documented prerequisite, and when it is absent the command
+  reports the check as missing rather than passing. A skipped check never reports
+  success; that is the failure mode this command exists to remove.
+  §req:local-pr-gate-constraints
+- CLAUDE.md and CONTRIBUTING.md present this command as the pre-PR gate; the
+  previous partial "essentials" / checklist framing no longer reads as the
+  complete pre-PR set. §req:local-pr-gate-criteria §req:local-pr-gate-stories
+
+**Why.**
+
+- *Composition, not reimplementation.* The command delegates to the checks that
+  already exist — the same `tsc` / `vitest` / build-and-diff and the same
+  `scripts/governance-lint.sh` that `governance-lint.yml` runs — so there is one
+  source of truth and a local pass and a CI pass cannot diverge. If a check's
+  definition changes, the command picks it up because it calls rather than copies.
+  §req:local-pr-gate-constraints
+- *Cheap layer only.* The gating set is the fast, offline layer (typecheck, unit
+  tests, a local rebuild/diff, local prose/structure lint) and completes in
+  seconds without the sandbox. Pulling the rate-limited integration/e2e suites
+  into the default gate would defeat "run it before every PR," so they stay out
+  and the exclusion is stated where the command is documented rather than left as
+  a silent gap. §req:local-pr-gate-constraints §req:sandbox-ci-budget
+- *The fix is documentation as much as tooling.* The skipped-check failure mode
+  is driven by the partial list a contributor anchors on. Naming one command as
+  the pre-PR step and retiring the partial framing is the part that actually
+  removes the gap; a script with no doc change would leave the anchor in place.
+  §req:local-pr-gate
+
+**Alternatives considered.**
+
+- *Leaving the scripts separate and just documenting all four.* Rejected: a
+  four-item list is exactly the thing a contributor partially runs; a single
+  front door is the point. §req:local-pr-gate
+- *A pre-push / pre-commit hook (husky / lefthook) that makes the gate
+  unskippable.* Explicitly out of scope and deferred — the deliverable is the one
+  command and its documentation, not Git-hook enforcement, which is a separate
+  decision. §req:local-pr-gate-constraints §req:local-pr-gate-priorities
+
+**Verification.** The command is verified end-to-end by injecting one fault of
+each gated kind — a type error, a failing unit test, a stale `core/dist/`, and a
+governance violation — and confirming the single command surfaces each and stops
+at it. It adds no load to the rate-limited sandbox (§spec:sandbox-test-budget).
+§req:local-pr-gate-criteria
+
+## Gating checks required on develop §spec:develop-gating-required
+
+*Status: complete*
+
+flywheel's own `develop` branch carries no required status checks, and flywheel
+auto-merges PRs whose title type is in `develop`'s `auto_merge` list (`feat`,
+`fix`, `chore`, …) the moment they are mergeable. A PR therefore merges into
+`develop` even with a red gating check — which is how a skipped local check ships
+the violation outright and strands any in-flight fix on the already-merged
+branch. The single local command (§spec:local-pr-gate) removes the *cause* (a
+missed local check) but not the *failure mode*: nothing stops a red check from
+auto-merging. flywheel requires its PR-gating checks — at least the governance
+lint and the `core/dist/` verification — as status checks on `develop`, so a PR
+with a red gating check is not eligible for auto-merge and is held until the
+check is green. §req:local-pr-gate
+
+**Observable behavior.**
+
+- A PR into `develop` whose governance-lint or `core/dist/` verification is red
+  is not auto-merged; it waits for the required checks to go green. Verifiable: a
+  PR carrying a deliberately stale `core/dist/` or a Vale violation does not merge
+  on its own. §req:local-pr-gate-criteria
+- A PR whose title type is auto-merge-eligible still receives flywheel's
+  auto-merge enablement; native auto-merge then fires only once the required
+  checks pass, rather than the instant the PR is mergeable. §req:local-pr-gate-stories
+
+**Why.**
+
+- *Closes the strand-the-fix hole.* Requiring the gating checks on `develop` is
+  the deeper half of the fix: even when a contributor skips the local command,
+  the red check now blocks the merge instead of letting the violation land and
+  stranding the follow-up fix. §req:local-pr-gate
+- *Deliberate posture change, scoped to flywheel's own `develop`.* This tightens
+  flywheel's documented fast-auto-merge behavior (§spec:release-gate,
+  §req:release-safety-gate and the broader auto-merge model): the accepted
+  tradeoff is a little less merge speed on flywheel's own development branch in
+  exchange for the guarantee that a red gating check cannot ship. It is scoped to
+  flywheel-the-repo — required checks are configured as ordinary GitHub
+  branch-protection on `develop`, not something `.flywheel.yml` sets, so it
+  changes nothing flywheel configures on adopter branches. §req:local-pr-gate-constraints
+
+**Tradeoffs accepted.**
+
+- Auto-merge on `develop` no longer fires the instant a PR is mergeable; it waits
+  for the required checks. Accepted for the named gating checks because the
+  alternative is shipping red. This is contributor-facing dogfooding only and
+  adds no surface an adopter consumes. §req:local-pr-gate-constraints

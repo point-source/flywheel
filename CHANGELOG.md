@@ -1,3 +1,24 @@
+# [2.2.0-dev.3](https://github.com/point-source/flywheel/compare/v2.2.0-dev.2...v2.2.0-dev.3) (2026-06-25)
+
+
+### Features
+
+* single local PR-gating command and required develop gating checks ([#275](https://github.com/point-source/flywheel/issues/275)) ([1fe17bd](https://github.com/point-source/flywheel/commit/1fe17bde3dac84620857d8c34f64c4cfa7ebf055)), closes [#274](https://github.com/point-source/flywheel/issues/274) [#274](https://github.com/point-source/flywheel/issues/274) [#60](https://github.com/point-source/flywheel/issues/60)
+
+# [2.2.0-dev.2](https://github.com/point-source/flywheel/compare/v2.2.0-dev.1...v2.2.0-dev.2) (2026-06-24)
+
+
+### Features
+
+* aggregate promotion Closes #N references from sub-PR commit footers ([#272](https://github.com/point-source/flywheel/issues/272)) ([a193e6f](https://github.com/point-source/flywheel/commit/a193e6f1f4a293421810b86ad2fd46211e7580a0)), closes [#N](https://github.com/point-source/flywheel/issues/N) [#265](https://github.com/point-source/flywheel/issues/265) [#265](https://github.com/point-source/flywheel/issues/265) [#265](https://github.com/point-source/flywheel/issues/265) [#N](https://github.com/point-source/flywheel/issues/N) [#N](https://github.com/point-source/flywheel/issues/N) [#N](https://github.com/point-source/flywheel/issues/N) [#265](https://github.com/point-source/flywheel/issues/265) [#NN](https://github.com/point-source/flywheel/issues/NN) [#NN](https://github.com/point-source/flywheel/issues/NN)
+
+# [2.2.0-dev.1](https://github.com/point-source/flywheel/compare/v2.1.0...v2.2.0-dev.1) (2026-06-24)
+
+
+### Features
+
+* drive init.sh brownfield branch detection from the adopter's configured managed branches ([#269](https://github.com/point-source/flywheel/issues/269)) ([19b2764](https://github.com/point-source/flywheel/commit/19b276405bd7ca29dd744cb39468c9c4cb424b06)), closes [#263](https://github.com/point-source/flywheel/issues/263) [#263](https://github.com/point-source/flywheel/issues/263) [#263](https://github.com/point-source/flywheel/issues/263) [#263](https://github.com/point-source/flywheel/issues/263) [#263](https://github.com/point-source/flywheel/issues/263) [#263](https://github.com/point-source/flywheel/issues/263) [#263](https://github.com/point-source/flywheel/issues/263) [#263](https://github.com/point-source/flywheel/issues/263) [#263](https://github.com/point-source/flywheel/issues/263) [#263](https://github.com/point-source/flywheel/issues/263) [#263](https://github.com/point-source/flywheel/issues/263) [#263](https://github.com/point-source/flywheel/issues/263) [preflight-#capability](https://github.com/preflight-/issues/capability)
+
 # [2.1.0](https://github.com/point-source/flywheel/compare/v2.0.1...v2.1.0) (2026-06-23)
 
 
