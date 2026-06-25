@@ -1,3 +1,10 @@
+# [2.2.0-dev.3](https://github.com/point-source/flywheel/compare/v2.2.0-dev.2...v2.2.0-dev.3) (2026-06-25)
+
+
+### Features
+
+* single local PR-gating command and required develop gating checks ([#275](https://github.com/point-source/flywheel/issues/275)) ([1fe17bd](https://github.com/point-source/flywheel/commit/1fe17bde3dac84620857d8c34f64c4cfa7ebf055)), closes [#274](https://github.com/point-source/flywheel/issues/274) [#274](https://github.com/point-source/flywheel/issues/274) [#60](https://github.com/point-source/flywheel/issues/60)
+
 # [2.2.0-dev.2](https://github.com/point-source/flywheel/compare/v2.2.0-dev.1...v2.2.0-dev.2) (2026-06-24)
 
 
