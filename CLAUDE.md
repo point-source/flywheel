@@ -26,7 +26,7 @@ Three non-negotiables you'll hit immediately:
 
 ## Architecture in one paragraph
 
-Flywheel is a single TypeScript GitHub Action (`src/main.ts`) that dispatches by event type to one of two flows: `src/pr-flow.ts` (rewrites PR titles, applies `flywheel:auto-merge` / `flywheel:needs-review`, enables native auto-merge) or `src/push-flow.ts` (generates `.releaserc.json`, gates the `semantic-release` step in `flywheel-push.yml`, computes back-merge targets). It is stateless — the repository's branches, tags, PRs, and labels are the state machine; nothing is held between runs. `.flywheel.yml` is the single source of truth for branch topology, stream definitions, and auto-merge rules. `src/config.ts` validates it; `src/release-rc.ts` derives the semantic-release config from it at runtime (adopters never edit `.releaserc.json` themselves).
+Flywheel is a single TypeScript GitHub Action (`src/main.ts`) that dispatches by event type to one of two flows: `src/pr-flow.ts` (rewrites PR titles, applies `flywheel:auto-merge` / `flywheel:needs-review`, enables native auto-merge) or `src/push-flow.ts` (generates `.releaserc.cjs`, gates the `semantic-release` step in `flywheel-push.yml`, computes back-merge targets). It is stateless — the repository's branches, tags, PRs, and labels are the state machine; nothing is held between runs. `.flywheel.yml` is the single source of truth for branch topology, stream definitions, and auto-merge rules. `src/config.ts` validates it; `src/release-rc.ts` derives the semantic-release config from it at runtime (adopters never edit `.releaserc.cjs` themselves).
 
 ## Build / test essentials
 

@@ -1,12 +1,32 @@
 import { execFile } from "node:child_process";
-import { writeFile } from "node:fs/promises";
+import { unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
 
 import type { FlywheelConfig, Stream } from "./types.js";
-import { generateReleaseRc, usesBuildPlaceholder } from "./release-rc.js";
+import {
+  generateReleaseRc,
+  serializeReleaseRc,
+  usesBuildPlaceholder,
+  RELEASE_CONFIG_FILENAME,
+} from "./release-rc.js";
 
 const execFileAsync = promisify(execFile);
+
+// semantic-release (cosmiconfig) discovers these config filenames *before*
+// RELEASE_CONFIG_FILENAME (`.releaserc.cjs`), so a committed copy of any of them
+// would shadow the config flywheel generates. Flywheel owns the release config
+// (adopters never configure semantic-release directly — §spec:release-notes-dedup),
+// so we remove any of them from the workspace before writing the generated one.
+// `.releaserc` (extensionless) and package.json also precede `.releaserc.cjs`,
+// but they preceded the previous `.releaserc.json` too, so leaving them matches
+// the prior authority contract rather than expanding it.
+const SHADOWING_CONFIG_FILES = [
+  ".releaserc.json",
+  ".releaserc.yaml",
+  ".releaserc.yml",
+  ".releaserc.js",
+];
 
 export interface PushFlowDeps {
   branchRef: string;
@@ -14,6 +34,7 @@ export interface PushFlowDeps {
   workspace: string;
   log: PushLogger;
   writer?: (path: string, contents: string) => Promise<void>;
+  remover?: (path: string) => Promise<void>;
   buildNumberProvider?: (workspace: string) => Promise<number>;
 }
 
@@ -45,9 +66,13 @@ export async function runPushFlow(deps: PushFlowDeps): Promise<PushFlowOutcome> 
 
   const buildNumber = await maybeComputeBuildNumber(deps);
   const rc = generateReleaseRc(stream, deps.config, buildNumber, branch.name);
-  const rcPath = join(deps.workspace, ".releaserc.json");
+  const rcPath = join(deps.workspace, RELEASE_CONFIG_FILENAME);
   const writer = deps.writer ?? defaultWriter;
-  await writer(rcPath, JSON.stringify(rc, null, 2));
+  const remover = deps.remover ?? defaultRemover;
+  for (const name of SHADOWING_CONFIG_FILES) {
+    await remover(join(deps.workspace, name));
+  }
+  await writer(rcPath, serializeReleaseRc(rc));
 
   deps.log.info(
     `push: branch ${deps.branchRef} is in stream ${stream.name}; wrote ${rcPath}.`,
@@ -84,6 +109,16 @@ export function getUpstreamBranches(
 
 async function defaultWriter(path: string, contents: string): Promise<void> {
   await writeFile(path, contents, "utf8");
+}
+
+// Best-effort removal of a shadowing config file: a missing file is the common
+// case (adopters rarely commit one) and is not an error.
+async function defaultRemover(path: string): Promise<void> {
+  try {
+    await unlink(path);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+  }
 }
 
 async function maybeComputeBuildNumber(deps: PushFlowDeps): Promise<number | undefined> {

@@ -3,10 +3,16 @@ import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { generateNotes } from "@semantic-release/release-notes-generator";
 import { describe, expect, it } from "vitest";
 
-import { generateReleaseRc, chooseTagFormat } from "../src/release-rc.js";
+import {
+  generateReleaseRc,
+  serializeReleaseRc,
+  chooseTagFormat,
+} from "../src/release-rc.js";
 import type { FlywheelConfig } from "../src/types.js";
+import { loadReleaseConfig } from "./helpers/loadReleaseConfig.js";
 
 // Override of @semantic-release/git's default message: drops the `[skip ci]`
 // token the plugin would otherwise append. See src/release-rc.ts for the why.
@@ -119,7 +125,10 @@ describe("generateReleaseRc", () => {
     const rc = generateReleaseRc(config.streams[0]!, config);
     expect(rc.plugins).toEqual([
       "@semantic-release/commit-analyzer",
-      "@semantic-release/release-notes-generator",
+      [
+        "@semantic-release/release-notes-generator",
+        { writerOpts: { finalizeContext: expect.any(String) } },
+      ],
       "@semantic-release/changelog",
       "@semantic-release/exec",
       ["@semantic-release/git", { assets: ["CHANGELOG.md"], message: GIT_MESSAGE }],
@@ -160,7 +169,10 @@ describe("generateReleaseRc", () => {
       const rc = generateReleaseRc(baseConfig.streams[0]!, baseConfig);
       expect(rc.plugins).toEqual([
         "@semantic-release/commit-analyzer",
-        "@semantic-release/release-notes-generator",
+        [
+          "@semantic-release/release-notes-generator",
+          { writerOpts: { finalizeContext: expect.any(String) } },
+        ],
         "@semantic-release/changelog",
         "@semantic-release/exec",
         ["@semantic-release/git", { assets: ["CHANGELOG.md"], message: GIT_MESSAGE }],
@@ -623,5 +635,155 @@ describe("chooseTagFormat — edge cases", () => {
     ];
     expect(chooseTagFormat(streams[0]!, streams)).toBe("customer-acme/v${version}");
     expect(chooseTagFormat(streams[1]!, streams)).toBe("v${version}");
+  });
+});
+
+// §spec:release-notes-dedup — the generated release-notes configuration must
+// render a clean `closes` list: each closed issue at most once, uniqueness by
+// (owner, repository, number), and only references introduced by a closing
+// keyword. These tests run a noisy fixture commit through the *actually
+// generated* config (serialized to `.releaserc.cjs`, loaded back, and handed to
+// the real @semantic-release/release-notes-generator), so they pin the rendered
+// output — not just the config shape. No live GitHub access, no e2e load.
+describe("release-notes de-duplication (§spec:release-notes-dedup)", () => {
+  // Load the writerOpts flywheel actually emits: generate the rc, serialize it
+  // exactly as push-flow writes it, load the resulting module, and pull out the
+  // release-notes-generator options — real finalizeContext function and all.
+  function generatedWriterOpts(): unknown {
+    const config: FlywheelConfig = {
+      streams: [
+        {
+          name: "main-line",
+          branches: [{ name: "main", release: "production", auto_merge: [] }],
+        },
+      ],
+    };
+    const rc = generateReleaseRc(config.streams[0]!, config);
+    const loaded = loadReleaseConfig(serializeReleaseRc(rc)) as { plugins: unknown[] };
+    const entry = loaded.plugins.find(
+      (p): p is [string, { writerOpts: unknown }] =>
+        Array.isArray(p) && p[0] === "@semantic-release/release-notes-generator",
+    );
+    expect(entry, "generator plugin entry must carry an options object").toBeDefined();
+    return (entry![1] as { writerOpts: unknown }).writerOpts;
+  }
+
+  const REPO = "https://github.com/point-source/flywheel";
+
+  function commit(message: string) {
+    return {
+      hash: "d363a2f0000000000000000000000000000000000",
+      message,
+      committerDate: "2024-01-01",
+      author: { name: "x", email: "x@example.com" },
+      committer: { name: "x", email: "x@example.com" },
+    };
+  }
+
+  async function render(commits: ReturnType<typeof commit>[]): Promise<string> {
+    const writerOpts = generatedWriterOpts();
+    return generateNotes(
+      { writerOpts },
+      {
+        cwd: process.cwd(),
+        env: {},
+        options: { repositoryUrl: REPO },
+        lastRelease: { gitTag: "v1.0.0", version: "1.0.0" },
+        nextRelease: { gitTag: "v1.1.0", version: "1.1.0", channel: null },
+        commits,
+        logger: { log: () => undefined, error: () => undefined },
+      } as never,
+    );
+  }
+
+  // One squashed feat whose body repeats `closes #245` seven times (across the
+  // squashed sub-commits), closes a same-numbered issue here (#5) and in another
+  // repo (other/repo#5), and carries prose non-issue tokens plus bare sub-task
+  // numbers — none introduced by a closing keyword.
+  const NOISY_SQUASH = [
+    "feat: add capability layer (#247)",
+    "",
+    "* closes #245",
+    "* closes #245",
+    "* closes #245",
+    "* closes #245",
+    "* closes #245",
+    "* closes #245",
+    "* closes #245",
+    "* fixes #236 and resolves other/repo#5",
+    "* prose about #capability and preflight-#capability and #233-3",
+    "* sub-tasks #1 #2 #3 #4 #6 #7 #8 done (#247)",
+    "* closes #5",
+  ].join("\n");
+
+  // A change with only a bare `(#N)` PR suffix and no closing keyword.
+  const BARE_SUFFIX = "fix: unrelated tweak (#264)";
+
+  const count = (haystack: string, needle: string): number =>
+    haystack.split(needle).length - 1;
+
+  it("collapses a seven-times-repeated `closes #245` to exactly one entry", async () => {
+    const notes = await render([commit(NOISY_SQUASH)]);
+    expect(count(notes, "/issues/245)")).toBe(1);
+  });
+
+  it("keeps a cross-repo issue distinct from a same-numbered local issue", async () => {
+    const notes = await render([commit(NOISY_SQUASH)]);
+    expect(notes).toContain("other/repo/issues/5)");
+    expect(notes).toContain("point-source/flywheel/issues/5)");
+  });
+
+  it("renders genuine closing references (Closes/Fixes/Resolves)", async () => {
+    const notes = await render([commit(NOISY_SQUASH)]);
+    expect(notes).toContain(", closes");
+    expect(notes).toContain("/issues/245)");
+    expect(notes).toContain("/issues/236)");
+  });
+
+  it("drops non-issue tokens and never emits a garbage issue link", async () => {
+    const notes = await render([commit(NOISY_SQUASH)]);
+    expect(notes).not.toContain("issues/capability");
+    expect(notes).not.toContain("preflight-");
+    expect(notes).not.toContain("issues/233-3");
+    for (const n of ["1", "2", "3", "4", "6", "7", "8"]) {
+      expect(notes, `sub-task #${n} must not render as an issue link`).not.toContain(
+        `/issues/${n})`,
+      );
+    }
+    expect(notes).not.toMatch(/github\.com\/[^)\s]*#|github\.com\/preflight-/);
+  });
+
+  it("a bare `(#N)` suffix with no closing keyword contributes nothing to closes", async () => {
+    const notes = await render([commit(NOISY_SQUASH), commit(BARE_SUFFIX)]);
+    // #264 appears only as the inline PR link on its own commit line, never in a
+    // closes list.
+    expect(count(notes, "/issues/264)")).toBe(1);
+    const bareLine = notes.split("\n").find((l) => l.includes("unrelated tweak"));
+    expect(bareLine, "bare-suffix commit line must be present").toBeDefined();
+    expect(bareLine).not.toContain(", closes");
+  });
+
+  it("still shows a change's PR inline on its commit line", async () => {
+    const notes = await render([commit(NOISY_SQUASH)]);
+    const featLine = notes.split("\n").find((l) => l.includes("add capability layer"));
+    expect(featLine).toBeDefined();
+    expect(featLine).toContain("/issues/247)");
+  });
+
+  it("fails loudly if a config value collides with the finalizeContext sentinel", () => {
+    // A branch named exactly the reserved token would otherwise win the
+    // first-occurrence sentinel replace and silently corrupt the config.
+    const config: FlywheelConfig = {
+      streams: [
+        {
+          name: "main-line",
+          branches: [
+            { name: "__FLYWHEEL_FINALIZE_CONTEXT__", release: "production", auto_merge: [] },
+          ],
+        },
+      ],
+    };
+    const rc = generateReleaseRc(config.streams[0]!, config);
+    expect(() => serializeReleaseRc(rc)).toThrow(/finalizeContext sentinel/);
   });
 });

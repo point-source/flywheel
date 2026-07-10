@@ -22,6 +22,7 @@
     "js-yaml": "^4.1.1"
   },
   "devDependencies": {
+    "@semantic-release/release-notes-generator": "^14.1.1",
     "@types/js-yaml": "^4.0.9",
     "@types/node": "^24.12.2",
     "esbuild": "^0.28.0",

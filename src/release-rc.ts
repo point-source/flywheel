@@ -20,10 +20,59 @@ export interface ReleaseRc {
 const EXEC_PLUGIN = "@semantic-release/exec";
 const GIT_PLUGIN = "@semantic-release/git";
 const GITHUB_PLUGIN = "@semantic-release/github";
+const RELEASE_NOTES_PLUGIN = "@semantic-release/release-notes-generator";
+
+// Filename flywheel writes the generated semantic-release config to. It is a
+// CommonJS module (`.cjs`), not `.releaserc.json`, because the release-notes
+// generator needs a `writerOpts.finalizeContext` *function* to scope and
+// de-duplicate the `closes` list (§spec:release-notes-dedup) — and a function
+// cannot survive JSON serialization. cosmiconfig discovers `.releaserc.cjs`;
+// push-flow removes any higher-precedence `.releaserc.{json,yaml,yml,js}` in the
+// workspace so a committed copy can never shadow the generated one.
+export const RELEASE_CONFIG_FILENAME = ".releaserc.cjs";
+
+// Sentinel placeholder for the finalizeContext function inside the generated
+// plugin options. generateReleaseRc emits a JSON-shaped object (so the rest of
+// the config stays plain data and stays unit-testable); serializeReleaseRc then
+// swaps this quoted string for the bare `finalizeContext` identifier defined at
+// the top of the emitted module. It must be a value no real config would carry.
+const FINALIZE_CONTEXT_SENTINEL = "__FLYWHEEL_FINALIZE_CONTEXT__";
+
+// Source of the finalizeContext hook, emitted verbatim into the generated
+// `.releaserc.cjs`. conventional-changelog's stock behavior renders every
+// `#`-token a commit mentions after `closes` — bare `(#N)` PR suffixes, prose
+// `#tokens`, and repeats — because its parser tags non-closing references with
+// `action: null` and the writer renders them all (§spec:release-notes-dedup).
+// This post-processes the grouped writer context to keep only references a
+// closing keyword introduced (`action` set) and to collapse duplicates by full
+// issue identity (owner, repository, number), so the rendered `closes` list
+// carries each closed issue at most once and no non-issue links. It is
+// self-contained (no imports) so it serializes to a standalone module. The PR's
+// own number still renders inline on its commit line — this only prunes the
+// `closes` list, losing no navigability.
+const FINALIZE_CONTEXT_SOURCE = `const finalizeContext = (context) => {
+  const seen = new Set();
+  for (const group of context.commitGroups || []) {
+    for (const commit of group.commits || []) {
+      if (!Array.isArray(commit.references)) continue;
+      commit.references = commit.references.filter((ref) => {
+        if (!ref.action) return false;
+        const key = JSON.stringify([ref.owner || "", ref.repository || "", ref.issue]);
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+    }
+  }
+  return context;
+};`;
 
 const DEFAULT_PLUGINS: unknown[] = [
   "@semantic-release/commit-analyzer",
-  "@semantic-release/release-notes-generator",
+  // Configured, not bare: the writerOpts.finalizeContext hook (serialized from
+  // FINALIZE_CONTEXT_SOURCE) scopes the `closes` list to genuine closing
+  // references and de-duplicates by issue identity. §spec:release-notes-dedup.
+  [RELEASE_NOTES_PLUGIN, { writerOpts: { finalizeContext: FINALIZE_CONTEXT_SENTINEL } }],
   "@semantic-release/changelog",
   // No-op when release_files is unset; replaced inline with a configured
   // [EXEC_PLUGIN, { prepareCmd }] entry when release_files declares any files.
@@ -69,7 +118,7 @@ export function generateReleaseRc(
     .filter((b): b is SemanticReleaseBranch => b !== null);
   // release_as_draft is per-branch (SPEC §spec:immutable-release-support):
   // semantic-release runs once per push on one specific branch, so the
-  // .releaserc.json this generates is targeted at exactly that branch — we
+  // .releaserc.cjs this generates is targeted at exactly that branch — we
   // look up release_as_draft on the named branch only and pass
   // { draftRelease: true } to @semantic-release/github for that release.
   // When targetBranchName is unspecified (e.g. existing unit-test callers
@@ -80,6 +129,36 @@ export function generateReleaseRc(
   const releaseAsDraft = targetBranch?.release_as_draft ?? false;
   const plugins = buildPlugins(config.release_files, buildNumber, releaseAsDraft);
   return { tagFormat, branches, plugins };
+}
+
+// Serialize a ReleaseRc to the text of the generated `.releaserc.cjs` module.
+// The config is JSON-shaped except for the finalizeContext sentinel, so we
+// JSON-stringify it and then splice in the real function: the module defines
+// `finalizeContext` up top (from FINALIZE_CONTEXT_SOURCE) and the sentinel's
+// quoted string is replaced by that bare identifier. semantic-release loads the
+// result via cosmiconfig exactly as it would a `.releaserc.json`.
+export function serializeReleaseRc(rc: ReleaseRc): string {
+  const json = JSON.stringify(rc, null, 2);
+  const target = JSON.stringify(FINALIZE_CONTEXT_SENTINEL);
+  // The sentinel is always present (plugins carry it) and must be unique: a
+  // blind first-occurrence replace would corrupt an adopter field that happened
+  // to equal the reserved token and silently drop the dedup hook. Exactly one
+  // occurrence guarantees we replace the real sentinel; anything else is a bug
+  // or a config collision, so fail loudly rather than emit a broken config.
+  const occurrences = json.split(target).length - 1;
+  if (occurrences !== 1) {
+    throw new Error(
+      `release config serialization expected exactly one finalizeContext sentinel but found ${occurrences} — ` +
+        `a .flywheel.yml value collides with the reserved token ${FINALIZE_CONTEXT_SENTINEL}`,
+    );
+  }
+  const body = json.replace(target, "finalizeContext");
+  return (
+    `// Generated by flywheel from .flywheel.yml — do not edit.\n` +
+    `// Regenerated on every push; a committed copy is overwritten.\n` +
+    `${FINALIZE_CONTEXT_SOURCE}\n\n` +
+    `module.exports = ${body};\n`
+  );
 }
 
 // True if any release_files entry references the ${build} placeholder.

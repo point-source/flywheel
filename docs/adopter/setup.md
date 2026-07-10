@@ -116,7 +116,7 @@ A GitHub App is how the flywheel workflows act on this repo as a bot: push relea
 
 If you'd rather create the App by hand: follow GitHub's [Creating a GitHub App](https://docs.github.com/en/apps/creating-github-apps/about-creating-github-apps/creating-a-github-app) guide with these permissions:
 
-- **Contents: read and write** — tag creation, `.releaserc.json` write
+- **Contents: read and write** — tag creation, `.releaserc.cjs` write
 - **Pull requests: read and write** — PR creation, body updates, auto-merge
 - **Issues: read and write** — adding / removing the `flywheel:*` labels on PRs
 - **Checks: read and write** — posting the `flywheel/conventional-commit` check
@@ -272,7 +272,7 @@ The pin is the only version surface. When `@v2` advances, the action's `action.y
 
 > **Back-merge effect on upstream version files.** The back-merge step propagates each release tag's `chore(release)` commit into every upstream branch in the stream. For a `develop → staging → main` topology, a `staging` rc release lands a `chore(release): 1.1.0-rc.1` commit on `develop`. This is intentional — it puts the tag in `develop`'s ancestry so semantic-release's next walk computes the correct next version. Anyone reading `develop`'s version file transiently sees the rc version. There is no opt-out today.
 
-> **Bumping a non-Node version file (e.g. `pubspec.yaml`, `Cargo.toml`, `.csproj`).** Flywheel generates `.releaserc.json` from `.flywheel.yml` at runtime and overwrites any committed copy on every push — you cannot configure `semantic-release` directly. Instead, declare the file under `release_files:` in `.flywheel.yml`. Flywheel turns each entry into an `@semantic-release/exec` `prepareCmd` and adds the path to `@semantic-release/git`'s `assets` so the bumped file is committed alongside the changelog. Placeholders `${version}`, `${channel}`, and `${build}` are substituted into your `replacement`/`cmd`. For canonical recipes per ecosystem, see [`recipes.md`](./recipes.md).
+> **Bumping a non-Node version file (e.g. `pubspec.yaml`, `Cargo.toml`, `.csproj`).** Flywheel generates `.releaserc.cjs` from `.flywheel.yml` at runtime and overwrites any committed copy on every push — you cannot configure `semantic-release` directly. Instead, declare the file under `release_files:` in `.flywheel.yml`. Flywheel turns each entry into an `@semantic-release/exec` `prepareCmd` and adds the path to `@semantic-release/git`'s `assets` so the bumped file is committed alongside the changelog. Placeholders `${version}`, `${channel}`, and `${build}` are substituted into your `replacement`/`cmd`. For canonical recipes per ecosystem, see [`recipes.md`](./recipes.md).
 
 ## 4. Add your build and publish workflows
 

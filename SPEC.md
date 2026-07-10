@@ -3574,7 +3574,7 @@ routes to (and the §0 completion check already mirrors the script's verdict per
 
 ## Release-notes reference de-duplication §spec:release-notes-dedup
 
-*Status: not started*
+*Status: complete*
 
 The release notes flywheel produces for every version — the GitHub Release body
 and the matching per-version `CHANGELOG.md` entry, the same text in two places —

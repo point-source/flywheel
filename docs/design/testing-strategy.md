@@ -38,10 +38,10 @@ mode. No special infrastructure required.
 | `tests/conventional.test.ts` | 57 | `parseTitle`, `detectBreakingInBody`, `computeIncrement`, combinatorial `mostImpactfulType` precedence (the bulk are `it.each`-generated pairwise precedence cases); accepts missing-space-after-colon as a typo to be normalized downstream |
 | `tests/config.test.ts` | 11 | All 6 `.flywheel.yml` validation rules; multi-error collection; malformed YAML; missing top-level mapping; legacy `merge_strategy` key flagged as unknown |
 | `tests/dogfood-config.test.ts` | 3 | Validates the repo's own `.flywheel.yml`; asserts `feat!` is excluded from `main`'s `auto_merge` |
-| `tests/release-rc.test.ts` | 8 | `.releaserc.json` shape; `chooseTagFormat` primary-vs-secondary; plugin merging without dropping defaults; declaration order |
+| `tests/release-rc.test.ts` | 8 | `.releaserc.cjs` shape; `chooseTagFormat` primary-vs-secondary; plugin merging without dropping defaults; declaration order |
 | `tests/pr-flow.test.ts` | 11 | PR title/body rewrite; label application; both label-flip directions; auto-merge → direct-merge fallback (success and both-fail paths); idempotency; unmanaged base ref; invalid-title check |
 | `tests/promotion.test.ts` | 12 | Promotion PR create/upsert; `computePendingCommits` squash-merge dedup; identical-title dedup; `(#NN)` suffix stripping; terminal/single-branch no-op |
-| `tests/push-flow.test.ts` | 3 | `.releaserc.json` write to workspace; managed-vs-unmanaged branch routing |
+| `tests/push-flow.test.ts` | 3 | `.releaserc.cjs` write to workspace; managed-vs-unmanaged branch routing |
 | `tests/preflight.test.ts` | 8 | App permission preflight: missing/insufficient permissions detected; helpful error message formatting |
 
 ### Load-bearing tests
@@ -95,7 +95,7 @@ no errors.
 | Increment type (major/minor/patch/none) | ✅ | `conventional.test.ts` |
 | Most-impactful type aggregation (full pairwise precedence) | ✅ | `conventional.test.ts` |
 | `.flywheel.yml` validation (rules 1–6 + extras) | ✅ | `config.test.ts` |
-| `.releaserc.json` generation, multi-stream tag isolation | ✅ | `release-rc.test.ts`, `push-flow.test.ts` |
+| `.releaserc.cjs` generation, multi-stream tag isolation | ✅ | `release-rc.test.ts`, `push-flow.test.ts` |
 | PR title rewrite, body increment annotation | ✅ | `pr-flow.test.ts` |
 | Label application + flip in both directions | ✅ | `pr-flow.test.ts` |
 | Native auto-merge enablement + direct-merge fallback | ✅ | `pr-flow.test.ts` |

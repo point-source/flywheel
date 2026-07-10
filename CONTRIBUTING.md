@@ -30,7 +30,7 @@ src/                    TypeScript source (target ~400-500 lines total)
   pr-flow.ts            pull_request event handler
   push-flow.ts          push event handler (release flow)
   promotion.ts          push event handler (promotion PR upsert)
-  release-rc.ts         .releaserc.json generator
+  release-rc.ts         .releaserc.cjs generator
   github.ts             Octokit wrappers
   types.ts              shared types
 
