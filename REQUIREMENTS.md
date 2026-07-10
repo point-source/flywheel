@@ -90,6 +90,22 @@
 <!--     resolve a condition safely (#233) -->
 <!--     (§req:init-brownfield, §req:init-brownfield-criteria, -->
 <!--     §req:init-brownfield-stories, §req:init-brownfield-constraints) -->
+<!--   - Release-notes reference de-duplication — generated release notes and -->
+<!--     CHANGELOG.md repeat the same issue reference many times and surface -->
+<!--     garbage #tokens, because flywheel emits the release-notes generator with -->
+<!--     no parser/writer scoping; de-duplicate and scope closing references (#268) -->
+<!--     (§req:release-notes-dedup, §req:release-notes-dedup-criteria, -->
+<!--     §req:release-notes-dedup-stories, §req:release-notes-dedup-constraints) -->
+<!--   - init.sh brownfield managed-branch coverage — the two branch-scoped -->
+<!--     brownfield detectors probe a hardcoded {develop, main, staging} candidate -->
+<!--     set, so renamed / multi-stream / custom-topology adopters get a silent -->
+<!--     false negative on their real branches; drive detection from the adopter's -->
+<!--     chosen template / existing or default .flywheel.yml instead, and alert on -->
+<!--     a configured branch that does not exist (#263) -->
+<!--     (§req:init-brownfield-managed-branches, -->
+<!--     §req:init-brownfield-managed-branches-criteria, -->
+<!--     §req:init-brownfield-managed-branches-stories, -->
+<!--     §req:init-brownfield-managed-branches-constraints) -->
 
 ## Problem statement §req:problem-statement
 
@@ -2969,3 +2985,674 @@ of §req:setup-completion-summary.
   conditions automation can handle; (3) replace the blind release-conflict override
   with a hard-stop fallback to the manual guide for everything it cannot resolve
   safely.
+
+## Release-notes reference de-duplication §req:release-notes-dedup
+
+The headline artifact an adopter reads after every release is the GitHub Release
+body and the matching `CHANGELOG.md` entry — the release notes *are* the
+per-version slice of the changelog, the same text in two places. Today that text
+is polluted. On `origin/main` at v2.1.0 the `closes` list repeats the same issue
+many times over — `#245` seven times, `#236` eighteen times, `#240` sixteen,
+`#235` twelve, `#238` and `#239` ten each — and interleaves tokens that are not
+issues at all: `#233-3`, `#capability`, `preflight-#capability` (which renders as
+a dead link to `github.com/preflight-/issues/capability`), and internal sub-task
+numbers `#1`–`#8`. An adopter scanning the notes to see what a version actually
+closed is met with a wall of duplicate links and references that lead nowhere.
+
+The users are every flywheel adopter — `.releaserc.cjs` is flywheel-generated and
+adopters never edit it, so whatever the generated config renders is what lands in
+*their* changelog and release body, unchanged — and the flywheel maintainer who
+owns the release glue. The problem is **frequent** (it recurs on every release,
+and worsens with the number of squashed sub-PRs in a version) and **universal**
+(it reaches every adopter, not just this repo), but it is **cosmetic**: nothing
+about the release fails or is blocked, the version still tags and publishes. What
+it costs is trust. The release notes are the one artifact users actually read per
+version, and when the closing list is mostly noise and broken links, the notes
+stop being a reliable record of what shipped and the reader learns to ignore them.
+
+The defect is a three-link chain, and flywheel owns only the last link — which is
+the only link this requirement addresses:
+
+1. The repo's **commit convention** appends `(#N)` to every commit subject, so a
+   PR that squashed N sub-commits carries `(#N)` N times in its body.
+2. **GitHub's squash-merge** default body is the PR title plus a bullet list of
+   every squashed sub-commit message, so one squash commit can repeat the same
+   `(#245)` seven times (PR #247 → commit `d363a2f`, where `grep -c '(#245)'`
+   returns 7).
+3. **`@semantic-release/release-notes-generator`** is emitted by `src/release-rc.ts`
+   with *no* options object — no `parserOpts`, no `writerOpts`, no `presetConfig`,
+   just stock defaults. Its conventional-changelog reference parser harvests every
+   `#`-prefixed token anywhere in the commit message as an "issue reference,"
+   performs no de-duplication, and the writer template renders all of them after
+   `closes`. Seven mentions of `#245` become seven `[#245]` links; the prose
+   tokens (`#233-3`, `#capability`, sub-task `#1`–`#8`) get swept up the same way
+   and misrendered as issue links.
+
+This requirement is scoped to link 3. Flywheel cannot change the host repo's
+commit convention or GitHub's squash-body format, and it should not try to —
+those are inputs it does not own. What flywheel *does* own is the generator
+configuration it hands to semantic-release, and that configuration can be made to
+render a clean, de-duplicated, correctly-scoped `closes` list regardless of how
+noisy the raw commit message is. The fix lives where the noise is finally
+rendered, not where it originates.
+
+Two changes define "clean" here, both expressed as what the rendered notes
+contain rather than how the generator achieves it:
+
+- **De-duplication.** A given issue appears in a version's `closes` list **at most
+  once**, no matter how many times it is mentioned across that version's commits.
+  Uniqueness is per distinct issue — by owner, repository, and issue number — so a
+  cross-repo `other/repo#5` and this repo's `#5` remain two entries, while
+  `#245 ×7` collapses to a single `#245`.
+- **Scoping.** Only references introduced by a **genuine closing keyword**
+  (Closes / Fixes / Resolves and their conjugations) appear in the `closes` list.
+  A bare `(#N)` PR-number suffix on a commit subject, and an arbitrary `#token`
+  sitting in body prose, are **not** closing references and do not appear there.
+  This is the lever that removes the garbage — `#capability`, `preflight-#capability`,
+  `#233-3`, the sub-task `#1`–`#8` — because none of them is preceded by a closing
+  keyword, and it simultaneously removes the bare PR-number repeats that
+  de-duplication alone would still leave behind.
+
+The scoping decision carries a deliberate tradeoff, recorded here because it is a
+judgment call rather than an obvious one. Scoping to closing keywords means a
+commit that merely carries `(#264)` with no "Closes #X" contributes **nothing** to
+the `closes` list. That is the intended behavior, and it loses no information:
+the PR's own number still renders inline on its commit line in the notes (that is
+how conventional-changelog already links the change to its PR), so a reader can
+still navigate from any line to the PR that introduced it. The `closes` list
+reverts to meaning what it says — the set of issues this version actually closes —
+rather than an indiscriminate dump of every `#`-shaped token in the commit
+stream. The alternative considered and rejected was "de-duplicate but keep every
+token": it would still surface `#capability` and the sub-task numbers as broken
+links, so it does not actually solve the trust problem the issue raises. We chose
+the cleaner outcome.
+
+Because the bad artifact already exists in the published record, the fix is not
+only forward-looking. The **already-drafted v2.1.0 release body and its
+`CHANGELOG.md` entry are corrected** to the de-duplicated, closing-scoped form, so
+the version users are looking at *now* reads correctly — not left as a documented
+known-bad example. This is a one-time cleanup of existing text, distinct from the
+generator-config change that prevents recurrence; both are in scope.
+
+This sits with the other release-glue requirements (§req:release-safety-gate,
+§req:release-ci-budget) — process-critical configuration that flywheel generates
+on behalf of every adopter — and like them it ships with unit coverage on the
+generated config so the behavior cannot silently regress.
+
+## Release-notes reference de-duplication success criteria §req:release-notes-dedup-criteria
+
+- For a version whose commits mention the same issue many times — e.g. `closes
+  #245` arising seven times across squashed sub-commits — the rendered `closes`
+  list (in both the GitHub Release body and the matching `CHANGELOG.md` entry)
+  contains **exactly one** `#245` entry. Every issue in the list is distinct.
+- Uniqueness is by distinct issue identity (owner, repository, issue number): a
+  reference to another repository's issue and a same-numbered reference to this
+  repository remain **two** separate entries and are not collapsed into one.
+- The rendered `closes` list contains **only** references introduced by a genuine
+  closing keyword (Closes / Fixes / Resolves and conjugations). A commit subject
+  carrying a bare `(#N)` PR-number suffix with no closing keyword contributes
+  **nothing** to that list.
+- Tokens that are not issue references — `#233-3`, `#capability`,
+  `preflight-#capability`, and internal sub-task numbers `#1`–`#8` — **do not
+  appear** in the rendered notes as issue links. There are no links of the form
+  `github.com/<garbage>/issues/<garbage>`.
+- A change whose commit links it to a PR still shows that PR inline on its commit
+  line in the notes, so removing bare PR numbers from the `closes` list loses no
+  navigability — the reader can still reach the PR behind any line.
+- The **existing v2.1.0** GitHub Release body and its `CHANGELOG.md` entry are
+  rewritten to the de-duplicated, closing-scoped form, so the currently-published
+  notes read correctly rather than standing as a known-bad example.
+- The behavior is exercised by **unit coverage on the generated config plus a
+  fixture commit**: a representative commit containing a multi-`(#N)` squash body
+  *and* prose `#token`s is run through the generated release-notes configuration,
+  and the test asserts the rendered `closes` list is de-duplicated and free of
+  non-issue tokens. This is sufficient demonstration of "done"; no live release run
+  is required to verify it.
+- The unit test needs no live GitHub access and adds no load to the rate-limited
+  sandbox installation (§req:sandbox-ci-budget).
+
+## Release-notes reference de-duplication user stories §req:release-notes-dedup-stories
+
+- As an adopter reading a new version's release notes, I want the "closes" list to
+  show each issue the version closed exactly once, so that I can see at a glance
+  what shipped instead of scrolling past the same issue linked seven times.
+- As an adopter, I want the notes to contain only real, working issue links and no
+  `#capability`-style dead links, so that I trust the release notes as an accurate
+  record rather than learning to ignore them.
+- As an adopter who never touches `.releaserc.cjs`, I want flywheel's
+  generated release configuration to produce clean notes for *my* repository
+  automatically, so that I inherit the fix without editing any release glue myself.
+- As a flywheel maintainer, I want a unit test over the generated config and a
+  noisy fixture commit that asserts a clean, de-duplicated `closes` list, so that
+  this reference-pollution regression cannot quietly come back the next time the
+  release config changes.
+- As a reader of the already-published v2.1.0 notes, I want that existing entry
+  corrected too, so that the version I am looking at today reads correctly and not
+  just versions released after the fix.
+
+## Release-notes reference de-duplication quality attributes and constraints §req:release-notes-dedup-constraints
+
+- **Flywheel owns only the generator config.** The fix is confined to the
+  release-notes configuration flywheel emits from `src/release-rc.ts`. It does not
+  change the host repo's commit convention (link 1) or GitHub's squash-merge body
+  format (link 2) — those are inputs flywheel does not control, and the rendered
+  output is made correct in spite of them.
+- **Adopter-transparent.** Adopters never edit `.releaserc.cjs`; the corrected
+  behavior reaches them purely through the flywheel-generated config, with no
+  action on their part and no new field for them to set.
+- **Cosmetic, not release-blocking.** This changes only the rendered text of notes
+  and changelog. It must not alter which version is computed, whether a release
+  publishes, or any release-gating behavior (§req:release-safety-gate) — the
+  release outcome is identical; only the human-readable summary changes.
+- **No information loss.** Scoping the `closes` list to genuine closing references
+  must not hide the PR behind a change: each change still links to its PR inline on
+  its commit line, so the notes remain fully navigable.
+- **Regression-proofed by cheap coverage.** The behavior is pinned by a fast unit
+  test over the generated config and a fixture commit — no live GitHub calls, no
+  e2e sandbox load (§req:sandbox-ci-budget) — consistent with how the other
+  release-glue requirements are guarded.
+- **Priority.** Universal (every adopter, every release) and trust-eroding, but
+  cosmetic and non-blocking, so it ranks below the requirements that protect
+  releases or the v2 major (§req:release-safety-gate, §req:composite-action-path)
+  and below the CI-sustainability work, while sitting above pure-wording polish:
+  it is the artifact users actually read each release, and broken links there cost
+  credibility on every version. In decreasing order of user impact: (1)
+  de-duplicate references so the same issue is listed once; (2) scope the list to
+  genuine closing keywords so bare PR numbers and prose `#token`s stop polluting
+  it; (3) correct the already-published v2.1.0 body and changelog entry so the
+  current artifact reads right.
+
+## init.sh brownfield managed-branch coverage §req:init-brownfield-managed-branches
+
+The brownfield adoption work (§req:init-brownfield) gave `init.sh` a set of
+brownfield detectors, two of which are **branch-scoped**: one flags branch
+protection / rulesets that omit the flywheel App as a bypass actor (so the
+release push and back-merge push are later rejected for not going through a pull
+request), and one flags a "require signed commits/tags" rule the App cannot
+satisfy. To know *which* branches to inspect, the pre-flight pass uses a
+**hardcoded candidate set** — `develop`, `main`, `staging` — and acts only on
+whichever of those actually exist on the remote. It is hardcoded because at
+pre-flight time the adopter's `.flywheel.yml` is not yet known, so their real
+branch topology is unknown; the detector probes flywheel's standard-topology
+superset and no-ops on the rest.
+
+The consequence is a **silent false negative for any adopter whose managed
+branch is not one of `develop` / `main` / `staging`** — a `trunk` mainline, a
+multi-stream config with custom stream branch names, or any renamed topology.
+Those adopters still get the version-tag, release-conflict, and history/PR
+checks, but the two branch-scoped detectors never probe their real branches, so
+a genuine hazard on a custom branch (protection without the App bypass, or a
+signing rule) is simply not surfaced at `init` time. It is not a false positive —
+no clean repo is ever wrongly blocked — but the adopter who most needs the
+warning (one with a non-default topology *and* a real protection conflict on it)
+is exactly the one who silently doesn't get it. The gap is currently backstopped
+only later: by `doctor.sh`, which derives the managed branches from the written
+`.flywheel.yml`, or by the first release / back-merge push being rejected. The
+limitation ships documented (a `#263` comment in the script names it).
+
+The users are the **custom-topology brownfield adopter**, who is silently left
+under-protected on their real branches precisely because their branch names
+aren't flywheel's defaults; and the **flywheel maintainer**, who owns the promise
+that the documented onboarding surfaces a repo's brownfield hazards and would
+like to drop the documented caveat. The problem is narrow but real: it hits every
+non-default-topology adoption, it is invisible at the moment it matters, and it
+defeats the point of detecting branch hazards up front for exactly the adopters
+whose setup is least standard.
+
+The resolution, kept deliberately simple, is to **stop hardcoding the candidate
+set and drive branch-scoped detection from the topology the adopter actually
+chose**. The adopter picks a template — from minimal (a single managed branch,
+which may be a placeholder name they then edit) through three-stage
+(`develop` → `staging` → `main`) to multi-stream — and the branch-scoped
+detectors inspect exactly the branches that the resulting `.flywheel.yml`
+declares, never a fixed `develop` / `main` / `staging` list. Because the chosen
+config may name a branch the repo does not have, `init.sh` also **checks that
+each configured managed branch exists** and, when one does not, alerts the
+adopter with the two ways to fix it: create the branch, or adjust the config to
+name the branch that actually exists. The branch set is taken from config in all
+cases: if a `.flywheel.yml` already exists, the branches it declares are what get
+checked; if none exists, `init.sh` creates a minimal config with `main` as the
+sole managed branch, tells the adopter it defaulted to `main`, and then checks
+that `main` exists, alerting if it does not. This is scoped to getting branch
+**coverage** right plus the missing-branch alert — not a new per-branch
+onboarding flow (no per-branch promotion-order, release-type, or auto-merge
+prompts); that fuller shape is explicitly out of scope. It extends
+§req:init-brownfield and builds on the detection spine and shared bucket ×
+severity vocabulary of §req:preflight-detection.
+
+## init.sh brownfield managed-branch coverage success criteria §req:init-brownfield-managed-branches-criteria
+
+- **Custom-topology adopters get the same branch-scoped coverage as default
+  ones.** An adopter whose managed mainline is not `develop` / `main` /
+  `staging` — e.g. a `trunk` mainline or a multi-stream config with custom
+  stream branch names — has branch protection / signing rules checked on their
+  *real* branches. Verifiable: run `init.sh` against a repo whose only managed
+  branch is `trunk`, with a ruleset on `trunk` that omits the App as a bypass
+  actor → `init.sh` surfaces the branch-protection-bypass finding on `trunk`, the
+  same way it would today for `main`.
+- **The managed-branch set comes from the chosen config, not a hardcoded
+  list.** The branch-scoped detectors probe exactly the branches declared by the
+  template the adopter picked, the existing `.flywheel.yml`, or the default
+  config — there is no remaining `develop` / `main` / `staging` candidate list
+  driving branch-scoped detection. Verifiable: a config that declares only
+  `release` is probed on `release` and not on `develop` / `main` / `staging`.
+- **A configured branch that does not exist is flagged, with both fixes named.**
+  When the chosen config names a managed branch the repo does not have,
+  `init.sh` reports it in the pre-flight bucket × severity vocabulary, names the
+  specific missing branch, and tells the adopter the two ways to resolve it:
+  create the branch, or edit the config to name the branch that actually exists.
+- **An existing config is honored.** If a `.flywheel.yml` is already present,
+  `init.sh` checks the branches it declares — so a re-run or a hand-written
+  config drives detection against the adopter's real topology rather than a
+  guess.
+- **The no-config case defaults to `main`, says so, and verifies it.** With no
+  `.flywheel.yml` present, `init.sh` creates a minimal config with `main` as the
+  sole managed branch, tells the adopter the config was created defaulting to
+  `main`, then checks that `main` exists and alerts if it does not — the adopter
+  is never silently handed a config pointing at a branch that isn't there.
+- **Standard-topology adopters are unchanged.** A `develop` / `main` /
+  `staging` adopter gets exactly the branch-scoped coverage they get today; the
+  switch from a hardcoded list to a config-derived set is invisible to them.
+- **Greenfield blast radius is zero.** On a fresh repo where the chosen
+  template's branches all exist (or where `main` exists in the default case), no
+  new finding fires and the run proceeds as before.
+- **Cheap coverage.** Fast local/CI tests with fixture repos and a stubbed `gh`
+  exercise custom-topology branch detection, the missing-branch alert, the
+  existing-config path, and the no-config `main` default — adding no load to the
+  rate-limited e2e sandbox (§req:sandbox-ci-budget).
+
+## init.sh brownfield managed-branch coverage user stories §req:init-brownfield-managed-branches-stories
+
+- As an adopter whose mainline is `trunk` rather than `main`, I want `init.sh` to
+  check branch protection and signing rules on `trunk` itself, so a missing App
+  bypass on my real branch is caught at onboarding instead of surfacing as a
+  failed release weeks later.
+- As a multi-stream adopter with custom stream branch names, I want the
+  branch-scoped brownfield checks to cover my actual stream branches, so I am not
+  silently left under-protected just because my branch names aren't flywheel's
+  defaults.
+- As an adopter picking a template, I want `init.sh` to verify that the branches
+  that template configures actually exist and tell me plainly when one doesn't —
+  create the branch, or fix the config to name the one I have — so I don't end up
+  with a config pointing at a branch I never made.
+- As an adopter who already has a `.flywheel.yml`, I want `init.sh` to check the
+  branches my config declares, so detection on a re-run matches my real topology
+  rather than a fixed guess.
+- As an adopter with no config yet, I want `init.sh` to default to managing
+  `main`, tell me it did so, and warn me if `main` doesn't even exist, so I'm
+  never handed a config that silently points at a missing branch.
+- As a flywheel maintainer, I want the branch-scoped brownfield detectors to
+  cover whatever topology the adopter actually chose, so I can drop the
+  documented `#263` false-negative caveat and trust that onboarding surfaces real
+  branch hazards for every adopter.
+
+## init.sh brownfield managed-branch coverage quality attributes and constraints §req:init-brownfield-managed-branches-constraints
+
+- **Config-driven, not hardcoded.** The managed-branch set for branch-scoped
+  detection is derived from the adopter's chosen template, existing
+  `.flywheel.yml`, or default config — no standalone `develop` / `main` /
+  `staging` candidate list remains in that path. This is the core of the change.
+- **Kept simple — coverage, not a new onboarding flow.** Scope is correct branch
+  coverage plus a clear missing-branch alert. It does not add per-branch
+  onboarding (no per-branch promotion-order, release-type, or auto-merge
+  prompts); that fuller branch-mapping flow is explicitly out of scope here.
+- **Detect-and-report only; no new mutation.** This requirement adds no action
+  that changes pre-existing repository state. `init.sh` never creates the missing
+  branch and never edits branch protection as part of this work — it alerts. The
+  one file it writes is the default minimal `.flywheel.yml` in the no-config
+  case, which is `init.sh`'s normal scaffolding of its own config (consistent
+  with greenfield behavior), not a mutation of the adopter's existing state.
+- **Builds on the detection spine, doesn't fork it.** The missing-branch alert
+  and the branch-scoped findings are reported in the pre-flight bucket × severity
+  vocabulary and findings surface (§req:preflight-detection); this extends
+  §req:init-brownfield rather than introducing a parallel detection or reporting
+  mechanism.
+- **Read-only and rate-limit-respectful.** Checking branch existence and probing
+  protection uses only the scopes `init.sh` already needs; it probes only the
+  configured branch set (not a superset), keeps its existing memoization so each
+  branch is checked once per run, and degrades to checking nothing when the repo
+  can't be resolved — preserving today's bounded `gh` usage.
+- **Non-interactive safe.** A piped or CI invocation degrades to
+  detect-and-report with no mutation, consistent with
+  §req:init-brownfield-constraints and §req:preflight-detection.
+- **Idempotent and re-runnable.** A second run reads the now-written config and
+  checks the same declared branches; it does not drift between the hardcoded and
+  config-derived sets or re-default a config that already exists.
+- **Cheap coverage only.** Exercised by the fast local/CI suite with fixture
+  repos and a stubbed `gh`; adds no load to the rate-limited e2e sandbox
+  installation (§req:sandbox-ci-budget).
+- **Priority.** A documented follow-up to #233 that closes a false negative for
+  non-default-topology adopters. Lower urgency than the release-correctness work,
+  since the gap is still backstopped by `doctor.sh` and the first release — but
+  worth doing because it removes a silent under-protection for exactly the
+  adopters whose setup is least standard, and lets the maintainer drop the
+  documented caveat. It sits within the setup-onboarding cluster alongside
+  §req:init-brownfield and §req:init-preset-wording (the preset/template choice
+  it now reads the branch set from).
+
+## Promotion Closes-ref from commit footers §req:promotion-closes-footers
+
+GitHub natively honors **closing keywords** — `Closes #N`, `Fixes #N`,
+`Resolves #N` and their variants — in two places: a pull request's description,
+and a **commit message**. When a commit carrying `Closes #N` in its footer lands
+on the default branch, GitHub closes issue #N and draws the linked-PR indicator
+on it. Putting the closing keyword in a commit footer (rather than the PR body) is
+a common, legitimate convention, and many contributors work that way by habit.
+
+flywheel does not honor that convention. When it builds the `develop → main`
+promotion PR, it gathers the issues that promotion should close so the merge
+auto-closes them and the linked-PR indicator appears — but it gathers them by
+reading **PR descriptions only**. For each commit waiting to be promoted, flywheel
+recovers the trailing `(#N)` from the commit *title*, looks up that sub-PR, and
+runs the closing-keyword scan over that **sub-PR's body**. The commit's own
+message body — where a footer-style `Closes #N` lives — is never scanned. So a
+contributor who put `Closes #N` in a commit footer instead of the PR description
+gets nothing: no auto-close on promotion, no linked-PR indicator on the issue.
+
+The convention is also actively erased by how flywheel moves work to `develop`.
+flywheel squash-merges each sub-PR into `develop`, and the squash collapses the
+original per-commit footers into a single synthesized commit. So a footer-only
+`Closes #N` is dropped at *both* stages: GitHub's own commit-keyword handling
+never fires (the footer reached `develop` via a squash, not as a default-branch
+commit), and flywheel's promotion aggregation never harvests it (it reads PR
+bodies, not commit messages). The issue silently stays open and shows no
+linked-PR icon, with nothing to point the contributor at the cause.
+
+The users are the **contributor** who follows the commit-footer convention and
+expects their issue to close when the work ships, and the **flywheel maintainer /
+adopter** who relies on the promotion PR to carry the full, accurate set of issues
+a release closes — so the release record and the issue tracker agree without
+manual reconciliation. This is a **robustness gap, not a regression**: flywheel
+faithfully propagates whatever closing keywords already exist in PR bodies; it
+simply never looked at the other place GitHub looks. The gap is silent (nothing
+fails — an issue just quietly stays open), low-frequency per contributor but
+cumulative across a busy repo with many concurrent sub-PRs, and it erodes trust in
+the promotion as the single thing that reconciles shipped work to closed issues.
+
+The need is that a closing keyword in a commit footer be honored by the promotion
+exactly as one in the PR body is. Concretely: when flywheel aggregates the issues a
+promotion PR should close, it shall also scan the **commit messages (titles and
+bodies) of each sub-PR** it already looks up — not just that sub-PR's description —
+and union those closing references with the PR-body ones, deduplicated. The scope
+of *which* commits are scanned matches flywheel's existing model: the commits of
+the sub-PRs reachable from the trailing `(#N)` on each pending commit title. A
+commit that reached `develop` with no associated sub-PR number is out of scope —
+flywheel's model is that work lands via squash-merged sub-PRs, and chasing
+footers on orphan commits would pull in commits no sub-PR gates. The same closing
+keyword recognition flywheel already uses applies unchanged, so the long-standing
+filters are preserved: a reference is dropped if it is the promotion's own
+self-reference, and only same-repository issues are aggregated. This applies at
+**every promotion edge** flywheel computes (e.g. `develop → staging → main` in a
+multi-stage topology), not only the final hop, so behavior is uniform wherever a
+promotion reconciles shipped work to issues.
+
+One precision the convention forces: a trailing `(#N)` on a commit title is a
+**PR number**, not a closing reference, and shall never be read as one. Only an
+actual closing keyword (`Closes`/`Fixes`/`Resolves`/variants) introducing `#N`
+counts. flywheel already distinguishes these — the title's `(#N)` is used solely
+to find the sub-PR — and that distinction shall hold once commit bodies are in
+scope.
+
+This sits in the promotion / release-reconciliation area rather than the
+setup-onboarding cluster. It builds on flywheel's existing closing-reference
+aggregation and changes only *what text* that aggregation reads, not the merge,
+labelling, or back-merge behavior around it.
+
+## Promotion Closes-ref from commit footers success criteria §req:promotion-closes-footers-criteria
+
+- **A footer-only `Closes #N` closes the issue on promotion.** A contributor
+  whose sub-PR carries `Closes #N` only in a commit footer (and not in the PR
+  description) sees issue #N auto-close when the promotion PR merges, and the
+  issue shows the linked-PR indicator — the same outcome as if the keyword had
+  been in the PR body. Verifiable end-to-end: a sub-PR with a footer-only closing
+  keyword, promoted, closes its issue.
+- **PR-body behavior is unchanged.** A closing keyword in a sub-PR's description
+  still produces the auto-close and linked-PR indicator exactly as before; this
+  change adds a source, it does not replace one.
+- **Body and footer for the same issue collapse to one reference.** When the same
+  `#N` appears both in a sub-PR's description and in one of its commit footers, the
+  promotion PR lists issue #N once — no duplicate closing line.
+- **A trailing `(#N)` PR number is never mistaken for a closing reference.** A
+  commit titled `... (#412)` with no closing keyword anywhere does not cause the
+  promotion to try to close issue #412; only an explicit closing keyword does.
+- **Self-reference and cross-repo references stay filtered.** The promotion never
+  lists itself as an issue it closes, and a closing keyword pointing at another
+  repository's issue is not aggregated — both filters behave exactly as they do for
+  PR-body references today.
+- **Uniform across promotion edges.** On a multi-stage topology, footer-sourced
+  closing references are aggregated at every promotion edge flywheel builds, not
+  only `develop → main`.
+- **Cheap, deterministic coverage.** Fast local unit tests cover the new behavior —
+  a footer-only `Closes #N`, a mixed PR-body-plus-footer case that must
+  deduplicate, and a trailing `(#N)` that must **not** be read as a closing
+  reference — exercising process-critical promotion glue without touching the
+  rate-limited e2e sandbox (§req:sandbox-ci-budget).
+
+## Promotion Closes-ref from commit footers user stories §req:promotion-closes-footers-stories
+
+- As a contributor who puts `Closes #N` in my commit footer rather than the PR
+  description, I want the issue to close automatically when my work is promoted to
+  the release branch, so I do not have to remember to also restate the keyword in
+  the PR body or close the issue by hand afterward.
+- As a flywheel maintainer reviewing a promotion PR, I want it to list every issue
+  the bundled work closes — whether the keyword lived in a PR body or a commit
+  footer — so the merged release and the issue tracker agree without my having to
+  reconcile them manually.
+- As a contributor whose commit title ends in `(#412)`, I want flywheel to treat
+  that as the PR reference it is and not accidentally try to close issue #412, so a
+  routine squash-merge title never closes an unrelated issue.
+- As an adopter running a multi-stage promotion (`develop → staging → main`), I
+  want footer-based closing references honored at each promotion the same way, so
+  the behavior does not depend on which edge a release happens to flow through.
+
+## Promotion Closes-ref from commit footers quality attributes and constraints §req:promotion-closes-footers-constraints
+
+- **Process-critical glue — must ship with tests.** Promotion aggregation decides
+  what a release closes; a defect here silently leaves issues open or closes the
+  wrong one. The change shall land with unit coverage of the footer, dedup, and
+  trailing-`(#N)` cases (§req:promotion-closes-footers-criteria), per the project's
+  norm that promotion glue is tested.
+- **Reuse the existing closing-keyword recognition.** The same keyword
+  recognition flywheel already applies to PR bodies is the one source of truth for
+  what counts as a closing reference; commit messages are simply fed through it.
+  No second, divergent notion of "closing keyword" is introduced.
+- **Additive and same-repo-scoped.** The change only widens the text scanned
+  (PR body → PR body ∪ that sub-PR's commit titles and bodies); it preserves the
+  self-reference and same-repository filters and does not alter merge, labelling,
+  or back-merge behavior.
+- **Bounded by the sub-PR model.** Only commits of sub-PRs reachable from a
+  trailing `(#N)` are scanned; commits with no associated sub-PR are deliberately
+  out of scope, matching flywheel's squash-merged-sub-PR model and avoiding
+  unbounded commit scanning.
+- **Stays within existing GitHub access.** Reading a sub-PR's commit messages uses
+  the same authenticated GitHub access flywheel already uses to read PR bodies; it
+  adds per-sub-PR reads but no new permissions.
+
+## Promotion Closes-ref from commit footers priorities §req:promotion-closes-footers-priorities
+
+Required: footer-only `Closes #N` closes the issue on promotion with the
+linked-PR indicator; PR-body behavior unchanged; body/footer dedup; trailing
+`(#N)` never read as a closing reference; self-reference and cross-repo filters
+preserved; unit coverage of those cases. This is a contained robustness fix on
+existing promotion glue, not new surface — it ranks below the requirements that
+protect releases or the v2 major and below the setup-onboarding safety cluster,
+and is independent of all of them. Nice-to-have / explicitly deferred: honoring
+closing footers on commits that reached `develop` without a sub-PR number (direct
+pushes or PR-number-less commits) — out of scope by the sub-PR-model bound above.
+
+## Single local PR-gating command §req:local-pr-gate
+
+A contributor who wants to know "would my PR pass CI?" has no single thing to run.
+flywheel's PR-gating checks are spread across several independent GitHub Actions
+workflows — `verify-dist.yml` (the committed `core/dist/` bundle still matches a
+fresh build), the unit-test and typecheck jobs, and `governance-lint.yml` (Vale
+prose rules, markdownlint, and the SPEC/ROADMAP/README status-line, slug, and
+cross-reference structure checks) — and there is no aggregator in front of them.
+`package.json` exposes `typecheck`, `test`, `build`, and `verify-dist` as separate
+scripts but no command that runs the full gating set; there is no Makefile or
+justfile. So a contributor has to already know the complete list of gating jobs and
+run each one's commands by hand, in the right order.
+
+The pieces a contributor would assemble already exist — in particular the
+governance checks were vendored into `scripts/governance-lint.sh` (so a local run
+and the CI job share one source of truth). What is missing is the **single front
+door**: nothing composes the code checks and that governance script into one
+command, and nothing documents that command as *the* thing to run before opening a
+PR. The governance script existing is necessary but not sufficient — a contributor
+who does not already know it exists does not run it.
+
+Two repo facts remove the usual safety net that would otherwise catch a partial
+local run:
+
+1. **The contributor-facing docs anchor on a partial list.** CLAUDE.md's "Build /
+   test essentials" enumerates `typecheck / test / build / verify-dist` — the
+   *build* checks, not the full gating surface. A contributor (or agent) who
+   anchors on that list runs the code checks and silently skips the prose /
+   governance check. CONTRIBUTING.md names `governance-lint.sh` only as a workflow
+   flywheel dogfoods, not as a local step a contributor performs.
+2. **`develop` has no required status checks, and flywheel auto-merges.** A
+   `feat:` / `fix:` PR into `develop` auto-merges the moment it is mergeable —
+   even with a red check. So a missed local check is *also* not caught at the PR
+   gate: the PR merges anyway, the violation lands on `develop`, and any fix the
+   contributor was still pushing is stranded on the already-merged branch. This is
+   not hypothetical — it is exactly how a Vale prose-rule violation (a deprecated
+   requirement keyword flagged in REQUIREMENTS.md) shipped to `develop`: the originating PR was
+   opened after running only `typecheck` + `test` + `verify-dist`, the governance
+   job failed, the PR auto-merged before the fix, and a separate follow-up PR was
+   needed to clean `develop`.
+
+The net effect is that in this repo **local verification is the real gate** — and
+yet there is no single local command that constitutes that gate, and no protection
+that stops a red check from auto-merging. The users are flywheel's own
+**contributors and agents**, who today either round-trip through CI to discover a
+skipped check or ship the violation outright. (This is about contributing to
+flywheel itself; it is not a feature flywheel scaffolds into adopter repos.)
+
+The need has two parts, both opted into for this requirement:
+
+- **One command runs the full PR-gating set.** A contributor runs a single
+  documented command that executes every PR-gating check — typecheck, unit tests,
+  the `core/dist/` bundle verification, and the governance/prose lint
+  (`scripts/governance-lint.sh`) — in order, failing fast on the first failure,
+  with no gating check omitted. It **composes** the checks that already exist
+  (notably the vendored governance script) rather than reimplementing them, so the
+  local result and CI stay identical. The rate-limited integration and e2e suites
+  stay **out** of this command — they require the sandbox and its constrained
+  budget (§req:sandbox-ci-budget) — and that exclusion is stated where the command
+  is documented so it is a deliberate, visible choice rather than a silent gap.
+  This command becomes the documented pre-PR step in CLAUDE.md and
+  CONTRIBUTING.md, replacing the partial "essentials" framing that anchors
+  contributors on the code-only subset.
+- **A red gating check can no longer auto-merge into `develop`.** The gating
+  checks (at least the governance lint and `core/dist/` verification) are required
+  on `develop`, so a PR with a failing gating check is not eligible for
+  auto-merge — closing the failure mode where a skipped local check ships the
+  violation and strands the fix. This deliberately tightens flywheel's
+  fast-auto-merge posture on its own `develop` branch; the tradeoff is acknowledged
+  in the constraints below.
+
+This sits in the contributor-experience / CI area. It does not change flywheel's
+runtime behavior as a GitHub Action, the promotion or release flow, or anything an
+adopter consumes — it changes how a flywheel contributor verifies a change before
+it merges.
+
+## Single local PR-gating command success criteria §req:local-pr-gate-criteria
+
+- **One command, full gate.** A contributor runs a single documented command and
+  it executes every PR-gating check — typecheck, unit tests, `core/dist/`
+  verification, and the governance/prose lint — with no gating check omitted.
+  Verifiable end-to-end: introduce a fault of each kind (a type error, a failing
+  unit test, a stale `core/dist/`, and a Vale/markdownlint/status-line violation)
+  and confirm the single command reports each one.
+- **Fails fast and reports which check failed.** When a check fails, the command
+  stops at that check and its output makes clear which gate failed, so the
+  contributor is not left guessing among four workflows.
+- **Green locally ⇒ green on the PR's gating jobs.** When the command passes on a
+  clean change, that change's PR does not fail any of the corresponding gating CI
+  jobs (`verify-dist.yml`, the typecheck/unit jobs, `governance-lint.yml`) — local
+  and CI agree because the command runs the same vendored checks CI runs.
+- **Governance check is included by default, not opt-in.** The prose / governance
+  lint runs as part of the single command without the contributor having to know
+  `scripts/governance-lint.sh` exists or invoke it separately — the exact gap that
+  let a Vale violation reach `develop`.
+- **Integration / e2e are visibly excluded, not silently dropped.** The command
+  does not run the sandbox-bound integration or e2e suites, and the documentation
+  for the command states that exclusion and why (sandbox budget,
+  §req:sandbox-ci-budget), so a reader knows the command is the *PR-gating* set,
+  not "all tests."
+- **Docs point at the one command.** CLAUDE.md and CONTRIBUTING.md present this
+  single command as the pre-PR check; the previous partial "essentials" list no
+  longer reads as the complete pre-PR gate.
+- **A failing gating check cannot auto-merge into `develop`.** A PR whose
+  governance-lint or `core/dist/` verification is red is not auto-merged into
+  `develop` — it is held until the check is green. Verifiable: a PR with a
+  deliberately stale `core/dist/` or a Vale violation does not merge on its own.
+
+## Single local PR-gating command user stories §req:local-pr-gate-stories
+
+- As a flywheel contributor about to open a PR, I want one command that runs
+  everything CI will gate on, so I find a skipped prose or `dist/` problem in
+  seconds locally instead of discovering it after a round-trip through CI.
+- As an agent contributing to flywheel, I want a single documented pre-PR command
+  that includes the governance lint, so I do not anchor on the code-only
+  "essentials" list and silently skip the check that ships prose violations to
+  `develop`.
+- As a contributor who ran the gate and saw it pass, I want confidence that my
+  PR's gating jobs will pass too, so my local green is the real signal and I am not
+  re-running checks in CI to learn what I could have known locally.
+- As a maintainer, I want a red gating check to block auto-merge into `develop`,
+  so a check that someone skipped locally cannot merge the violation and strand the
+  fix on the already-merged branch.
+
+## Single local PR-gating command quality attributes and constraints §req:local-pr-gate-constraints
+
+- **Composes existing checks — one source of truth.** The command runs the same
+  underlying checks CI runs (notably the vendored `scripts/governance-lint.sh`), so
+  local and CI verdicts are identical. It does not fork or reimplement any check;
+  if a check's definition changes, the single command picks it up because it
+  delegates rather than duplicates.
+- **Fast and offline-friendly.** The gating set is the *cheap* layer — typecheck,
+  unit tests, a local rebuild/diff, and local prose/structure lint — and runs in
+  seconds without the rate-limited sandbox. The sandbox-bound integration and e2e
+  suites are explicitly excluded (§req:sandbox-ci-budget); pulling them into the
+  default gate would defeat the "run it before every PR" purpose.
+- **Tool availability is handled honestly.** A gating check whose tool is not a
+  plain npm dependency (e.g. Vale, a Go binary not on npm) shall either be a
+  documented prerequisite or be reported as missing — the command shall not silently
+  pass by skipping a check whose tool is absent. A skipped check that reports
+  success is the failure mode this requirement exists to remove.
+- **No new enforcement mechanism beyond the command itself.** A pre-push /
+  pre-commit hook that makes the check unskippable is explicitly **out of scope** —
+  the deliverable is the one command and its documentation, not Git-hook
+  enforcement. (Deferred, noted in priorities.)
+- **The `develop` protection is a deliberate posture change.** Requiring gating
+  checks on `develop` tightens flywheel's documented fast-auto-merge behavior on
+  its own default development branch (§req:release-safety-gate and the broader
+  auto-merge model): a PR now waits for the required checks to be green before
+  auto-merge fires. The tradeoff — a little less merge speed for the guarantee that
+  a red gating check cannot ship — is accepted for the gating checks named here and
+  scoped to flywheel's own `develop`; it does not change what flywheel configures
+  on adopter branches.
+- **Contributor-facing only.** This is internal dogfooding ergonomics. It is not a
+  capability flywheel installs into adopter repositories and adds no surface an
+  adopter consumes.
+
+## Single local PR-gating command priorities §req:local-pr-gate-priorities
+
+Required: a single documented command that runs the full PR-gating set
+(typecheck, unit tests, `core/dist/` verification, governance/prose lint) in order,
+fail-fast, with the governance check included by default and the sandbox suites
+visibly excluded; CLAUDE.md and CONTRIBUTING.md updated to present it as *the*
+pre-PR gate; and the gating checks (at least governance-lint and `core/dist/`
+verification) required on `develop` so a red check cannot auto-merge. The command
+itself is the higher-impact, higher-confidence, easier half and the immediate cure
+for the skipped-check round-trip; the `develop` branch-protection change is the
+deeper fix for the strand-the-fix failure mode and carries the auto-merge-posture
+tradeoff above. Both are in scope for this requirement. This composes work that
+mostly exists (the vendored governance runner is already present), so the delta is
+aggregation, documentation, and branch configuration rather than new checks. It
+ranks below the requirements that protect releases or the v2 major, and is
+independent of the setup-onboarding cluster. Nice-to-have / explicitly deferred: a
+pre-push or pre-commit hook (husky / lefthook) that makes running the gate
+unskippable — valuable, but the documented command is the unit of work here and
+hook enforcement is a separate decision.

@@ -2,7 +2,7 @@
 
 Each recipe is a `release_files:` snippet you paste into your `.flywheel.yml` for ecosystems where the version lives in a checked-in file (Flutter `pubspec.yaml`, Cargo `Cargo.toml`, etc.). Flywheel turns each entry into an `@semantic-release/exec` `prepareCmd` and adds the path to `@semantic-release/git`'s `assets` so the bumped file is committed alongside the changelog.
 
-You never edit `.releaserc.json` — Flywheel overwrites any committed copy on every push. The whole release pipeline is configured from `.flywheel.yml`.
+You never edit `.releaserc.cjs` — Flywheel overwrites any committed copy on every push. The whole release pipeline is configured from `.flywheel.yml`.
 
 ## Schema reference
 
@@ -139,4 +139,4 @@ release_files:
 
 If `pattern` + `replacement` is too awkward for your file format, drop down to the `cmd` form and run any shell command you like. Flywheel only requires that `path` names the file (so it ends up in `@semantic-release/git`'s `assets`) and that the command exit non-zero on failure.
 
-If you hit a case `release_files:` cannot express at all (multi-package monorepo with independent versioning, plugins not in the bundled chain, custom `tagFormat`), please [open an issue](https://github.com/PointSource/flywheel/issues) — we'd rather extend the schema than re-introduce the committed-`.releaserc.json` escape hatch.
+If you hit a case `release_files:` cannot express at all (multi-package monorepo with independent versioning, plugins not in the bundled chain, custom `tagFormat`), please [open an issue](https://github.com/PointSource/flywheel/issues) — we'd rather extend the schema than re-introduce the committed-`.releaserc.cjs` escape hatch.

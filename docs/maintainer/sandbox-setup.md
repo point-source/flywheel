@@ -139,7 +139,7 @@ details that aren't obvious — keep them when copying:
 - The `Run semantic-release` step co-installs the plugin set inline
   (`@semantic-release/changelog`, `/exec`, `/git`, `/github`,
   `/commit-analyzer`, `/release-notes-generator`) via `npx -p`. Plugins
-  referenced in the generated `.releaserc.json` are not auto-resolved
+  referenced in the generated `.releaserc.cjs` are not auto-resolved
   by `npx semantic-release` alone — the run errors with `MODULE_NOT_FOUND`.
 
 Layer 3 cleanup branches its tests under `e2e/<scenario>-<unix-millis>`

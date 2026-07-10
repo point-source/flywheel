@@ -49,8 +49,11 @@
 #                         token. Defaults to prompting interactively when
 #                         the owner is an Organization, otherwise `repo`.
 #
-# Dependencies: git, gh. (apply-rulesets.sh additionally needs jq + python3
-# with PyYAML.)
+# Dependencies: git, gh. Deriving the managed-branch set from .flywheel.yml during
+# the pre-flight pass additionally uses python3 with PyYAML (the same dependency
+# apply-rulesets.sh and doctor.sh require); when it is absent the branch-scoped
+# brownfield checks are skipped with a could-not-verify warning rather than failing
+# setup. (apply-rulesets.sh additionally needs jq.)
 
 set -euo pipefail
 
@@ -94,6 +97,20 @@ while [[ $# -gt 0 ]]; do
     *) echo "Unknown argument: $1" >&2; exit 2 ;;
   esac
 done
+
+# Validate an explicitly-provided --preset NOW, before anything consults it. The
+# pre-flight managed-branch enumeration interpolates $PRESET into a template path
+# (`flywheel.$PRESET.yml`) and a fetch URL (§spec:brownfield-managed-branches),
+# which runs well before the preset-selection block below — so an unchecked value
+# could traverse paths or rewrite the fetch. An empty PRESET means "not chosen via
+# flag"; the interactive selection below only ever assigns one of these literals,
+# so guarding the flag value here closes the gap without disturbing that path.
+if [[ -n "$PRESET" ]]; then
+  case "$PRESET" in
+    minimal|three-stage|multi-stream) ;;
+    *) echo "error: --preset must be minimal | three-stage | multi-stream (got '$PRESET')" >&2; exit 2 ;;
+  esac
+fi
 
 # Only git is needed immediately (for `git rev-parse` below). gh's install +
 # auth state is probed by the pre-flight pass (preflight_detect_gh_capability),
@@ -552,7 +569,8 @@ preflight_detect_version_tag_shape() {
 }
 
 # ---------------------------------------------------------------------------
-# Brownfield branch-protection helpers (§spec:brownfield-detection).
+# Brownfield branch-protection helpers (§spec:brownfield-detection,
+# §spec:brownfield-managed-branches).
 #
 # These two helpers are SHARED reuse boundaries: the branch-protection-bypass
 # detector below uses them, and the sibling signed-commit/tag workstream reuses
@@ -560,34 +578,149 @@ preflight_detect_version_tag_shape() {
 # re-probing gh. Keep them standalone, read-only, and error-swallowing.
 # ---------------------------------------------------------------------------
 
-# preflight_brownfield_managed_branches — echo (newline-separated) the candidate
-# managed branches that EXIST on the remote. The candidate set is flywheel's
-# standard topology (develop main staging) because at pre-flight the preset /
-# .flywheel.yml is not yet known — we probe the superset and let the caller act
-# only on what exists. KNOWN LIMITATION (point-source/flywheel#263): a renamed /
-# multi-stream topology whose managed branch is none of develop/main/staging is not
-# probed by the branch-scoped detectors, so those checks silently no-op there (a
-# false negative caught later by doctor.sh or the first release). Existence is
-# tested with the doctor.sh idiom
-# (`gh api repos/$REPO/branches/$b`). REPO may be empty (gh unresolved); in that
-# case we can't probe the remote, so echo nothing. Read-only; errors swallowed.
-# Memoized once per run: both the bypass and signed-commit detectors call this,
-# and each probe is 3 gh API calls (develop/main/staging) — without the guard
-# that is 6 calls per run against the adopter's rate limit. preflight_run resets
-# the flag so a fresh run re-probes.
+# _preflight_linter_branches <yml-path> — echo (newline-separated) the managed
+# branch names a .flywheel.yml declares, by running lint-flywheel-config.py and
+# reading its `BRANCHES <space-separated>` line. This is doctor.sh's idiom
+# (doctor.sh derives its managed branches exactly this way), reused here so init
+# and doctor agree on what "the managed branches" are rather than inventing a
+# second parse. The linter is located next to this script, else fetched from the
+# same ref as the templates (a curl|bash run pinned to a tag fetches that tag's
+# linter, not main). Any failure — linter missing, python/PyYAML absent, malformed
+# config — echoes nothing, so the caller degrades to probing no branches rather
+# than guessing. Read-only; errors swallowed.
+_preflight_linter_branches() {
+  local yml="$1" linter="" linter_tmp=0 out line rest b
+  if [[ -n "$SCRIPT_DIR" && -f "$SCRIPT_DIR/lint-flywheel-config.py" ]]; then
+    linter="$SCRIPT_DIR/lint-flywheel-config.py"
+  else
+    linter="$(mktemp)"; linter_tmp=1
+    if ! curl -fsSL "${TEMPLATES_BASE%/templates}/lint-flywheel-config.py" -o "$linter" 2>/dev/null; then
+      rm -f "$linter"; return 0
+    fi
+  fi
+  if out="$(python3 "$linter" "$yml" 2>/dev/null)"; then
+    while IFS= read -r line; do
+      case "$line" in
+        "BRANCHES "*)
+          rest="${line#BRANCHES }"
+          # Word-split the space-separated names into one branch per line.
+          # shellcheck disable=SC2086
+          for b in $rest; do printf '%s\n' "$b"; done
+          ;;
+      esac
+    done <<< "$out"
+  fi
+  [[ $linter_tmp -eq 1 ]] && rm -f "$linter"
+  return 0
+}
+
+# _preflight_config_declared_branches — echo (newline-separated) the managed
+# branches the IN-FORCE .flywheel.yml topology declares, in priority order:
+#   (a) an existing .flywheel.yml in the repo → the branches it declares;
+#   (b) the picked template (--preset minimal|three-stage|multi-stream) → its
+#       declared branches. The template is read for branch NAMES only, so no
+#       __FLYWHEEL_VERSION__ substitution is needed; locate it next to this script
+#       (LOCAL_TEMPLATES) else fetch it from TEMPLATES_BASE.
+# The no-config / no-preset default (case c) is handled by the caller, which is the
+# single place that records the "defaulted to main" state for the adopter notice.
+# Echoes nothing when neither source is present or parsing fails. Read-only.
+_preflight_config_declared_branches() {
+  local yml="" tmpl="" tmpl_tmp=0
+  if [[ -f .flywheel.yml ]]; then
+    yml=".flywheel.yml"
+  elif [[ -n "${PRESET:-}" ]]; then
+    if [[ -n "$LOCAL_TEMPLATES" && -f "$LOCAL_TEMPLATES/flywheel.$PRESET.yml" ]]; then
+      yml="$LOCAL_TEMPLATES/flywheel.$PRESET.yml"
+    else
+      tmpl="$(mktemp)"; tmpl_tmp=1
+      if curl -fsSL "$TEMPLATES_BASE/flywheel.$PRESET.yml" -o "$tmpl" 2>/dev/null; then
+        yml="$tmpl"
+      fi
+    fi
+  fi
+  [[ -n "$yml" ]] && _preflight_linter_branches "$yml"
+  [[ $tmpl_tmp -eq 1 ]] && rm -f "$tmpl"
+  return 0
+}
+
+# preflight_brownfield_managed_branches — echo (newline-separated) the configured
+# managed branches that EXIST on the remote. The candidate set is derived from the
+# adopter's CHOSEN configuration (§spec:brownfield-managed-branches) — an existing
+# .flywheel.yml, the picked template, or, when neither is present, the `main`
+# default that init's minimal scaffold writes — NOT a hardcoded develop/main/staging
+# superset. Reading the branch set from the topology actually in force is what gives
+# renamed / multi-stream / custom-topology adopters branch-scoped coverage on their
+# real branches; standard develop/main/staging adopters see exactly the coverage
+# they did before. Each configured branch's existence is tested with the doctor.sh
+# idiom (`gh api repos/$REPO/branches/$b`). A configured branch the repo lacks is NOT
+# echoed here (the branch-scoped detectors only act on branches that exist), but it is
+# stashed in PREFLIGHT_MANAGED_BRANCHES_MISSING so the missing-branch detector can
+# alert on it (§spec:brownfield-managed-branches) — the same single existence probe
+# feeds both. REPO may be empty (gh unresolved); in that case we can't probe the
+# remote, so we resolve nothing, echo nothing, and stash no missing branches —
+# preserving today's bounded gh usage and degrading to checking nothing. Read-only;
+# errors swallowed. Memoized once per run: both the bypass and signed-commit detectors
+# call this, so without the guard each configured branch would be probed twice against
+# the adopter's rate limit. preflight_run resets the flags so a fresh run re-resolves
+# the (possibly now-written) config.
 PREFLIGHT_MANAGED_BRANCHES=""
+# Newline-separated configured branches that DO NOT exist on the remote — a CONFIRMED
+# 404, captured in the same probe pass as PREFLIGHT_MANAGED_BRANCHES.
+# preflight_detect_missing_managed_branch reads this to emit the config/warn
+# missing-branch finding.
+PREFLIGHT_MANAGED_BRANCHES_MISSING=""
+# Newline-separated configured branches whose existence the token COULD NOT OBSERVE —
+# the gh probe failed for a NON-404 reason (auth, rate limit, network, 5xx). These are
+# NOT asserted absent; preflight_detect_missing_managed_branch reports them as a
+# could-not-verify warn rather than a false "missing" (§spec:preflight-gh-capability,
+# §spec:doctor-settings-read three-state).
+PREFLIGHT_MANAGED_BRANCHES_UNVERIFIED=""
 PREFLIGHT_MANAGED_BRANCHES_READ=0
+# Set to 1 when config resolution fell back to the `main` default because the repo
+# has neither a .flywheel.yml nor a picked preset — preflight_run reads this to emit
+# the adopter-visible "defaulted to main" notice once per run.
+PREFLIGHT_BRANCHES_DEFAULTED=0
+# Set to 1 when a .flywheel.yml / preset IS present but no branch set could be derived
+# from it — the linter could not run (python3 + PyYAML absent, or the linter could not
+# be located/fetched) or the config is unreadable. The branch-scoped detectors then
+# have nothing to probe, so preflight_detect_missing_managed_branch emits a
+# could-not-verify warn instead of letting branch-scoped coverage drop silently.
+PREFLIGHT_BRANCHES_LINTER_UNAVAILABLE=0
 preflight_brownfield_managed_branches() {
   if [[ $PREFLIGHT_MANAGED_BRANCHES_READ -eq 0 ]]; then
     PREFLIGHT_MANAGED_BRANCHES_READ=1
     if [[ -n "${REPO:-}" ]]; then
-      local b found=""
-      for b in develop main staging; do
-        if gh api "repos/$REPO/branches/$b" >/dev/null 2>&1; then
+      local declared="" b found="" missing="" unverified="" probe_err
+      if [[ -f .flywheel.yml || -n "${PRESET:-}" ]]; then
+        declared="$(_preflight_config_declared_branches)"
+        # A config source IS present but yielded no branches — the linter could not
+        # run (python3 + PyYAML absent / linter unfetchable) or the config is
+        # unreadable. Flag it so the detector surfaces a could-not-verify warn rather
+        # than the branch-scoped checks silently covering nothing.
+        [[ -z "$declared" ]] && PREFLIGHT_BRANCHES_LINTER_UNAVAILABLE=1
+      else
+        # (c) No config and no picked preset: default to managing `main`, matching
+        # the minimal config init scaffolds below. Flag it for the adopter notice.
+        declared="main"
+        PREFLIGHT_BRANCHES_DEFAULTED=1
+      fi
+      while IFS= read -r b; do
+        [[ -n "$b" ]] || continue
+        # Capture stderr (stdout discarded) so a genuine 404 — the branch truly absent
+        # — is distinguished from a NON-404 failure (auth, rate limit, network, 5xx).
+        # Only a confirmed 404 is "missing"; anything else is could-not-verify, never
+        # asserted absent (§spec:preflight-gh-capability, §spec:doctor-settings-read).
+        if probe_err="$(gh api "repos/$REPO/branches/$b" 2>&1 >/dev/null)"; then
           found+="${found:+$'\n'}$b"
+        elif [[ "$probe_err" == *"HTTP 404"* ]]; then
+          missing+="${missing:+$'\n'}$b"
+        else
+          unverified+="${unverified:+$'\n'}$b"
         fi
-      done
+      done <<< "$declared"
       PREFLIGHT_MANAGED_BRANCHES="$found"
+      PREFLIGHT_MANAGED_BRANCHES_MISSING="$missing"
+      PREFLIGHT_MANAGED_BRANCHES_UNVERIFIED="$unverified"
     fi
   fi
   [[ -n "$PREFLIGHT_MANAGED_BRANCHES" ]] && printf '%s\n' "$PREFLIGHT_MANAGED_BRANCHES"
@@ -949,6 +1082,51 @@ preflight_detect_signed_commit_requirement() {
   return 0
 }
 
+# preflight_detect_missing_managed_branch — §spec:brownfield-managed-branches.
+# READ-ONLY detector reporting the managed-branch coverage gaps the single
+# existence-probe pass in preflight_brownfield_managed_branches already computed (no
+# extra gh calls here — preflight_run resolves that getter once before the detector
+# seam). It surfaces three distinct conditions, all `warn` (never a block):
+#   1. Could-not-derive: a .flywheel.yml / preset is present but no branch set could be
+#      read from it (python3 + PyYAML or the linter unavailable, or the config
+#      unreadable). Branch-scoped detection had nothing to probe, so this reports a
+#      could-not-verify `local-env` warn rather than letting coverage drop silently.
+#   2. Could-not-verify existence: a configured branch whose gh probe failed for a
+#      NON-404 reason (auth, rate limit, network). Reported as a could-not-verify
+#      `local-env` warn — never asserted absent (§spec:preflight-gh-capability,
+#      §spec:doctor-settings-read).
+#   3. Confirmed-missing: a configured branch the repo genuinely lacks (a 404). ONE
+#      aggregate config/warn finding names the branch(es) and states BOTH resolutions:
+#      create the branch, or edit .flywheel.yml to name a branch that exists. `warn`,
+#      not `block`, on purpose — a configured branch absent at init is commonly
+#      transient (the minimal template's branch name is a placeholder the adopter
+#      edits) and resolvable on the adopter's own terms, so it INFORMS rather than
+#      hard-stops; the genuine downstream hazard is still backstopped by doctor.sh and
+#      the first release / back-merge push.
+# Only case 3 routes through brownfield_finding (so it folds into the completion
+# summary via brownfield_emit_summary_records); the could-not-verify warns (1 and 2)
+# stay plain `finding ... warn`, not registered as brownfield conditions, matching the
+# rest of the script's could-not-verify handling. When REPO is unresolved every set is
+# empty (the getter probed nothing), so this no-ops — detection degrades to checking
+# nothing. Detect-and-report only: never creates a branch, never mutates state; a
+# non-interactive run reports the same warns with no mutation.
+preflight_detect_missing_managed_branch() {
+  [[ -n "${REPO:-}" ]] || return 0
+  if [[ "$PREFLIGHT_BRANCHES_LINTER_UNAVAILABLE" -eq 1 ]]; then
+    finding local-env warn "could not determine your managed branches from .flywheel.yml — deriving them needs python3 with PyYAML (the same dependency apply-rulesets.sh and doctor.sh use), or the config could not be read; branch-protection / signing checks were skipped. Install python3 + PyYAML and re-run, or run doctor.sh after setup to verify branch protection."
+  fi
+  if [[ -n "$PREFLIGHT_MANAGED_BRANCHES_UNVERIFIED" ]]; then
+    local unverified="${PREFLIGHT_MANAGED_BRANCHES_UNVERIFIED//$'\n'/, }"
+    finding local-env warn "could not verify whether configured managed branch(es) ${unverified} exist on $REPO — the GitHub API read failed (auth, rate limit, or network), not a confirmed 404; branch-scoped checks may be incomplete. Re-run when credentials / connectivity are restored, or run doctor.sh."
+  fi
+  if [[ -n "$PREFLIGHT_MANAGED_BRANCHES_MISSING" ]]; then
+    local names="${PREFLIGHT_MANAGED_BRANCHES_MISSING//$'\n'/, }"
+    brownfield_finding missing_managed_branch no config warn "configured managed branch(es) ${names} declared in your Flywheel config do not exist on $REPO — branch-scoped protection/signing checks can't cover a branch that isn't there, and the first release / back-merge push would target a missing branch. Two ways to resolve: create the branch(es) on the remote, or edit .flywheel.yml to name a branch that already exists."
+  fi
+  # End deterministically at 0; the gate reads FINDINGS_BLOCK_COUNT, not this return.
+  return 0
+}
+
 # preflight_detect_history_and_prs — §spec:brownfield-detection.
 # READ-ONLY, ADVISORY-ONLY detector: surfaces conditions in existing history and
 # open PRs that will affect — but not break — flywheel's first release/promotion.
@@ -1112,6 +1290,10 @@ preflight_run() {
   # the managed-branch list and ruleset details across the detectors that consult
   # them (rather than each detector re-probing the same gh endpoints).
   PREFLIGHT_MANAGED_BRANCHES_READ=0
+  PREFLIGHT_MANAGED_BRANCHES_MISSING=""
+  PREFLIGHT_MANAGED_BRANCHES_UNVERIFIED=""
+  PREFLIGHT_BRANCHES_DEFAULTED=0
+  PREFLIGHT_BRANCHES_LINTER_UNAVAILABLE=0
   PREFLIGHT_RULESETS_READ=0
   PREFLIGHT_DEFAULT_BRANCH_READ=0
   PREFLIGHT_DEFAULT_BRANCH=""
@@ -1120,6 +1302,15 @@ preflight_run() {
   # rather than each re-reading it over the network (a memo set inside a $()
   # subshell would not persist). One cheap repo-metadata read per run.
   preflight_brownfield_default_branch >/dev/null 2>&1 || true
+  # Resolve the config-derived managed-branch set ONCE here, in this (parent)
+  # shell, so both branch-scoped detectors share the memoized result and so the
+  # no-config "defaulted to main" notice is emitted from this VISIBLE pass — the
+  # detectors call the getter inside $(...) where its stdout is captured and never
+  # shown to the adopter (§spec:brownfield-managed-branches).
+  preflight_brownfield_managed_branches >/dev/null 2>&1 || true
+  if [[ "$PREFLIGHT_BRANCHES_DEFAULTED" -eq 1 ]]; then
+    echo "  No .flywheel.yml yet — branch-protection / signing checks default to managing 'main'; init will scaffold a minimal config defaulting to 'main'."
+  fi
   # >>> detector seam — add new detectors here >>>
   preflight_detect_gh_capability       # §spec:preflight-gh-capability
   preflight_detect_release_conflict    # §spec:preflight-release-conflict
@@ -1127,6 +1318,7 @@ preflight_run() {
   preflight_detect_credentials_app     # §spec:preflight-credentials-app
   preflight_detect_branch_protection_bypass # §spec:brownfield-detection
   preflight_detect_signed_commit_requirement # §spec:brownfield-detection
+  preflight_detect_missing_managed_branch # §spec:brownfield-managed-branches
   preflight_detect_history_and_prs     # §spec:brownfield-detection
   preflight_inject                     # test-only hook (inert unless FLYWHEEL_TEST_HOOKS=1)
   # <<< detector seam <<<

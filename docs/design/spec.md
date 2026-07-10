@@ -46,7 +46,7 @@ Responsibilities:
 
 ### 2. semantic-release
 
-Handles version computation, changelog generation, git tagging, and GitHub Release creation. Runs as a step in `flywheel-push.yml` on push to any managed branch. `pr-conductor` generates `.releaserc.json` at runtime from `.flywheel.yml` — adopters never configure semantic-release directly.
+Handles version computation, changelog generation, git tagging, and GitHub Release creation. Runs as a step in `flywheel-push.yml` on push to any managed branch. `pr-conductor` generates `.releaserc.cjs` at runtime from `.flywheel.yml` — adopters never configure semantic-release directly.
 
 ### 3. GitHub merge queue
 
@@ -202,7 +202,7 @@ See [`decisions/0001-hybrid-merge-strategy.md`](./decisions/0001-hybrid-merge-st
 
 #### Release modes
 
-- **`none`** — the branch is in the promotion chain (auto-promotion PRs are still upserted to and from it) but pushes do **not** run semantic-release. No tag is created, no GitHub Release is published, no `.releaserc.json` is written. Use this when an integration branch should accumulate work and auto-promote without producing its own release artifacts. The terminal branch of a stream cannot be `release: none` (validation error).
+- **`none`** — the branch is in the promotion chain (auto-promotion PRs are still upserted to and from it) but pushes do **not** run semantic-release. No tag is created, no GitHub Release is published, no `.releaserc.cjs` is written. Use this when an integration branch should accumulate work and auto-promote without producing its own release artifacts. The terminal branch of a stream cannot be `release: none` (validation error).
 - **`prerelease`** — pushes release a prerelease tag using `suffix` as the identifier (e.g. `v1.3.0-dev.4`). Each `suffix` must be unique across the prerelease branches within the same stream (otherwise tags collide). The same `suffix` may be reused in a different stream — each stream gets its own scoped `tagFormat`, so the tags live in distinct namespaces.
 - **`production`** — pushes release a production tag (e.g. `v1.3.0`). At most one production branch is allowed per stream, and it must be the terminal branch.
 
@@ -242,7 +242,7 @@ Example: if `main` (stream: main-line) and `customer-acme` (stream: customer-acm
 
 **Tag collision across streams is always a hard error, regardless of publish destination.** Git tags are repository-global. Two streams in the same repo that both produce `v1.0.1` will cause the second semantic-release run to fail with a tag collision error — Git will refuse to create a tag that already exists at a different commit.
 
-Flywheel handles this by generating a stream-scoped `tagFormat` for every stream's `.releaserc.json`. Each stream uses its stream name as a tag prefix:
+Flywheel handles this by generating a stream-scoped `tagFormat` for every stream's `.releaserc.cjs`. Each stream uses its stream name as a tag prefix:
 
 ```
 main-line stream:      v1.0.1          (tagFormat: v${version})
@@ -284,9 +284,9 @@ The pre-release identifier comes from the `suffix` field in `.flywheel.yml` (set
 
 Non-bumping commits accumulate silently until a qualifying commit lands. They are included in the changelog of the next real release. No tag or GitHub Release is created for a push that contains only non-bumping commits.
 
-### `.releaserc.json` generation
+### `.releaserc.cjs` generation
 
-`pr-conductor` writes `.releaserc.json` to the workspace before semantic-release runs, derived from `.flywheel.yml`. Adopters never manually configure semantic-release.
+`pr-conductor` writes `.releaserc.cjs` to the workspace before semantic-release runs, derived from `.flywheel.yml`. Adopters never manually configure semantic-release.
 
 **Plugin config:** Flywheel always generates an explicit plugin list, never relying on semantic-release defaults. The default plugin set includes `@semantic-release/npm` which breaks non-Node projects. Flywheel's generated config uses:
 
@@ -303,7 +303,7 @@ Non-bumping commits accumulate silently until a qualifying commit lands. They ar
 }
 ```
 
-No npm plugin. `@semantic-release/exec` is loaded but no-op when no `release_files:` are declared. When `release_files:` are present (see **Release file management** below), Flywheel synthesizes a `prepareCmd` for the exec plugin and extends `@semantic-release/git`'s `assets` list. Adopters never edit `.releaserc.json` directly — a committed `.releaserc.json` is overwritten on every push.
+No npm plugin. `@semantic-release/exec` is loaded but no-op when no `release_files:` are declared. When `release_files:` are present (see **Release file management** below), Flywheel synthesizes a `prepareCmd` for the exec plugin and extends `@semantic-release/git`'s `assets` list. Adopters never edit `.releaserc.cjs` directly — a committed `.releaserc.cjs` is overwritten on every push.
 
 **Release file management:** Many ecosystems carry the version in a checked-in file (Flutter's `pubspec.yaml`, Cargo's `Cargo.toml`, .NET `.csproj`, Gradle, etc.). Adopters declare these in `.flywheel.yml` under `release_files:`; Flywheel turns the entries into `@semantic-release/exec` `prepareCmd` invocations and adds each path to `@semantic-release/git`'s `assets` so the bumped file is committed alongside the changelog.
 
@@ -356,9 +356,9 @@ The build number is **tag-count-based**: it counts existing `v*` tags repo-wide 
 
 **Single-branch streams:** semantic-release requires at least one non-pre-release branch in its config (`ERELEASEBRANCHES` error otherwise). A stream whose only branch is `release: prerelease` (e.g. `customer-acme` with `suffix: acme`) is treated by Flywheel as a release branch — the `suffix` field in `.flywheel.yml` controls the tag format prefix, not semantic-release's `prerelease` flag. The branch is declared as a normal release branch with a scoped tag format.
 
-**`release: none` branches:** branches with `release: none` are filtered out of the generated `.releaserc.json` `branches` array entirely. They don't appear in any stream's release config and pushes to them skip the semantic-release step (no `.releaserc.json` is written). They still participate in promotion PRs as a normal stream member, and they still receive back-merges from downstream releases (so `CHANGELOG.md` stays in sync).
+**`release: none` branches:** branches with `release: none` are filtered out of the generated `.releaserc.cjs` `branches` array entirely. They don't appear in any stream's release config and pushes to them skip the semantic-release step (no `.releaserc.cjs` is written). They still participate in promotion PRs as a normal stream member, and they still receive back-merges from downstream releases (so `CHANGELOG.md` stays in sync).
 
-For repositories with multiple streams, `pr-conductor` detects which stream the current branch belongs to and generates the appropriate `.releaserc.json` scoped to that stream. Each stream runs semantic-release independently.
+For repositories with multiple streams, `pr-conductor` detects which stream the current branch belongs to and generates the appropriate `.releaserc.cjs` scoped to that stream. Each stream runs semantic-release independently.
 
 ### Why semantic-release over release-please
 
@@ -467,7 +467,7 @@ Flywheel is published to the GitHub Actions marketplace as `point-source/flywhee
 
 A GitHub App with:
 
-- Contents: read and write (tag creation, `.releaserc.json` write)
+- Contents: read and write (tag creation, `.releaserc.cjs` write)
 - Pull requests: read and write (PR creation, body/label updates, auto-merge)
 - Issues: read and write (label add/remove on PRs)
 - Checks: read and write (post the `flywheel/conventional-commit` check)
@@ -524,7 +524,7 @@ jobs:
 
 Both files are thin callers of reusable workflows hosted in `point-source/flywheel`. The reusable workflows ([`pr.yml`](../../.github/workflows/pr.yml), [`push.yml`](../../.github/workflows/push.yml)) hold the canonical step list — the action invocation, the conduct/release job's `if:` guards, the `semantic-release` invocation with pinned plugin majors, the `@`-mention sanitizer, and the back-merge loop with App-token extraheader plumbing. Bug fixes there propagate to adopters via the floating major tag (`@v1`) on the next workflow run, no adopter PR required (#84).
 
-`pr-conductor` sets `managed_branch` output to `true` when the pushed branch is found in a stream in `.flywheel.yml`, and writes `.releaserc.json` to the workspace. If the branch is not managed, it sets `managed_branch` to `false` and exits without writing any files — the semantic-release step is skipped entirely.
+`pr-conductor` sets `managed_branch` output to `true` when the pushed branch is found in a stream in `.flywheel.yml`, and writes `.releaserc.cjs` to the workspace. If the branch is not managed, it sets `managed_branch` to `false` and exits without writing any files — the semantic-release step is skipped entirely.
 
 ### `build.yml` (you write this)
 
@@ -644,7 +644,7 @@ TypeScript, compiled to a single bundled JavaScript file for distribution. Publi
 
 1. Read `.flywheel.yml` — exit silently if pushed branch not in any stream
 2. Find the stream containing the pushed branch
-3. Generate `.releaserc.json` from that stream's branch array, in order
+3. Generate `.releaserc.cjs` from that stream's branch array, in order
 4. Exit — semantic-release runs as the next step in `flywheel-push.yml` and picks up the generated config
 
 ### On `push` event — promotion PR flow (independent of release flow)

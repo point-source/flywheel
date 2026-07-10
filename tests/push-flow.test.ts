@@ -2,6 +2,10 @@ import { describe, expect, it } from "vitest";
 
 import { getUpstreamBranches, runPushFlow } from "../src/push-flow.js";
 import type { FlywheelConfig } from "../src/types.js";
+import { loadReleaseConfig } from "./helpers/loadReleaseConfig.js";
+
+// A no-op remover so unit runs never touch the real filesystem.
+const noopRemover = async (): Promise<void> => undefined;
 
 const config: FlywheelConfig = {
   streams: [
@@ -37,7 +41,7 @@ describe("runPushFlow", () => {
     expect(writes).toEqual([]);
   });
 
-  it("managed branch → writes .releaserc.json with the correct stream's config", async () => {
+  it("managed branch → writes .releaserc.cjs with the correct stream's config", async () => {
     const writes: Array<{ path: string; contents: string }> = [];
     const outcome = await runPushFlow({
       branchRef: "develop",
@@ -47,16 +51,57 @@ describe("runPushFlow", () => {
       writer: async (path, contents) => {
         writes.push({ path, contents });
       },
+      remover: noopRemover,
     });
     expect(outcome.kind).toBe("release");
     expect(writes).toHaveLength(1);
-    expect(writes[0]!.path).toBe("/ws/.releaserc.json");
-    const rc = JSON.parse(writes[0]!.contents);
+    expect(writes[0]!.path).toBe("/ws/.releaserc.cjs");
+    const rc = loadReleaseConfig(writes[0]!.contents);
     expect(rc.tagFormat).toBe("v${version}");
     expect(rc.branches).toEqual([
       { name: "develop", prerelease: "dev", channel: "dev" },
       { name: "main" },
     ]);
+    // The generated module carries a real finalizeContext function on the
+    // release-notes-generator plugin (the dedup hook survives serialization).
+    const generator = rc.plugins.find(
+      (p: unknown): p is [string, { writerOpts: { finalizeContext: unknown } }] =>
+        Array.isArray(p) &&
+        p[0] === "@semantic-release/release-notes-generator" &&
+        typeof p[1] === "object" &&
+        p[1] !== null,
+    );
+    expect(
+      generator,
+      "release-notes-generator plugin entry with options must be present",
+    ).toBeDefined();
+    expect(typeof generator![1].writerOpts.finalizeContext).toBe("function");
+  });
+
+  it("removes shadowing config files before writing the generated one", async () => {
+    const writes: string[] = [];
+    const removed: string[] = [];
+    await runPushFlow({
+      branchRef: "develop",
+      config,
+      workspace: "/ws",
+      log: { info: () => undefined },
+      writer: async (path) => {
+        writes.push(path);
+      },
+      remover: async (path) => {
+        removed.push(path);
+      },
+    });
+    // Every rc filename cosmiconfig ranks above `.releaserc.cjs` is cleared so a
+    // committed copy can never shadow the flywheel-generated config.
+    expect(removed).toEqual([
+      "/ws/.releaserc.json",
+      "/ws/.releaserc.yaml",
+      "/ws/.releaserc.yml",
+      "/ws/.releaserc.js",
+    ]);
+    expect(writes).toEqual(["/ws/.releaserc.cjs"]);
   });
 
   it("managed branch in secondary stream → prefixed tagFormat", async () => {
@@ -69,8 +114,9 @@ describe("runPushFlow", () => {
       writer: async (path, contents) => {
         writes.push({ path, contents });
       },
+      remover: noopRemover,
     });
-    const rc = JSON.parse(writes[0]!.contents);
+    const rc = loadReleaseConfig(writes[0]!.contents);
     expect(rc.tagFormat).toBe("customer-acme/v${version}");
     expect(rc.branches).toEqual([{ name: "customer-acme" }]);
   });
@@ -99,9 +145,10 @@ describe("runPushFlow", () => {
         buildCalls.push(workspace);
         return 17;
       },
+      remover: noopRemover,
     });
     expect(buildCalls).toEqual(["/ws"]);
-    const rc = JSON.parse(writes[0]!.contents);
+    const rc = loadReleaseConfig(writes[0]!.contents);
     const exec = rc.plugins.find(
       (p: unknown) => Array.isArray(p) && p[0] === "@semantic-release/exec",
     );
@@ -129,6 +176,7 @@ describe("runPushFlow", () => {
         buildCalls.push(workspace);
         return 99;
       },
+      remover: noopRemover,
     });
     expect(buildCalls).toEqual([]);
     expect(writes).toHaveLength(1);
