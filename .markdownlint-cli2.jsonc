@@ -6,6 +6,7 @@
   },
   "ignores": [
     "CHANGELOG.md",
-    "**/CHANGELOG.md"
+    "**/CHANGELOG.md",
+    "**/node_modules/**"
   ]
 }

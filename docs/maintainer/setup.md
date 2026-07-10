@@ -28,7 +28,7 @@ Flywheel protects its own `main` branch with the four rulesets from spec §Branc
 ### Ruleset 1 — Protect `main`
 - Target: `main`
 - Require pull request before merging
-- Require status checks: `verify`, plus any future quality checks
+- Require status checks: the PR-gating set (see *Required status checks on `develop` and `main`* below)
 - Block force pushes
 - Block deletions
 - Bypass actor: the Flywheel GitHub App only
@@ -45,6 +45,87 @@ Flywheel protects its own `main` branch with the four rulesets from spec §Branc
 
 ### Ruleset 4 — Branch naming (optional)
 - Require feature branches to match `(feat|fix|chore|refactor|perf|style|test|docs|build|ci|revert)/.*`
+
+### Required status checks on `develop` and `main` (PR-gating)
+
+These rulesets are applied by `scripts/apply-rulesets.sh`, which adds the
+required status checks to the **"Flywheel managed branches — review"** ruleset
+(it spans both managed branches, `refs/heads/develop` and `refs/heads/main`).
+This is ordinary GitHub branch protection — *not* anything `.flywheel.yml`
+configures — and it is scoped to this repository; nothing flywheel configures on
+adopter branches changes. See spec §spec:develop-gating-required.
+
+**Why it exists.** Without required checks, flywheel auto-merges a title-type-
+eligible PR into `develop` the instant it is mergeable — even with a red gating
+check, which ships the violation and strands any in-flight fix. Requiring the
+gating checks holds such a PR until the check is green. flywheel's `pr-flow`
+still enables GitHub **native auto-merge** on an eligible PR; native auto-merge
+then waits for these required checks instead of firing immediately. Accepted
+tradeoff: a little less merge speed on flywheel's own development branch in
+exchange for the guarantee that a red gating check cannot ship.
+
+**Canonical required-check contexts** (the exact check-run names CI emits — a
+wrong context name silently never blocks):
+
+| Context | Workflow / job | Gate |
+| --- | --- | --- |
+| `flywheel/conventional-commit` | `flywheel-pr.yml` | skip-ci marker / title check |
+| `verify` | `verify-dist.yml` job `verify` | `core/dist/` bundle verification |
+| `lint` | `governance-lint.yml` job `lint` | governance + Vale prose lint |
+| `integration` | `integration.yml` | integration suite |
+
+Do **not** rename those jobs: the check-run context equals the job id, so a
+rename silently breaks the required-check reference. `classify` is the sub-second
+no-op gating job — it must **not** be a required check. A required job that the
+`classify` step skips (a flywheel release/back-merge commit) still reports
+success to the required-check rule, so the gate stays honest on every other push.
+
+**Reproduce / re-apply.** The blessed path is the same script adopters use, with
+the four contexts passed explicitly (`--app-id` is the App's bypass actor id):
+
+```bash
+./scripts/apply-rulesets.sh point-source/flywheel \
+  --required-checks "flywheel/conventional-commit,integration,verify,lint" \
+  --app-id 3536094
+```
+
+Caveat: a full `apply-rulesets.sh` run also flips `delete_branch_on_merge=true`,
+which is intentionally **off** on this repo while #60 is open. To change *only*
+the required checks without that side effect, PATCH the review ruleset in place
+(read it, append the context, PUT it back — preserving the existing contexts,
+the `pull_request` rule, and the App bypass actor):
+
+A PUT **replaces the entire ruleset object**, so the read-modify-write below
+echoes `conditions` and `bypass_actors` straight back from the live GET. The
+`error` guard refuses to proceed if the live ruleset targets no branches — an
+empty `conditions.ref_name.include` would otherwise be PUT verbatim and silently
+disable protection on both `develop` and `main`:
+
+```bash
+RS=16034438   # "Flywheel managed branches — review" ruleset id
+gh api repos/point-source/flywheel/rulesets/$RS \
+  | jq '
+      if (.conditions.ref_name.include | length) == 0
+      then error("refusing PUT: live ruleset targets no branches")
+      else {name,target,enforcement,conditions,bypass_actors,
+            rules: [.rules[]
+              | if .type=="required_status_checks"
+                then .parameters.required_status_checks
+                     |= (. + [{"context":"lint"}] | unique_by(.context))
+                else . end]}
+      end' \
+  | gh api -X PUT repos/point-source/flywheel/rulesets/$RS --input -
+```
+
+**Verify (required).** Confirm both the contexts and that both branches are still
+targeted — a narrowed `include` is the silent-failure mode this step catches:
+
+```bash
+gh api repos/point-source/flywheel/rulesets/$RS --jq '
+  "scope: " + (.conditions.ref_name.include | join(", ")),
+  "required: " + ([.rules[] | select(.type=="required_status_checks")
+                   .parameters.required_status_checks[].context] | join(", "))'
+```
 
 ## Quality check workflows
 

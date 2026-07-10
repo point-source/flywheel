@@ -28257,12 +28257,19 @@ function createGitHubClient(token, repoFullName) {
       }
     },
     async listPullCommits(pull_number) {
-      const all = await octokit.paginate(octokit.rest.pulls.listCommits, {
-        owner,
-        repo,
-        pull_number,
-        per_page: 100
-      });
+      let all;
+      try {
+        all = await octokit.paginate(octokit.rest.pulls.listCommits, {
+          owner,
+          repo,
+          pull_number,
+          per_page: 100
+        });
+      } catch (err) {
+        const status = err?.status;
+        if (status === 404) return [];
+        throw err;
+      }
       return all.map((c) => {
         const message = c.commit.message;
         const { title, body } = splitMessage(message);
@@ -28691,12 +28698,19 @@ async function mapWithConcurrency(items, limit, fn) {
 async function aggregateClosesRefs(gh, pending) {
   const subPrNumbers = pending.map((c) => extractTrailingPrNumber(c.title)).filter((n) => n !== null);
   if (subPrNumbers.length === 0) return [];
-  const bodies = await mapWithConcurrency(
+  const perPrRefs = await mapWithConcurrency(
     subPrNumbers,
     GET_PULL_BODY_CONCURRENCY,
-    (n) => gh.getPullBody(n)
+    async (n) => {
+      const [body, commits] = await Promise.all([
+        gh.getPullBody(n),
+        gh.listPullCommits(n)
+      ]);
+      const texts = [body, ...commits.flatMap((c) => [c.title, c.body])];
+      return texts.flatMap(extractClosesRefs);
+    }
   );
-  const refs = bodies.flatMap(extractClosesRefs);
+  const refs = perPrRefs.flat();
   const filtered = refs.filter((n) => !subPrNumbers.includes(n));
   return Array.from(new Set(filtered)).sort((a, b) => a - b);
 }

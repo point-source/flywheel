@@ -338,7 +338,8 @@ function formatPromotionBody(p: BodyParams): string {
     );
   }
   // Closes-keyword references aggregated from each pending sub-PR's body
-  // (see aggregateClosesRefs). When the promotion PR merges into the
+  // AND its commit messages (titles + footers) — see aggregateClosesRefs.
+  // When the promotion PR merges into the
   // production branch GitHub auto-closes these issues — without this line
   // they stay open because GitHub only auto-closes from PRs/commits that
   // land on the default branch, and sub-PRs land on develop. See #77.
@@ -390,12 +391,13 @@ export function extractClosesRefs(body: string | null): number[] {
   return out;
 }
 
-// Cap on parallel getPullBody calls during Closes-aggregation. Unbounded
-// Promise.all over a large `pending` list trips GitHub's secondary rate
-// limit (the limit is on bursts of concurrent requests, not total volume),
-// which fails the whole runPromotion. 5 in flight stays well under
-// GitHub's published guidance of "no more than 100 concurrent requests"
-// while still parallelizing enough to keep a typical promotion fast.
+// Cap on parallel sub-PR reads during Closes-aggregation — each worker reads
+// one sub-PR's body and its commit list. Unbounded Promise.all over a large
+// `pending` list trips GitHub's secondary rate limit (the limit is on bursts
+// of concurrent requests, not total volume), which fails the whole
+// runPromotion. 5 sub-PRs in flight stays well under GitHub's published
+// guidance of "no more than 100 concurrent requests" while still
+// parallelizing enough to keep a typical promotion fast.
 const GET_PULL_BODY_CONCURRENCY = 5;
 
 async function mapWithConcurrency<T, R>(
@@ -427,16 +429,32 @@ async function aggregateClosesRefs(
     .map((c) => extractTrailingPrNumber(c.title))
     .filter((n): n is number => n !== null);
   if (subPrNumbers.length === 0) return [];
-  const bodies = await mapWithConcurrency(
+  // For each sub-PR, scan its description AND its commit messages (titles +
+  // bodies) for closing keywords. A footer-style `Closes #N` lives in a
+  // commit body, not the PR description — and flywheel's squash-merge onto the
+  // source branch collapses those per-commit footers, so the only surviving
+  // copy is the sub-PR's own commit list (see #265). Every source runs through
+  // the same `extractClosesRefs` recognizer. The trailing `(#N)` on a commit
+  // title stays a PR-locator (extractTrailingPrNumber, above) and is never a
+  // closing reference. The commit reads ride the existing per-sub-PR worker,
+  // so the bounded-concurrency cap covers them too — no second commit walk.
+  const perPrRefs = await mapWithConcurrency(
     subPrNumbers,
     GET_PULL_BODY_CONCURRENCY,
-    (n) => gh.getPullBody(n),
+    async (n) => {
+      const [body, commits] = await Promise.all([
+        gh.getPullBody(n),
+        gh.listPullCommits(n),
+      ]);
+      const texts = [body, ...commits.flatMap((c) => [c.title, c.body])];
+      return texts.flatMap(extractClosesRefs);
+    },
   );
-  const refs = bodies.flatMap(extractClosesRefs);
-  // Drop self-references — a sub-PR whose body says "closes #<itself>" is
-  // either a typo or a reference to a future-numbered issue that GitHub
-  // already linked separately. Either way, repeating it on the promotion
-  // PR is noise.
+  const refs = perPrRefs.flat();
+  // Drop self-references — a sub-PR whose body or a commit footer says
+  // "closes #<itself>" is either a typo or a reference to a future-numbered
+  // issue that GitHub already linked separately. Either way, repeating it on
+  // the promotion PR is noise.
   const filtered = refs.filter((n) => !subPrNumbers.includes(n));
   return Array.from(new Set(filtered)).sort((a, b) => a - b);
 }

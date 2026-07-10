@@ -13,6 +13,8 @@
     "test:integration": "vitest run --config vitest.integration.config.ts --passWithNoTests",
     "test:e2e": "vitest run --config vitest.e2e.config.ts --passWithNoTests",
     "verify-dist": "node scripts/build.mjs && git diff --exit-code -- core/dist/",
+    "governance-lint": "bash scripts/governance-lint.sh",
+    "check": "npm run typecheck && npm run test && npm run verify-dist && npm run governance-lint",
     "sandbox:reset": "node scripts/sandbox-reset.mjs"
   },
   "dependencies": {

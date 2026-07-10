@@ -5,6 +5,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -231,54 +232,14 @@ describe("init.sh — brownfield version-tag-shape detection", () => {
  * substring appears in the full `gh api` arg string wins; unmatched `gh api`
  * calls fall back to echoing `[]` exit 0 so unrelated detectors stay quiet.
  * `gh auth status` and `gh repo view` always answer so the gh-capability /
- * REPO-resolution detectors stay green. */
+ * REPO-resolution detectors stay green. A thin wrapper over runInitCfg (defined
+ * below, the general config-aware runner) with the default scaffold args — BP
+ * cases need neither its gh-call log nor its fixture-config / arg overrides. */
 function runInitBP(
   apiCases: Array<[string, number, string]>,
   opts: { env?: Record<string, string> } = {},
 ): RunResult {
-  const work = mkdtempSync(join(tmpdir(), "flywheel-bp-"));
-  const binDir = join(work, "bin");
-  mkdirSync(binDir);
-  const gh = join(binDir, "gh");
-  // Build the `gh api` dispatch as a bash case-ladder over the full arg string.
-  const apiDispatch = apiCases
-    .map(
-      ([needle, code, out]) =>
-        `  if [[ "$args" == *${JSON.stringify(needle)}* ]]; then ` +
-        `printf '%s' ${JSON.stringify(out)}; exit ${code}; fi`,
-    )
-    .join("\n");
-  writeFileSync(
-    gh,
-    `#!/usr/bin/env bash\n` +
-      `if [[ "$1" == "auth" && "$2" == "status" ]]; then echo "  - Token scopes: 'repo', 'read:org'"; exit 0; fi\n` +
-      `if [[ "$1" == "repo" && "$2" == "view" ]]; then echo "acme/widget"; exit 0; fi\n` +
-      `if [[ "$1" == "variable" || "$1" == "secret" ]]; then echo ""; exit 0; fi\n` +
-      `if [[ "$1" == "api" ]]; then\n` +
-      `  shift\n` +
-      `  args="$*"\n` +
-      apiDispatch +
-      `\n  echo "[]"; exit 0\n` +
-      `fi\n` +
-      `echo "stub gh: unhandled: $*" >&2; exit 1\n`,
-  );
-  chmodSync(gh, 0o755);
-  const doctorStub = writeDoctorStub(binDir, { blocks: 0, warns: 0 });
-  execFileSync("git", ["init", "-q"], { cwd: work });
-  const r = spawnSync("bash", [initSh, ...SCAFFOLD_ARGS], {
-    cwd: work,
-    encoding: "utf8",
-    input: "",
-    timeout: 30000,
-    env: {
-      ...process.env,
-      PATH: `${binDir}:${process.env.PATH}`,
-      FLYWHEEL_TEST_HOOKS: "1",
-      FLYWHEEL_DOCTOR_OVERRIDE: doctorStub,
-      ...(opts.env ?? {}),
-    },
-  });
-  return { status: r.status, stdout: r.stdout ?? "", stderr: r.stderr ?? "", work };
+  return runInitCfg(apiCases, opts);
 }
 
 // Ruleset detail covering refs/heads/main with a pull_request rule. `bypass` is
@@ -720,6 +681,439 @@ describe("init.sh — brownfield history & open-PR awareness", () => {
       expect(out).toContain("[local-env]");
       expect(out).toMatch(/could not verify open PRs/i);
       expect(existsSync(join(r.work, ".flywheel.yml"))).toBe(true);
+    } finally {
+      rmSync(r.work, { recursive: true, force: true });
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// preflight_brownfield_managed_branches — config-derived enumeration
+// (§spec:brownfield-managed-branches).
+//
+// The two branch-scoped detectors above share ONE managed-branch enumeration.
+// These cases prove that enumeration takes its candidate set from the adopter's
+// CHOSEN configuration — an existing .flywheel.yml, the picked --preset template,
+// or the `main` default when neither exists — and never from a hardcoded
+// develop/main/staging list. The gh stub logs every invocation to a file so a
+// case can assert which branches were (and were NOT) probed and that each is
+// probed once per run.
+// ---------------------------------------------------------------------------
+
+/** Like runInitBP, but: (1) logs every `gh` invocation's args to a file exposed
+ * as `ghCalls`; (2) optionally writes a `.flywheel.yml` fixture into the work dir
+ * BEFORE invoking init (the existing-config path); (3) lets the caller override
+ * the init args (e.g. drop `--preset` to exercise the no-config default). */
+function runInitCfg(
+  apiCases: Array<[string, number, string]>,
+  opts: {
+    env?: Record<string, string>;
+    args?: string[];
+    flywheelYml?: string;
+    binStubs?: Record<string, string>;
+  } = {},
+): RunResult & { ghCalls: string } {
+  const work = mkdtempSync(join(tmpdir(), "flywheel-cfg-"));
+  const binDir = join(work, "bin");
+  mkdirSync(binDir);
+  const ghLog = join(work, "gh-calls.log");
+  const gh = join(binDir, "gh");
+  // A successful `gh api` prints its JSON to stdout; a failing one prints its
+  // diagnostic (e.g. `gh: Not Found (HTTP 404)`) to stderr — mirror that here so the
+  // branch-existence probe, which now reads stderr to tell a real 404 from a transient
+  // failure, sees output on the same stream real gh would use.
+  const apiDispatch = apiCases
+    .map(
+      ([needle, code, out]) =>
+        `  if [[ "$args" == *${JSON.stringify(needle)}* ]]; then ` +
+        `printf '%s' ${JSON.stringify(out)}${code === 0 ? "" : " >&2"}; exit ${code}; fi`,
+    )
+    .join("\n");
+  writeFileSync(
+    gh,
+    `#!/usr/bin/env bash\n` +
+      `printf '%s\\n' "$*" >> ${JSON.stringify(ghLog)}\n` +
+      `if [[ "$1" == "auth" && "$2" == "status" ]]; then echo "  - Token scopes: 'repo', 'read:org'"; exit 0; fi\n` +
+      `if [[ "$1" == "repo" && "$2" == "view" ]]; then echo "acme/widget"; exit 0; fi\n` +
+      `if [[ "$1" == "variable" || "$1" == "secret" ]]; then echo ""; exit 0; fi\n` +
+      `if [[ "$1" == "api" ]]; then\n` +
+      `  shift\n` +
+      `  args="$*"\n` +
+      apiDispatch +
+      `\n  echo "[]"; exit 0\n` +
+      `fi\n` +
+      `echo "stub gh: unhandled: $*" >&2; exit 1\n`,
+  );
+  chmodSync(gh, 0o755);
+  // Extra executables on PATH ahead of the real ones — used to simulate a missing
+  // tool (e.g. a python3 that fails the linter invocation to exercise the
+  // could-not-verify path when PyYAML is absent).
+  for (const [name, body] of Object.entries(opts.binStubs ?? {})) {
+    const p = join(binDir, name);
+    writeFileSync(p, body);
+    chmodSync(p, 0o755);
+  }
+  const doctorStub = writeDoctorStub(binDir, { blocks: 0, warns: 0 });
+  execFileSync("git", ["init", "-q"], { cwd: work });
+  if (opts.flywheelYml !== undefined) {
+    writeFileSync(join(work, ".flywheel.yml"), opts.flywheelYml);
+  }
+  const r = spawnSync("bash", [initSh, ...(opts.args ?? SCAFFOLD_ARGS)], {
+    cwd: work,
+    encoding: "utf8",
+    input: "",
+    timeout: 30000,
+    env: {
+      ...process.env,
+      PATH: `${binDir}:${process.env.PATH}`,
+      FLYWHEEL_TEST_HOOKS: "1",
+      FLYWHEEL_DOCTOR_OVERRIDE: doctorStub,
+      ...(opts.env ?? {}),
+    },
+  });
+  const ghCalls = existsSync(ghLog) ? readFileSync(ghLog, "utf8") : "";
+  return { status: r.status, stdout: r.stdout ?? "", stderr: r.stderr ?? "", work, ghCalls };
+}
+
+// A single managed branch, declared via a valid one-stream config.
+const oneBranchConfig = (branch: string) =>
+  `flywheel:\n  streams:\n    - name: main-line\n      branches:\n        - name: ${branch}\n          release: production\n          auto_merge: [fix, chore, docs]\n`;
+
+// A branch ruleset (PR-required) scoped to refs/heads/<branch>; `bypass` JSON is
+// spliced into bypass_actors so a case can include / omit the Integration App.
+const prRuleset = (id: number, branch: string, bypass: string) =>
+  JSON.stringify({
+    id,
+    target: "branch",
+    conditions: { ref_name: { include: [`refs/heads/${branch}`], exclude: [] } },
+    rules: [{ type: "pull_request" }],
+    bypass_actors: JSON.parse(bypass),
+  });
+
+// Init args without a preset, so the no-config default path engages.
+const NO_PRESET_ARGS = ["--version", "v0-preflight-test", "--skip-secrets", "--skip-rulesets"];
+
+describe("init.sh — config-derived managed-branch enumeration", () => {
+  it("trunk-only config + ruleset omitting the App bypass ⇒ finding on 'trunk'; never probes develop/main/staging", () => {
+    const r = runInitCfg(
+      [
+        ["repos/acme/widget/branches/trunk", 0, ""],
+        ["repos/acme/widget/rulesets/1", 0, prRuleset(1, "trunk", "[]")],
+        ["repos/acme/widget/rulesets", 0, JSON.stringify([{ id: 1, target: "branch" }])],
+      ],
+      { flywheelYml: oneBranchConfig("trunk") },
+    );
+    try {
+      const combined = stripAnsi(r.stdout + r.stderr);
+      expect(r.status, `combined:\n${combined}`).not.toBe(0);
+      expect(combined).toMatch(/pre-flight (failed|halted)/i);
+      expect(combined).toContain("[instance]");
+      expect(combined).toContain("trunk");
+      expect(combined).toMatch(/bypass actor/i);
+      // Probed the configured branch — and NOT the old hardcoded candidate set.
+      expect(r.ghCalls).toMatch(/branches\/trunk$/m);
+      expect(r.ghCalls).not.toMatch(/branches\/develop$/m);
+      expect(r.ghCalls).not.toMatch(/branches\/staging$/m);
+      expect(r.ghCalls).not.toMatch(/branches\/main$/m);
+    } finally {
+      rmSync(r.work, { recursive: true, force: true });
+    }
+  });
+
+  it("existing .flywheel.yml declaring only 'release' ⇒ probed on 'release', never on develop/main/staging", () => {
+    const r = runInitCfg(
+      [
+        ["repos/acme/widget/branches/release", 0, ""],
+        ["repos/acme/widget/rulesets", 0, "[]"],
+      ],
+      { flywheelYml: oneBranchConfig("release"), args: NO_PRESET_ARGS },
+    );
+    try {
+      const out = stripAnsi(r.stdout);
+      const combined = stripAnsi(r.stdout + r.stderr);
+      expect(r.status, `combined:\n${combined}`).toBe(0);
+      expect(out).toContain("pre-flight: no blockers.");
+      // Existing config drives detection — release probed, hardcoded set absent.
+      expect(r.ghCalls).toMatch(/branches\/release$/m);
+      expect(r.ghCalls).not.toMatch(/branches\/develop$/m);
+      expect(r.ghCalls).not.toMatch(/branches\/staging$/m);
+      expect(r.ghCalls).not.toMatch(/branches\/main$/m);
+      // An existing config is honored, never re-defaulted.
+      expect(out).not.toMatch(/default.*main/i);
+    } finally {
+      rmSync(r.work, { recursive: true, force: true });
+    }
+  });
+
+  it("no .flywheel.yml and no --preset ⇒ 'defaulted to main' notice; probes main; scaffolds config", () => {
+    const r = runInitCfg(
+      [
+        ["repos/acme/widget/branches/main", 0, ""],
+        ["repos/acme/widget/rulesets", 0, "[]"],
+      ],
+      { args: NO_PRESET_ARGS },
+    );
+    try {
+      const out = stripAnsi(r.stdout);
+      const combined = stripAnsi(r.stdout + r.stderr);
+      expect(r.status, `combined:\n${combined}`).toBe(0);
+      expect(out).toMatch(/No \.flywheel\.yml/i);
+      expect(out).toMatch(/default.*main/i);
+      expect(r.ghCalls).toMatch(/branches\/main$/m);
+      // The minimal config is scaffolded by init's normal greenfield write.
+      expect(existsSync(join(r.work, ".flywheel.yml"))).toBe(true);
+    } finally {
+      rmSync(r.work, { recursive: true, force: true });
+    }
+  });
+
+  it("three-stage preset ⇒ probes develop/staging/main once each; bypass-omitting ruleset on main blocks (standard adopter unchanged)", () => {
+    const r = runInitCfg(
+      [
+        ["repos/acme/widget/branches/develop", 0, ""],
+        ["repos/acme/widget/branches/staging", 0, ""],
+        ["repos/acme/widget/branches/main", 0, ""],
+        ["repos/acme/widget/rulesets/1", 0, prRuleset(1, "main", "[]")],
+        ["repos/acme/widget/rulesets", 0, JSON.stringify([{ id: 1, target: "branch" }])],
+      ],
+      { args: ["--preset", "three-stage", ...NO_PRESET_ARGS] },
+    );
+    try {
+      const combined = stripAnsi(r.stdout + r.stderr);
+      expect(r.status, `combined:\n${combined}`).not.toBe(0);
+      expect(combined).toContain("[instance]");
+      expect(combined).toContain("main");
+      expect(combined).toMatch(/bypass actor/i);
+      // All three configured branches are covered (the develop/main/staging
+      // adopter sees exactly today's coverage)…
+      expect(r.ghCalls).toMatch(/branches\/develop$/m);
+      expect(r.ghCalls).toMatch(/branches\/staging$/m);
+      expect(r.ghCalls).toMatch(/branches\/main$/m);
+      // …and each branch's existence is probed exactly once (memoization holds:
+      // both branch-scoped detectors reuse the one enumeration).
+      expect((r.ghCalls.match(/branches\/develop$/gm) ?? []).length).toBe(1);
+      expect((r.ghCalls.match(/branches\/staging$/gm) ?? []).length).toBe(1);
+      expect((r.ghCalls.match(/branches\/main$/gm) ?? []).length).toBe(1);
+    } finally {
+      rmSync(r.work, { recursive: true, force: true });
+    }
+  });
+
+  it("an invalid --preset is rejected up front (exit 2) before any branch probe — no path/URL traversal via $PRESET", () => {
+    const r = runInitCfg([], {
+      args: ["--preset", "../../evil", "--version", "v0", "--skip-secrets", "--skip-rulesets"],
+    });
+    try {
+      const combined = stripAnsi(r.stdout + r.stderr);
+      expect(r.status, `combined:\n${combined}`).toBe(2);
+      expect(combined).toMatch(/--preset must be minimal \| three-stage \| multi-stream/);
+      // Bailed BEFORE the pre-flight pass even started — so $PRESET never reached the
+      // template path / fetch where a traversal could occur. The pre-flight pass always
+      // prints a "pre-flight:" line; its absence proves the guard short-circuited first.
+      expect(combined).not.toMatch(/pre-flight/i);
+    } finally {
+      rmSync(r.work, { recursive: true, force: true });
+    }
+  });
+
+  it("second run with an existing .flywheel.yml ('main') ⇒ reads config, probes main, no re-default notice (idempotent)", () => {
+    const r = runInitCfg(
+      [
+        ["repos/acme/widget/branches/main", 0, ""],
+        ["repos/acme/widget/rulesets", 0, "[]"],
+      ],
+      { flywheelYml: oneBranchConfig("main"), args: NO_PRESET_ARGS },
+    );
+    try {
+      const out = stripAnsi(r.stdout);
+      const combined = stripAnsi(r.stdout + r.stderr);
+      expect(r.status, `combined:\n${combined}`).toBe(0);
+      expect(r.ghCalls).toMatch(/branches\/main$/m);
+      // Reading a present config never re-defaults, so no "defaulted to main".
+      expect(out).not.toMatch(/default.*main/i);
+    } finally {
+      rmSync(r.work, { recursive: true, force: true });
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// preflight_detect_missing_managed_branch — config-derived existence alert
+// (§spec:brownfield-managed-branches).
+//
+// Once the managed-branch set comes from the chosen configuration, a config can
+// name a branch the repo does not have. These cases prove the detector reports
+// that as a config/warn finding — naming the branch and both fixes — that never
+// hard-stops, folds into the completion summary, stays read-only, and degrades to
+// detect-and-report on a non-interactive run with no mutation. A branch reads as
+// MISSING when its `gh api …/branches/<b>` needle is stubbed to a non-zero exit.
+// ---------------------------------------------------------------------------
+describe("init.sh — missing managed-branch alert", () => {
+  it("configured branch absent on the remote ⇒ exactly one config/warn finding naming it and both fixes; never hard-stops; folds into the summary", () => {
+    const r = runInitCfg(
+      [
+        ["repos/acme/widget/branches/trunk", 1, "gh: Not Found (HTTP 404)"], // trunk: genuine 404
+        ["repos/acme/widget/rulesets", 0, "[]"],
+      ],
+      { flywheelYml: oneBranchConfig("trunk"), args: NO_PRESET_ARGS },
+    );
+    try {
+      const combined = stripAnsi(r.stdout + r.stderr);
+      // warn, not block — the run proceeds to completion.
+      expect(r.status, `combined:\n${combined}`).toBe(0);
+      expect(combined).not.toMatch(/pre-flight (failed|halted)/i);
+      expect(stripAnsi(r.stdout)).toContain("pre-flight: no blockers.");
+      // Reported in the shared bucket × severity vocabulary, naming the branch.
+      expect(combined).toContain("[config]");
+      expect(combined).toMatch(/trunk.*do not exist|configured managed branch.*trunk/i);
+      // Both resolutions are spelled out.
+      expect(combined).toMatch(/create the branch/i);
+      expect(combined).toMatch(/edit \.flywheel\.yml/i);
+      // Folds into the end-of-run completion summary (machine rendering: the run
+      // is non-interactive, so summary steps emit FLYWHEEL_SETUP_STEP lines).
+      // Exactly ONE missing-branch summary step for the one missing branch — the
+      // single finding is emitted once and folded once.
+      const summarySteps =
+        r.stdout.match(
+          /FLYWHEEL_SETUP_STEP outcome=deferred bucket=config severity=warn .*trunk/g,
+        ) ?? [];
+      expect(summarySteps.length).toBe(1);
+    } finally {
+      rmSync(r.work, { recursive: true, force: true });
+    }
+  });
+
+  it("all configured branches exist ⇒ no missing-branch finding (greenfield parity)", () => {
+    const r = runInitCfg(
+      [
+        ["repos/acme/widget/branches/trunk", 0, ""], // trunk exists
+        ["repos/acme/widget/rulesets", 0, "[]"],
+      ],
+      { flywheelYml: oneBranchConfig("trunk"), args: NO_PRESET_ARGS },
+    );
+    try {
+      const out = stripAnsi(r.stdout);
+      const combined = stripAnsi(r.stdout + r.stderr);
+      expect(r.status, `combined:\n${combined}`).toBe(0);
+      expect(out).toContain("pre-flight: no blockers.");
+      // No new finding fires when the configured branch is present.
+      expect(combined).not.toMatch(/do not exist on/);
+      expect(combined).not.toMatch(/missing.*branch/i);
+    } finally {
+      rmSync(r.work, { recursive: true, force: true });
+    }
+  });
+
+  it("no-config default to 'main' that is missing ⇒ 'defaulted to main' notice AND a config/warn finding naming main (not silently accepted)", () => {
+    const r = runInitCfg(
+      [
+        ["repos/acme/widget/branches/main", 1, "gh: Not Found (HTTP 404)"], // main: genuine 404
+        ["repos/acme/widget/rulesets", 0, "[]"],
+      ],
+      { args: NO_PRESET_ARGS },
+    );
+    try {
+      const out = stripAnsi(r.stdout);
+      const combined = stripAnsi(r.stdout + r.stderr);
+      expect(r.status, `combined:\n${combined}`).toBe(0);
+      // The default-to-main notice still prints…
+      expect(out).toMatch(/No \.flywheel\.yml/i);
+      expect(out).toMatch(/default.*main/i);
+      // …and a missing 'main' is WARNED, never silently accepted.
+      expect(combined).toContain("[config]");
+      expect(combined).toMatch(/main.*do not exist|configured managed branch.*main/i);
+      expect(combined).toMatch(/create the branch/i);
+      expect(combined).toMatch(/edit \.flywheel\.yml/i);
+    } finally {
+      rmSync(r.work, { recursive: true, force: true });
+    }
+  });
+
+  it("non-interactive run detect-and-reports the same finding with NO mutation (no branch creation, no protection edit)", () => {
+    const r = runInitCfg(
+      [
+        ["repos/acme/widget/branches/trunk", 1, "gh: Not Found (HTTP 404)"], // trunk: genuine 404
+        ["repos/acme/widget/rulesets", 0, "[]"],
+      ],
+      { flywheelYml: oneBranchConfig("trunk"), args: NO_PRESET_ARGS },
+    );
+    try {
+      const combined = stripAnsi(r.stdout + r.stderr);
+      // The finding still fires on a piped/non-interactive run…
+      expect(r.status, `combined:\n${combined}`).toBe(0);
+      expect(combined).toMatch(/trunk.*do not exist|configured managed branch.*trunk/i);
+      // …and nothing mutates remote state: no ref-creation, no write verb. The
+      // detector only ever issues read-only `branches/` and `rulesets` probes.
+      expect(r.ghCalls).not.toMatch(/git\/refs/);
+      expect(r.ghCalls).not.toMatch(/-X\s*(POST|PUT|PATCH|DELETE)/);
+      expect(r.ghCalls).not.toMatch(/--method\s*(POST|PUT|PATCH|DELETE)/);
+    } finally {
+      rmSync(r.work, { recursive: true, force: true });
+    }
+  });
+
+  it("a NON-404 probe failure (rate limit / network) ⇒ could-not-verify local-env warn, NOT a false 'missing' finding; run completes", () => {
+    const r = runInitCfg(
+      [
+        // The branch may well exist, but the read fails transiently (HTTP 403, not a
+        // 404) — existence is unobservable, so it must NOT be asserted absent.
+        [
+          "repos/acme/widget/branches/trunk",
+          1,
+          "gh: error (HTTP 403): API rate limit exceeded",
+        ],
+        ["repos/acme/widget/rulesets", 0, "[]"],
+      ],
+      { flywheelYml: oneBranchConfig("trunk"), args: NO_PRESET_ARGS },
+    );
+    try {
+      const combined = stripAnsi(r.stdout + r.stderr);
+      // warn, not block — the run proceeds to completion.
+      expect(r.status, `combined:\n${combined}`).toBe(0);
+      // Reported as a could-not-verify local-env warn that names the branch…
+      expect(combined).toContain("[local-env]");
+      expect(combined).toMatch(
+        /could not verify whether configured managed branch.*trunk/i,
+      );
+      // …and is NEVER asserted absent (no config/warn "do not exist" finding).
+      expect(combined).not.toMatch(/do not exist on/);
+    } finally {
+      rmSync(r.work, { recursive: true, force: true });
+    }
+  });
+
+  it("config present but python3+PyYAML unavailable to read it ⇒ could-not-verify local-env warn; no branch probed; run completes (no silent zero-coverage)", () => {
+    // The real interpreter the shim delegates non-linter calls to.
+    const realPython3 = execFileSync(
+      "python3",
+      ["-c", "import sys;print(sys.executable)"],
+      { encoding: "utf8" },
+    ).trim();
+    const r = runInitCfg([["repos/acme/widget/rulesets", 0, "[]"]], {
+      flywheelYml: oneBranchConfig("trunk"),
+      args: NO_PRESET_ARGS,
+      // Fail ONLY the flywheel linter invocation (PyYAML absent); delegate every other
+      // python3 call to the real interpreter so the rest of init is unaffected.
+      binStubs: {
+        python3:
+          `#!/usr/bin/env bash\n` +
+          `for a in "$@"; do case "$a" in *lint-flywheel-config.py) ` +
+          `echo "ModuleNotFoundError: No module named 'yaml'" >&2; exit 1;; esac; done\n` +
+          `exec ${JSON.stringify(realPython3)} "$@"\n`,
+      },
+    });
+    try {
+      const combined = stripAnsi(r.stdout + r.stderr);
+      // warn, not block — coverage was skipped but setup completes.
+      expect(r.status, `combined:\n${combined}`).toBe(0);
+      // A could-not-verify local-env warn that names the python3+PyYAML dependency…
+      expect(combined).toContain("[local-env]");
+      expect(combined).toMatch(/could not determine your managed branches/i);
+      expect(combined).toMatch(/python3.*PyYAML/i);
+      // …with no derivable branch set, the existence probe never ran (not silent: the
+      // warn fired), and nothing was falsely asserted missing.
+      expect(r.ghCalls).not.toMatch(/branches\/trunk/);
+      expect(combined).not.toMatch(/do not exist on/);
     } finally {
       rmSync(r.work, { recursive: true, force: true });
     }
