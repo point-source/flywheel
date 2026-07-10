@@ -10,7 +10,7 @@ It is **not** a long-running orchestrator. It is a collection of short-lived, si
 
 - Parses every PR title as a conventional commit. Rewrites the title and body. Applies one of two labels: `flywheel:auto-merge` or `flywheel:needs-review` based on the rules in your `.flywheel.yml`.
 - Enables GitHub native auto-merge into the merge queue when eligible.
-- On every push to a managed branch, generates `.releaserc.json` and gates a separate `semantic-release` step that computes the version, tags, and creates a GitHub Release.
+- On every push to a managed branch, generates `.releaserc.cjs` and gates a separate `semantic-release` step that computes the version, tags, and creates a GitHub Release.
 - On every push to a non-terminal branch in a stream, upserts a single open promotion PR to the next branch in the stream.
 
 What Flywheel does **not** own: your quality checks, your build, your publish. You write those as separate workflows. Quality checks register as required status checks on managed branches (and must subscribe to both `pull_request` and `merge_group` to be merge-queue compatible). Build and publish react to the `release: published` and `workflow_run: [Build] completed` events Flywheel produces — a 30-minute mobile build incurs no waiting cost on the Flywheel pipeline side.
@@ -96,7 +96,7 @@ PR merges → push to managed branch
         ▼                                  ▼
 flywheel-push.yml              flywheel-push.yml
 (release flow)                 (promotion flow)
-  ├── write .releaserc.json      ├── compute pending commits (commit-message-based)
+  ├── write .releaserc.cjs      ├── compute pending commits (commit-message-based)
   ├── npx semantic-release       ├── upsert promotion PR to next branch in stream
   ├── tag + GitHub Release       └── label + enable auto-merge if eligible
   └── back-merge tag + chore(release)
@@ -118,7 +118,7 @@ workflow_run: build completed
 - **Language and destination agnostic.** Flywheel produces a version, a changelog, and a tag. What you do with those is up to your build/publish workflows.
 - **No assumed branch hierarchy.** Branch relationships are defined by stream membership in `.flywheel.yml`. A project with one stream containing one branch and a project with six parallel streams use the same system.
 - **Version numbers are stream-scoped.** Within a stream, the base version is consistent across branches — `v1.3.0-dev.2`, `v1.3.0-rc.1`, and `v1.3.0` all represent the same logical release.
-- **One config file.** `.flywheel.yml` is the single source of truth. Flywheel derives semantic-release config from it at runtime; adopters never configure `.releaserc.json` directly.
+- **One config file.** `.flywheel.yml` is the single source of truth. Flywheel derives semantic-release config from it at runtime; adopters never configure `.releaserc.cjs` directly.
 
 ## Permissions
 
@@ -126,7 +126,7 @@ A GitHub App is how the flywheel workflows act on your repo as a bot — push re
 
 | Scope          | Purpose                                               |
 | -------------- | ----------------------------------------------------- |
-| Contents: r/w  | Tag creation, `.releaserc.json` write to workspace    |
+| Contents: r/w  | Tag creation, `.releaserc.cjs` write to workspace     |
 | Pull req: r/w  | PR creation, body updates, native auto-merge enabling |
 | Issues: r/w    | Adding / removing the `flywheel:*` labels on PRs      |
 | Checks: r/w    | Posting the `flywheel/conventional-commit` check      |

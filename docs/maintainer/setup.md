@@ -11,7 +11,7 @@ Flywheel uses a GitHub App installation token. Personal Access Tokens are not su
 
 The App needs:
 
-- **Contents: read and write** (tag creation, `.releaserc.json` write)
+- **Contents: read and write** (tag creation, `.releaserc.cjs` write)
 - **Pull requests: read and write** (PR creation, body updates, auto-merge)
 - **Issues: read and write** (label add/remove on PRs)
 - **Checks: read and write** (posting the `flywheel/conventional-commit` check)

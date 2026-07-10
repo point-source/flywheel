@@ -234,7 +234,7 @@ describe.skipIf(!hasSandboxToken)(
         expect(
           release1!.draft,
           `release_as_draft: true should yield draft=true on the GitHub Release for ${tag1}; got published — ` +
-            "the .releaserc.json that flywheel-push.yml generated did not carry { draftRelease: true } for the github plugin",
+            "the .releaserc.cjs that flywheel-push.yml generated did not carry { draftRelease: true } for the github plugin",
         ).toBe(true);
         draftReleasesCreated.push({ tag: tag1, id: release1!.id });
 

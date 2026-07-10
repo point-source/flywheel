@@ -151,7 +151,7 @@ Cross-cutting properties the system must satisfy.
 
 - **N5.1** Setup time for a fresh repo MUST be minutes, not hours. A single `init.sh` invocation MUST cover the common case.
 - **N5.2** Day-2 changes (adding a stream, changing auto-merge rules) MUST be a single `.flywheel.yml` edit + PR; no script re-runs, no manual ruleset updates.
-- **N5.3** Adopters MUST never edit generated config (`.releaserc.json`). Anything that would require it is a Flywheel feature gap, not an adopter responsibility.
+- **N5.3** Adopters MUST never edit generated config (`.releaserc.cjs`). Anything that would require it is a Flywheel feature gap, not an adopter responsibility.
 
 ### N6. Maintainer ergonomics
 

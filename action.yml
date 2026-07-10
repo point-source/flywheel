@@ -82,7 +82,7 @@ runs:
 
     - name: Run semantic-release
       # Plugins must be co-installed; npx will not resolve them from the
-      # generated .releaserc.json on its own.
+      # generated .releaserc.cjs on its own.
       if: inputs.event == 'push' && steps.core.outputs.managed_branch == 'true'
       shell: bash
       env:

@@ -3714,6 +3714,169 @@ routes to (and the §0 completion check already mirrors the script's verdict per
   is still the fallback the hard-stop routes to and the reference for what the
   inline resolvers do.
 
+## Release-notes reference de-duplication §spec:release-notes-dedup
+
+*Status: complete*
+
+The release notes flywheel produces for every version — the GitHub Release body
+and the matching per-version `CHANGELOG.md` entry, the same text in two places —
+carry a `closes` list that is meant to be the set of issues that version closed.
+Today that list is polluted. The release-notes configuration flywheel emits from
+`src/release-rc.ts` lists `@semantic-release/release-notes-generator` with no
+options object — no parser, writer, or preset configuration — so the generator
+runs on stock conventional-changelog defaults. Those defaults harvest every
+`#`-prefixed token anywhere in a commit message as an "issue reference," perform
+no de-duplication, and render all of them after `closes`. The result on
+`origin/main` at v2.1.0 is the same issue linked many times over (`#245` seven
+times, `#240` sixteen, `#236` eighteen) interleaved with tokens that are not
+issues at all — `#233-3`, `#capability`, `preflight-#capability` (rendered as a
+dead link to `github.com/preflight-/issues/capability`), and internal sub-task
+numbers `#1`–`#8`. The release publishes correctly and the version tags either
+way; what degrades is trust in the one artifact users actually read per version.
+§req:release-notes-dedup
+
+**The generated configuration renders a clean list.** Flywheel's
+release-notes-generator configuration produces a `closes` list in which:
+
+- **Each distinct issue appears at most once.** No matter how many times an issue
+  is mentioned across a version's commits, it is listed a single time. `#245`
+  mentioned seven times collapses to one `#245`.
+- **Uniqueness is per distinct issue identity** — owner, repository, and issue
+  number together. A cross-repo `other/repo#5` and this repo's `#5` remain two
+  separate entries; only same-identity references collapse.
+- **Only genuine closing references appear.** A reference reaches the `closes`
+  list only when a closing keyword (Closes / Fixes / Resolves and their
+  conjugations) introduced it. A bare `(#N)` PR-number suffix on a commit subject,
+  and an arbitrary `#token` sitting in body prose, are not closing references and
+  do not appear. This is the lever that removes the garbage — `#capability`,
+  `preflight-#capability`, `#233-3`, the sub-task `#1`–`#8` are none of them
+  preceded by a closing keyword — and it simultaneously drops the bare PR-number
+  repeats that de-duplication alone would leave behind.
+
+These are stated as properties of the rendered output, not of the mechanism: the
+generator may achieve them through parser scoping, writer de-duplication, a preset
+swap, or any combination, and the spec holds as long as the rendered notes carry
+the properties above.
+
+**Why the fix lives at the rendering link, and only there.** The pollution is a
+three-link chain and flywheel owns only the last link:
+
+1. The host repo's **commit convention** appends `(#N)` to every commit subject,
+   so a PR that squashed N sub-commits carries `(#N)` N times in its body.
+2. **GitHub's squash-merge** default body repeats every squashed sub-commit
+   message, so one squash commit can repeat the same `(#245)` seven times.
+3. The **release-notes generator** flywheel configures renders whatever those
+   inputs contain.
+
+Links 1 and 2 are inputs flywheel does not own — it cannot change the adopter's
+commit convention or GitHub's squash-body format, and shall not try to. What it
+owns is the generator configuration it hands to semantic-release on every
+adopter's behalf, and that configuration can render a correct list regardless of
+how noisy the raw commit stream is. The fix belongs where the noise is finally
+rendered, not where it originates. §req:release-notes-dedup-constraints
+
+**The scoping tradeoff is deliberate.** Scoping `closes` to genuine closing
+keywords means a commit that merely carries `(#264)` with no "Closes #X"
+contributes nothing to the list. That is intended and loses no information: the
+PR's own number still renders inline on its commit line in the notes — how
+conventional-changelog already links a change to its PR — so a reader can still
+navigate from any line to the PR that introduced it. The `closes` list reverts to
+meaning what it says: the set of issues this version actually closes. The
+alternative considered — *de-duplicate but keep every `#` token* — was rejected
+because it would still surface `#capability` and the sub-task numbers as broken
+links, leaving the trust problem unsolved.
+
+This sits with the other release-glue requirements that flywheel generates on
+every adopter's behalf (§spec:release-ci-budget, §spec:release-gate). It is
+distinct from the post-publish release-body @-mention sanitizer
+(`scripts/sanitize-release-mentions.sh`), which backtick-escapes `@identifier`
+tokens on the already-published release so GitHub's renderer does not surface
+phantom contributors: that step edits one repo's published body after the fact for
+a different token class, whereas this fix changes the generated configuration so
+the `closes` list is clean for every adopter at generation time.
+
+**The behavior is pinned by cheap unit coverage.** A representative commit
+containing a multi-`(#N)` squash body and prose `#token`s is run through the
+generated release-notes configuration, and a unit test asserts the rendered
+`closes` list is de-duplicated and free of non-issue tokens. The test needs no
+live GitHub access and adds no load to the rate-limited sandbox installation
+(§spec:sandbox-test-budget, §req:sandbox-ci-budget) — consistent with how the
+other release-glue behavior is guarded. §req:release-notes-dedup-criteria
+
+**Criteria.**
+
+- When a version's commits mention the same issue many times — e.g. `closes #245`
+  arising seven times across squashed sub-commits — the rendered `closes` list, in
+  both the GitHub Release body and the matching `CHANGELOG.md` entry, shall contain
+  exactly one `#245` entry, and every issue in the list shall be distinct.
+- When a version closes another repository's issue and a same-numbered issue in
+  this repository, the rendered list shall contain two separate entries —
+  uniqueness is by (owner, repository, number), not by number alone.
+- The rendered `closes` list shall contain only references introduced by a closing
+  keyword (Closes / Fixes / Resolves and conjugations); a commit subject carrying a
+  bare `(#N)` suffix with no closing keyword shall contribute nothing to it.
+- Tokens that are not issue references — `#233-3`, `#capability`,
+  `preflight-#capability`, and sub-task numbers `#1`–`#8` — shall not appear in the
+  rendered notes as issue links, and the notes shall contain no link of the form
+  `github.com/<garbage>/issues/<garbage>`.
+- A change whose commit links it to a PR shall still show that PR inline on its
+  commit line, so removing bare PR numbers from `closes` loses no navigability.
+- The behavior shall be exercised by a unit test that runs a noisy fixture commit
+  (multi-`(#N)` squash body plus prose `#token`s) through the generated
+  release-notes configuration and asserts a de-duplicated, non-issue-free `closes`
+  list, with no live GitHub access and no e2e sandbox load.
+
+**Scope and alternatives.**
+
+- *Changing the host repo's commit convention (link 1) or GitHub's squash-body
+  format (link 2)* is out of scope — those are inputs flywheel does not control;
+  the rendered output is made correct in spite of them.
+- *De-duplicating while keeping every `#` token* was rejected: it still surfaces
+  `#capability` and the sub-task numbers as broken links and does not solve the
+  trust problem.
+- This changes only the rendered text of notes and changelog. It shall not alter
+  which version is computed, whether a release publishes, or any release-gating
+  behavior (§spec:release-gate) — the release outcome is identical; only the
+  human-readable summary changes.
+
+## v2.1.0 release-notes backfill §spec:release-notes-backfill
+
+*Status: complete*
+
+The polluted `closes` list already exists in the published record: the v2.1.0
+GitHub Release body and its `CHANGELOG.md` entry carry the duplicated links and
+dead `#`-tokens described in §spec:release-notes-dedup. The generator-config fix is
+forward-looking — it cleans notes generated after it lands — so without a separate
+correction the version users are looking at *now* stays a documented known-bad
+example. §req:release-notes-dedup
+
+The published v2.1.0 GitHub Release body and its matching `CHANGELOG.md` entry
+carry a `closes` list in the de-duplicated, closing-scoped form: each issue the
+version closed listed once, and no `#capability`-style dead links or bare
+sub-task/PR-number tokens. This is a one-time correction of existing text, distinct
+from the generator-config change that prevents recurrence; both are in scope, and
+the correction matches the form the corrected generator would have produced for
+that version. §req:release-notes-dedup-criteria
+
+**Why a separate one-time correction.** The two pieces of work have different
+shapes: the generator-config change is durable system behavior pinned by a unit
+test, while the v2.1.0 cleanup is a manual edit of an already-published artifact
+that no config change reaches retroactively. Keeping them distinct keeps the spec
+honest — the backfill is "complete" when the existing text reads right, and it does
+not regress or need re-running, whereas the config behavior is verified on every
+future release. §req:release-notes-dedup-stories
+
+**Criteria.**
+
+- The published v2.1.0 GitHub Release body and its `CHANGELOG.md` entry shall
+  present each issue the version closed exactly once, with no duplicate issue links.
+- Those notes shall contain no non-issue tokens rendered as links — no `#233-3`,
+  `#capability`, `preflight-#capability`, or sub-task `#1`–`#8` links, and no
+  `github.com/<garbage>/issues/<garbage>` links.
+- The corrected v2.1.0 `closes` list shall match the form the corrected
+  release-notes configuration (§spec:release-notes-dedup) would have produced for
+  that version.
+
 ## Promotion Closes-ref aggregation from commit footers §spec:promotion-closes-footers
 
 *Status: complete*
