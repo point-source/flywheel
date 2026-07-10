@@ -2989,7 +2989,7 @@ a dead link to `github.com/preflight-/issues/capability`), and internal sub-task
 numbers `#1`–`#8`. An adopter scanning the notes to see what a version actually
 closed is met with a wall of duplicate links and references that lead nowhere.
 
-The users are every flywheel adopter — `.releaserc.json` is flywheel-generated and
+The users are every flywheel adopter — `.releaserc.cjs` is flywheel-generated and
 adopters never edit it, so whatever the generated config renders is what lands in
 *their* changelog and release body, unchanged — and the flywheel maintainer who
 owns the release glue. The problem is **frequent** (it recurs on every release,
@@ -3109,7 +3109,7 @@ generated config so the behavior cannot silently regress.
 - As an adopter, I want the notes to contain only real, working issue links and no
   `#capability`-style dead links, so that I trust the release notes as an accurate
   record rather than learning to ignore them.
-- As an adopter who never touches `.releaserc.json`, I want flywheel's
+- As an adopter who never touches `.releaserc.cjs`, I want flywheel's
   generated release configuration to produce clean notes for *my* repository
   automatically, so that I inherit the fix without editing any release glue myself.
 - As a flywheel maintainer, I want a unit test over the generated config and a
@@ -3127,7 +3127,7 @@ generated config so the behavior cannot silently regress.
   change the host repo's commit convention (link 1) or GitHub's squash-merge body
   format (link 2) — those are inputs flywheel does not control, and the rendered
   output is made correct in spite of them.
-- **Adopter-transparent.** Adopters never edit `.releaserc.json`; the corrected
+- **Adopter-transparent.** Adopters never edit `.releaserc.cjs`; the corrected
   behavior reaches them purely through the flywheel-generated config, with no
   action on their part and no new field for them to set.
 - **Cosmetic, not release-blocking.** This changes only the rendered text of notes
