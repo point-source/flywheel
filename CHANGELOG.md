@@ -1,3 +1,10 @@
+# [2.2.0-dev.4](https://github.com/point-source/flywheel/compare/v2.2.0-dev.3...v2.2.0-dev.4) (2026-07-10)
+
+
+### Features
+
+* de-duplicate and scope the generated release-notes closes list ([#298](https://github.com/point-source/flywheel/issues/298)) ([a5e94fd](https://github.com/point-source/flywheel/commit/a5e94fdbd69140f4afa2f4a227ba97ab728646c6)), closes [#268](https://github.com/point-source/flywheel/issues/268) [#245](https://github.com/point-source/flywheel/issues/245) [#240](https://github.com/point-source/flywheel/issues/240) [#233](https://github.com/point-source/flywheel/issues/233) [#264](https://github.com/point-source/flywheel/issues/264) [#236](https://github.com/point-source/flywheel/issues/236) [#261](https://github.com/point-source/flywheel/issues/261) [#238](https://github.com/point-source/flywheel/issues/238) [#257](https://github.com/point-source/flywheel/issues/257) [#244](https://github.com/point-source/flywheel/issues/244) [#249](https://github.com/point-source/flywheel/issues/249)
+
 # [2.2.0-dev.3](https://github.com/point-source/flywheel/compare/v2.2.0-dev.2...v2.2.0-dev.3) (2026-06-25)
 
 
