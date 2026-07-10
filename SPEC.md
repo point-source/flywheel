@@ -3699,7 +3699,7 @@ other release-glue behavior is guarded. §req:release-notes-dedup-criteria
 
 ## v2.1.0 release-notes backfill §spec:release-notes-backfill
 
-*Status: not started*
+*Status: complete*
 
 The polluted `closes` list already exists in the published record: the v2.1.0
 GitHub Release body and its `CHANGELOG.md` entry carry the duplicated links and
