@@ -662,7 +662,10 @@ describe("release-notes de-duplication (§spec:release-notes-dedup)", () => {
     const loaded = loadReleaseConfig(serializeReleaseRc(rc)) as { plugins: unknown[] };
     const entry = loaded.plugins.find(
       (p): p is [string, { writerOpts: unknown }] =>
-        Array.isArray(p) && p[0] === "@semantic-release/release-notes-generator",
+        Array.isArray(p) &&
+        p[0] === "@semantic-release/release-notes-generator" &&
+        typeof p[1] === "object" &&
+        p[1] !== null,
     );
     expect(entry, "generator plugin entry must carry an options object").toBeDefined();
     return (entry![1] as { writerOpts: unknown }).writerOpts;

@@ -65,10 +65,17 @@ describe("runPushFlow", () => {
     // The generated module carries a real finalizeContext function on the
     // release-notes-generator plugin (the dedup hook survives serialization).
     const generator = rc.plugins.find(
-      (p: unknown) =>
-        Array.isArray(p) && p[0] === "@semantic-release/release-notes-generator",
+      (p: unknown): p is [string, { writerOpts: { finalizeContext: unknown } }] =>
+        Array.isArray(p) &&
+        p[0] === "@semantic-release/release-notes-generator" &&
+        typeof p[1] === "object" &&
+        p[1] !== null,
     );
-    expect(typeof generator[1].writerOpts.finalizeContext).toBe("function");
+    expect(
+      generator,
+      "release-notes-generator plugin entry with options must be present",
+    ).toBeDefined();
+    expect(typeof generator![1].writerOpts.finalizeContext).toBe("function");
   });
 
   it("removes shadowing config files before writing the generated one", async () => {
